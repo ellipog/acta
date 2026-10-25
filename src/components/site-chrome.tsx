@@ -1,14 +1,13 @@
 import Link from "next/link";
-import { Icon } from "@/components/ui/icons";
-import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { HeaderSearch } from "@/components/command-palette";
+import { AccountButton, HeaderCta } from "@/components/account-button";
 import { ditherAssets } from "@/lib/dither-assets";
 import { cn } from "@/lib/utils";
 
-export function Wordmark({ className = "" }: { className?: string }) {
+export function Wordmark({ className = "", href = "/" }: { className?: string; href?: string }) {
   return (
-    <Link href="/" className={`flex items-center gap-2 ${className}`}>
+    <Link href={href} className={`flex items-center gap-2 ${className}`}>
       <span aria-hidden className="flex h-4 w-4 flex-col justify-between">
         <span className="h-[3px] bg-lapis" />
         <span className="h-[3px] w-3 bg-pyrite" />
@@ -33,11 +32,8 @@ export function SiteHeader() {
         <div className="ml-auto flex items-center gap-1.5">
           <HeaderSearch />
           <ThemeToggle />
-          <Button variant="primary" asChild>
-            <Link href="/demo">
-              Start a board <Icon name="arrow-right" />
-            </Link>
-          </Button>
+          <AccountButton />
+          <HeaderCta />
         </div>
       </div>
     </header>
@@ -70,6 +66,14 @@ export function SiteFooter() {
           <p className="mt-3 max-w-xs text-sm text-ink-2">
             Acta, Latin for “things done.” A project manager for small teams, built in layers.
           </p>
+          <nav aria-label="Legal" className="mt-6 flex gap-4 text-xs text-ink-3">
+            <Link href="/privacy" className="hover:text-ink">
+              Privacy
+            </Link>
+            <Link href="/terms" className="hover:text-ink">
+              Terms
+            </Link>
+          </nav>
         </div>
         <div id="credits">
           <p className="font-mono text-[11px] tracking-[0.14em] text-ink-3 uppercase">Image credits</p>

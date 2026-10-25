@@ -20,7 +20,8 @@ export type DemoAction =
   | { type: "silent"; action: BoardAction }
   | { type: "undo" }
   | { type: "redo" }
-  | { type: "undoTo"; depth: number };
+  | { type: "undoTo"; depth: number }
+  | { type: "rebase"; current: (b: BoardState) => BoardState; history: (b: BoardState) => BoardState | null };
 
 const LIMIT = 100;
 
@@ -124,6 +125,19 @@ export function demoReducer(demo: Demo, action: DemoAction): Demo {
     }
     case "undoTo":
       return demo.past.length === action.depth + 1 ? demoReducer(demo, { type: "undo" }) : demo;
+    case "rebase": {
+      const board = action.current(demo.board);
+      const move = (steps: Step[]) => {
+        const out: Step[] = [];
+        for (const step of steps) {
+          const b = action.history(step.board);
+          if (!b) return [];
+          out.push(b === step.board ? step : { ...step, board: b });
+        }
+        return out;
+      };
+      return { ...demo, board, past: move(demo.past), future: move(demo.future) };
+    }
     default: {
       const board = boardReducer(demo.board, action);
       if (board === demo.board) return demo;

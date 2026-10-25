@@ -1070,7 +1070,7 @@ function FooterCell({
       return assignees.length ? (
         <AvatarStack>
           {assignees.map((p) => (
-            <Avatar key={p.id} name={p.name} tone={p.tone} size="xs" />
+            <Avatar key={p.id} name={p.name} src={p.avatar} tone={p.tone} size="xs" />
           ))}
         </AvatarStack>
       ) : null;

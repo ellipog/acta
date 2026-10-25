@@ -50,7 +50,10 @@ export type Prefs = {
   filters: Filters;
 };
 
-export const columnMeta: Record<ColumnId, { label: string; icon: IconName; width: number; min: number; group?: GroupField }> = {
+export const columnMeta: Record<
+  ColumnId,
+  { label: string; icon: IconName; width: number; min: number; group?: GroupField }
+> = {
   title: { label: "Title", icon: "file", width: 400, min: 220 },
   status: { label: "Status", icon: "status", width: 148, min: 112, group: "status" },
   assignee: { label: "Assignee", icon: "user", width: 164, min: 112, group: "assignee" },
@@ -65,7 +68,19 @@ export const columnMeta: Record<ColumnId, { label: string; icon: IconName; width
 };
 
 export const defaultColumns: ColumnPref[] = (
-  ["title", "status", "assignee", "priority", "size", "project", "start", "due", "labels", "subtasks", "updated"] as ColumnId[]
+  [
+    "title",
+    "status",
+    "assignee",
+    "priority",
+    "size",
+    "project",
+    "start",
+    "due",
+    "labels",
+    "subtasks",
+    "updated",
+  ] as ColumnId[]
 ).map((id) => ({ id, width: columnMeta[id].width, hidden: id === "updated" }));
 
 export const defaultPrefs: Prefs = {
@@ -95,20 +110,40 @@ export function LabelDot({ id, className }: { id: string; className?: string }) 
 
 export const fieldOptions: Record<GroupField | "label", SelectOption[]> = {
   status: statuses.map((s) => ({ value: s.id, label: s.title, icon: <StatusMarker status={s.id} /> })),
-  priority: priorities.map((p) => ({ value: p.id, label: p.title, icon: <PriorityIcon priority={p.id} />, muted: p.id === "none" })),
-  assignee: [
-    ...people.map((p) => ({ value: p.id, label: p.name, icon: <Avatar name={p.name} tone={p.tone} size="xs" /> })),
-    { value: "none", label: "Unassigned", icon: <Unassigned />, muted: true },
-  ],
-  project: [
-    ...projects.map((p) => ({ value: p, label: p, icon: <ProjectMark project={p} /> })),
-    { value: "none", label: "No project", icon: <ProjectMark />, muted: true },
-  ],
+  priority: priorities.map((p) => ({
+    value: p.id,
+    label: p.title,
+    icon: <PriorityIcon priority={p.id} />,
+    muted: p.id === "none",
+  })),
+  get assignee() {
+    return [
+      ...people.map((p) => ({
+        value: p.id,
+        label: p.name,
+        icon: <Avatar name={p.name} src={p.avatar} tone={p.tone} size="xs" />,
+      })),
+      { value: "none", label: "Unassigned", icon: <Unassigned />, muted: true },
+    ];
+  },
+  get project() {
+    return [
+      ...projects.map((p) => ({ value: p, label: p, icon: <ProjectMark project={p} /> })),
+      { value: "none", label: "No project", icon: <ProjectMark />, muted: true },
+    ];
+  },
   size: [
-    ...sizes.map((z) => ({ value: z.id, label: z.title, icon: <SizeIcon size={z.id} />, hint: `${sizePoints[z.id]} pt` })),
+    ...sizes.map((z) => ({
+      value: z.id,
+      label: z.title,
+      icon: <SizeIcon size={z.id} />,
+      hint: `${sizePoints[z.id]} pt`,
+    })),
     { value: "none", label: "No size", icon: <SizeIcon />, muted: true },
   ],
-  label: labels.map((l) => ({ value: l.id, label: l.id, icon: <LabelDot id={l.id} /> })),
+  get label() {
+    return labels.map((l) => ({ value: l.id, label: l.id, icon: <LabelDot id={l.id} /> }));
+  },
 };
 
 export const fieldLabel: Record<GroupField | "label", string> = {

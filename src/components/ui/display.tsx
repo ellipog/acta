@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import type { DitherName } from "@/lib/dither-assets";
+import { AvatarImage } from "./avatar-image";
 import { Dither, DitherFill } from "./dither";
 
 export function Panel({
@@ -17,16 +18,24 @@ export function Panel({
   );
 }
 
-const avatarSizes = { xs: "size-5 text-[9px]", sm: "size-6 text-[10px]", md: "size-8 text-xs", lg: "size-11 text-sm" };
+const avatarSizes = {
+  xs: "size-5 text-[9px]",
+  sm: "size-6 text-[10px]",
+  md: "size-8 text-xs",
+  lg: "size-11 text-sm",
+  xl: "size-16 text-lg",
+};
 
 export function Avatar({
   name,
+  src,
   sigil,
   tone = "lapis",
   size = "md",
   className,
 }: {
   name: string;
+  src?: string | null;
   sigil?: DitherName;
   tone?: "lapis" | "pyrite" | "malachite" | "hematite";
   size?: keyof typeof avatarSizes;
@@ -60,6 +69,7 @@ export function Avatar({
       ) : (
         initials
       )}
+      {src ? <AvatarImage src={src} /> : null}
     </span>
   );
 }

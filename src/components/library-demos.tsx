@@ -718,7 +718,7 @@ export function DueStates() {
 }
 
 const sample = `### Vote limits
-Votes need a **rate limit** per user, or one person can push an item to the top. See [the spec](https://acta.app) and ask @Mara.
+Votes need a **rate limit** per user, or one person can push an item to the top. See [the spec](https://app.acta.page/docs) and ask @Mara.
 
 - One vote per item, per visitor
 - Store \`voted_at\` so it can decay

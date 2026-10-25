@@ -3,8 +3,8 @@ export type Priority = "urgent" | "high" | "medium" | "low" | "none";
 export type Size = "xs" | "s" | "m" | "l" | "xl";
 export type Tone = "lapis" | "pyrite" | "malachite" | "hematite";
 
-export type Person = { id: string; name: string; tone: Tone };
-export type Activity = { at: number; who: string; text: string };
+export type Person = { id: string; name: string; tone: Tone; avatar?: string | null };
+export type Activity = { id?: string; at: number; who: string; text: string };
 export type Subtask = { id: string; title: string; done: boolean };
 export type Comment = { id: string; who: string; at: number; body: string };
 
@@ -28,9 +28,18 @@ export type Task = {
   votes?: number;
   voted?: boolean;
   shipped?: string;
+  origin?: string;
 };
 
-export type Suggestion = { id: string; title: string; details?: string; by: string; at: number; votes: number; voted?: boolean };
+export type Suggestion = {
+  id: string;
+  title: string;
+  details?: string;
+  by: string;
+  at: number;
+  votes: number;
+  voted?: boolean;
+};
 
 export type PageLayout = "stages" | "timeline" | "list";
 
@@ -59,7 +68,8 @@ export type PublicPage = {
 
 export const defaultPage: PublicPage = {
   title: "Portfolio site",
-  tagline: "What we’re building, what’s next, and what’s shipped. Vote for what matters to you, or tell us what’s missing.",
+  tagline:
+    "What we’re building, what’s next, and what’s shipped. Vote for what matters to you, or tell us what’s missing.",
   slug: "portfolio-site",
   layout: "stages",
   accent: "lapis",
@@ -122,29 +132,68 @@ export const sizePoints: Record<Size, number> = { xs: 1, s: 2, m: 3, l: 5, xl: 8
 
 export const priorityRank: Record<Priority, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 
-export const people: Person[] = [
-  { id: "elliot", name: "Elliot Saaen", tone: "lapis" },
-  { id: "mara", name: "Mara Lind", tone: "pyrite" },
-  { id: "jon", name: "Jon Okafor", tone: "malachite" },
-  { id: "ines", name: "Ines Varga", tone: "hematite" },
-];
-
-export const labels: { id: string; tone: Tone }[] = [
-  { id: "Feature", tone: "lapis" },
-  { id: "Bug", tone: "hematite" },
-  { id: "Infra", tone: "pyrite" },
-  { id: "Design", tone: "malachite" },
-];
-
-export const projects = ["Roadmap", "Views", "Board", "Teams", "Polish"];
-
-export const projectTone: Record<string, Tone | "ink"> = {
-  Roadmap: "lapis",
-  Views: "pyrite",
-  Board: "malachite",
-  Teams: "hematite",
-  Polish: "ink",
+export type Label = { id: string; tone: Tone };
+export type Project = { name: string; tone: Tone | "ink" };
+export type BoardMeta = {
+  me: string;
+  meId: string;
+  people: Person[];
+  labels: Label[];
+  projects: Project[];
+  workspace: string;
+  live: boolean;
 };
+
+export const demoMeta: BoardMeta = {
+  me: "You",
+  meId: "elliot",
+  workspace: "ellipog",
+  live: false,
+  people: [
+    { id: "elliot", name: "Elliot Saaen", tone: "lapis" },
+    { id: "mara", name: "Mara Lind", tone: "pyrite" },
+    { id: "jon", name: "Jon Okafor", tone: "malachite" },
+    { id: "ines", name: "Ines Varga", tone: "hematite" },
+  ],
+  labels: [
+    { id: "Feature", tone: "lapis" },
+    { id: "Bug", tone: "hematite" },
+    { id: "Infra", tone: "pyrite" },
+    { id: "Design", tone: "malachite" },
+  ],
+  projects: [
+    { name: "Roadmap", tone: "lapis" },
+    { name: "Views", tone: "pyrite" },
+    { name: "Board", tone: "malachite" },
+    { name: "Teams", tone: "hematite" },
+    { name: "Polish", tone: "ink" },
+  ],
+};
+
+export const people: Person[] = [...demoMeta.people];
+export const labels: Label[] = [...demoMeta.labels];
+export const projects: string[] = demoMeta.projects.map((p) => p.name);
+export const projectTone: Record<string, Tone | "ink"> = Object.fromEntries(
+  demoMeta.projects.map((p) => [p.name, p.tone]),
+);
+export const me = { name: demoMeta.me, id: demoMeta.meId, workspace: demoMeta.workspace, live: demoMeta.live };
+
+export function setBoardMeta(meta: BoardMeta) {
+  me.name = meta.me;
+  me.id = meta.meId;
+  me.workspace = meta.workspace;
+  me.live = meta.live;
+  people.splice(0, people.length, ...meta.people);
+  labels.splice(0, labels.length, ...meta.labels);
+  projects.splice(0, projects.length, ...meta.projects.map((p) => p.name));
+  for (const key of Object.keys(projectTone)) delete projectTone[key];
+  for (const p of meta.projects) projectTone[p.name] = p.tone;
+}
+
+export const newId = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
 
 export const personById = (id?: string) => people.find((p) => p.id === id);
 export const labelTone = (id: string) => labels.find((l) => l.id === id)?.tone ?? "lapis";
@@ -200,52 +249,136 @@ const sub = (titles: string[], done: number): Subtask[] =>
 
 const seedTasks: Task[] = [
   seedTask({
-    id: "ACT-51", title: "Votes need a rate limit per user", status: "todo", priority: "urgent", size: "s", project: "Roadmap", start: "2026-10-23",
-    labels: ["Bug"], assignee: "mara", comments: 2, due: "2026-10-27",
-    description: "A single account can upvote the same item repeatedly by double-clicking. Limit to one vote per user per item, and cap suggestions at ten a day.",
+    id: "ACT-51",
+    title: "Votes need a rate limit per user",
+    status: "todo",
+    priority: "urgent",
+    size: "s",
+    project: "Roadmap",
+    start: "2026-10-23",
+    labels: ["Bug"],
+    assignee: "mara",
+    comments: 2,
+    due: "2026-10-27",
+    description:
+      "A single account can upvote the same item repeatedly by double-clicking. Limit to one vote per user per item, and cap suggestions at ten a day.",
     activity: [
       { at: T0 - 2 * D, who: "Mara", text: "created the task" },
       { at: T0 - 2 * D + H, who: "Elliot", text: "set priority to Urgent" },
     ],
   }),
   seedTask({
-    id: "ACT-55", title: "Command palette: jump to any task", status: "todo", priority: "low", size: "m", project: "Polish", start: "2026-11-17",
-    labels: ["Feature"], assignee: "jon", due: "2026-12-02",
+    id: "ACT-55",
+    title: "Command palette: jump to any task",
+    status: "todo",
+    priority: "low",
+    size: "m",
+    project: "Polish",
+    start: "2026-11-17",
+    labels: ["Feature"],
+    assignee: "jon",
+    due: "2026-12-02",
     subtasks: sub(["Index task titles", "Fuzzy match", "Recent tasks on open"], 0),
   }),
   seedTask({
-    id: "ACT-60", title: "Empty states for every view", status: "todo", priority: "medium", size: "s", project: "Polish",
-    labels: ["Design"], assignee: "ines",
+    id: "ACT-60",
+    title: "Empty states for every view",
+    status: "todo",
+    priority: "medium",
+    size: "s",
+    project: "Polish",
+    labels: ["Design"],
+    assignee: "ines",
     activity: [{ at: T0 - 20 * H, who: "Ines", text: "created the task" }],
   }),
   seedTask({
-    id: "ACT-62", title: "Calendar view for due dates", status: "todo", priority: "medium", size: "l", project: "Views", start: "2026-11-23", due: "2026-12-11",
-    labels: ["Feature"], public: true, votes: 94,
+    id: "ACT-62",
+    title: "Calendar view for due dates",
+    status: "todo",
+    priority: "medium",
+    size: "l",
+    project: "Views",
+    start: "2026-11-23",
+    due: "2026-12-11",
+    labels: ["Feature"],
+    public: true,
+    votes: 94,
     description: "Tasks laid out on a month grid by due date. Drag a task to another day to move its due date.",
     activity: [{ at: T0 - 12 * D, who: "Elliot", text: "accepted a suggestion from the roadmap" }],
   }),
   seedTask({
-    id: "ACT-63", title: "Recurring tasks", status: "todo", priority: "low", size: "m", project: "Board",
-    labels: ["Feature"], public: true, votes: 128,
+    id: "ACT-63",
+    title: "Recurring tasks",
+    status: "todo",
+    priority: "low",
+    size: "m",
+    project: "Board",
+    labels: ["Feature"],
+    public: true,
+    votes: 128,
     description: "Daily, weekly, or on a chosen weekday. A new task is created when the last one is done.",
     activity: [{ at: T0 - 15 * D, who: "Mara", text: "created the task" }],
   }),
   seedTask({
-    id: "ACT-64", title: "Sync issues and pull requests from GitHub", status: "todo", priority: "none", size: "xl", project: "Teams", start: "2027-01-04", due: "2027-02-12",
-    labels: ["Infra"], public: true, votes: 61,
+    id: "ACT-64",
+    title: "Sync issues and pull requests from GitHub",
+    status: "todo",
+    priority: "none",
+    size: "xl",
+    project: "Teams",
+    start: "2027-01-04",
+    due: "2027-02-12",
+    labels: ["Infra"],
+    public: true,
+    votes: 61,
     activity: [{ at: T0 - 30 * D, who: "Jon", text: "created the task" }],
   }),
   seedTask({
-    id: "ACT-42", title: "Ship the public roadmap page", status: "in_progress", priority: "high", size: "l", project: "Roadmap", start: "2026-10-19",
-    labels: ["Feature"], assignee: "elliot", due: "2026-11-12", comments: 4, public: true, votes: 212,
+    id: "ACT-42",
+    title: "Ship the public roadmap page",
+    status: "in_progress",
+    priority: "high",
+    size: "l",
+    project: "Roadmap",
+    start: "2026-10-19",
+    labels: ["Feature"],
+    assignee: "elliot",
+    due: "2026-11-12",
+    comments: 4,
+    public: true,
+    votes: 212,
     thread: [
-      { id: "c1", who: "Mara", at: T0 - 26 * H, body: "Should **Shipped** show dates? Visitors seem to like knowing *when*, not just *what*." },
-      { id: "c2", who: "Elliot", at: T0 - 20 * H, body: "Yes, grouped by month. Also:\n\n- keep votes visible after shipping\n- link each item to its changelog entry" },
-      { id: "c3", who: "Jon", at: T0 - 7 * H, body: "The public view only exposes `title`, `status` and `votes`. @Mara can you check the RLS policy?" },
-      { id: "c4", who: "Mara", at: T0 - 5 * H, body: "Checked, it's tight. One nit: rate limits are tracked in [ACT-51](/demo)." },
+      {
+        id: "c1",
+        who: "Mara",
+        at: T0 - 26 * H,
+        body: "Should **Shipped** show dates? Visitors seem to like knowing *when*, not just *what*.",
+      },
+      {
+        id: "c2",
+        who: "Elliot",
+        at: T0 - 20 * H,
+        body: "Yes, grouped by month. Also:\n\n- keep votes visible after shipping\n- link each item to its changelog entry",
+      },
+      {
+        id: "c3",
+        who: "Jon",
+        at: T0 - 7 * H,
+        body: "The public view only exposes `title`, `status` and `votes`. @Mara can you check the RLS policy?",
+      },
+      {
+        id: "c4",
+        who: "Mara",
+        at: T0 - 5 * H,
+        body: "Checked, it's tight. One nit: rate limits are tracked in [ACT-51](/demo).",
+      },
     ],
-    description: "Opt-in per board. Public tasks grouped as Planned, In progress and Shipped, served from a view that only exposes safe columns.",
-    subtasks: sub(["Public view in Postgres", "Roadmap page layout", "Vote button", "Suggestion form", "Rate limits"], 3),
+    description:
+      "Opt-in per board. Public tasks grouped as Planned, In progress and Shipped, served from a view that only exposes safe columns.",
+    subtasks: sub(
+      ["Public view in Postgres", "Roadmap page layout", "Vote button", "Suggestion form", "Rate limits"],
+      3,
+    ),
     activity: [
       { at: T0 - 6 * D, who: "Elliot", text: "created the task" },
       { at: T0 - 4 * D, who: "Elliot", text: "moved it to In progress" },
@@ -253,8 +386,19 @@ const seedTasks: Task[] = [
     ],
   }),
   seedTask({
-    id: "ACT-45", title: "Custom fields: number and single select", status: "in_progress", priority: "high", size: "l", project: "Views", start: "2026-10-13",
-    labels: ["Feature"], assignee: "mara", due: "2026-11-05", public: true, votes: 176, comments: 3,
+    id: "ACT-45",
+    title: "Custom fields: number and single select",
+    status: "in_progress",
+    priority: "high",
+    size: "l",
+    project: "Views",
+    start: "2026-10-13",
+    labels: ["Feature"],
+    assignee: "mara",
+    due: "2026-11-05",
+    public: true,
+    votes: 176,
+    comments: 3,
     subtasks: sub(["Field types table", "Number field", "Select options editor", "Table column per field"], 2),
     activity: [
       { at: T0 - 8 * D, who: "Mara", text: "created the task" },
@@ -262,68 +406,172 @@ const seedTasks: Task[] = [
     ],
   }),
   seedTask({
-    id: "ACT-38", title: "Table view: inline editing for select fields", status: "in_progress", priority: "medium", size: "m", project: "Views", start: "2026-10-21",
-    labels: ["Feature"], assignee: "jon", due: "2026-11-18",
+    id: "ACT-38",
+    title: "Table view: inline editing for select fields",
+    status: "in_progress",
+    priority: "medium",
+    size: "m",
+    project: "Views",
+    start: "2026-10-21",
+    labels: ["Feature"],
+    assignee: "jon",
+    due: "2026-11-18",
     subtasks: sub(["Status", "Priority", "Custom selects", "Keyboard navigation"], 1),
     activity: [{ at: T0 - 26 * H, who: "Jon", text: "completed “Status”" }],
   }),
   seedTask({
-    id: "ACT-49", title: "Daily email digest of the inbox", status: "in_progress", priority: "medium", size: "m", project: "Teams", start: "2026-10-20",
-    labels: ["Feature"], assignee: "ines", due: "2026-10-24", comments: 1,
+    id: "ACT-49",
+    title: "Daily email digest of the inbox",
+    status: "in_progress",
+    priority: "medium",
+    size: "m",
+    project: "Teams",
+    start: "2026-10-20",
+    labels: ["Feature"],
+    assignee: "ines",
+    due: "2026-10-24",
+    comments: 1,
     subtasks: sub(["Digest query", "Email template", "Unsubscribe link"], 1),
     activity: [{ at: T0 - 2 * D, who: "Ines", text: "moved it to In progress" }],
   }),
   seedTask({
-    id: "ACT-47", title: "Fractional positions for drag and drop", status: "review", priority: "high", size: "l", project: "Board", start: "2026-10-12", due: "2026-10-29",
-    labels: ["Infra"], assignee: "elliot", comments: 7,
+    id: "ACT-47",
+    title: "Fractional positions for drag and drop",
+    status: "review",
+    priority: "high",
+    size: "l",
+    project: "Board",
+    start: "2026-10-12",
+    due: "2026-10-29",
+    labels: ["Infra"],
+    assignee: "elliot",
+    comments: 7,
     description: "Store position as a fractional index so a drop only rewrites the moved card.",
     activity: [{ at: T0 - 7 * H, who: "Jon", text: "commented" }],
   }),
   seedTask({
-    id: "ACT-52", title: "Markdown in comments", status: "review", priority: "medium", size: "s", project: "Board", start: "2026-10-22",
-    labels: ["Feature"], assignee: "jon", due: "2026-10-28", public: true, votes: 52,
+    id: "ACT-52",
+    title: "Markdown in comments",
+    status: "review",
+    priority: "medium",
+    size: "s",
+    project: "Board",
+    start: "2026-10-22",
+    labels: ["Feature"],
+    assignee: "jon",
+    due: "2026-10-28",
+    public: true,
+    votes: 52,
     activity: [{ at: T0 - 9 * H, who: "Jon", text: "moved it to In review" }],
   }),
   seedTask({
-    id: "ACT-58", title: "Basalt dark theme pass", status: "review", priority: "low", size: "s", project: "Polish", start: "2026-10-19", due: "2026-10-30",
-    labels: ["Design"], assignee: "ines",
+    id: "ACT-58",
+    title: "Basalt dark theme pass",
+    status: "review",
+    priority: "low",
+    size: "s",
+    project: "Polish",
+    start: "2026-10-19",
+    due: "2026-10-30",
+    labels: ["Design"],
+    assignee: "ines",
     activity: [{ at: T0 - D, who: "Ines", text: "moved it to In review" }],
   }),
   seedTask({
-    id: "ACT-31", title: "Realtime presence on boards", status: "done", priority: "high", size: "l", project: "Board", start: "2026-09-28", due: "2026-10-14",
-    labels: ["Infra"], assignee: "elliot", public: true, votes: 119, shipped: "2026-10-14",
+    id: "ACT-31",
+    title: "Realtime presence on boards",
+    status: "done",
+    priority: "high",
+    size: "l",
+    project: "Board",
+    start: "2026-09-28",
+    due: "2026-10-14",
+    labels: ["Infra"],
+    assignee: "elliot",
+    public: true,
+    votes: 119,
+    shipped: "2026-10-14",
     activity: [{ at: Date.UTC(2026, 9, 14, 15), who: "Elliot", text: "moved it to Done" }],
   }),
   seedTask({
-    id: "ACT-29", title: "Invite flow with email tokens", status: "done", priority: "medium", size: "m", project: "Teams", start: "2026-09-29", due: "2026-10-09",
-    labels: ["Feature"], assignee: "mara", shipped: "2026-10-09",
+    id: "ACT-29",
+    title: "Invite flow with email tokens",
+    status: "done",
+    priority: "medium",
+    size: "m",
+    project: "Teams",
+    start: "2026-09-29",
+    due: "2026-10-09",
+    labels: ["Feature"],
+    assignee: "mara",
+    shipped: "2026-10-09",
     subtasks: sub(["Token table", "Accept page", "Email template"], 3),
     activity: [{ at: Date.UTC(2026, 9, 9, 11), who: "Mara", text: "moved it to Done" }],
   }),
   seedTask({
-    id: "ACT-33", title: "Activity log trigger on tasks", status: "done", priority: "high", size: "xs", project: "Board", start: "2026-09-24", due: "2026-10-02",
-    labels: ["Infra"], assignee: "elliot", comments: 3, shipped: "2026-10-02",
+    id: "ACT-33",
+    title: "Activity log trigger on tasks",
+    status: "done",
+    priority: "high",
+    size: "xs",
+    project: "Board",
+    start: "2026-09-24",
+    due: "2026-10-02",
+    labels: ["Infra"],
+    assignee: "elliot",
+    comments: 3,
+    shipped: "2026-10-02",
     activity: [{ at: Date.UTC(2026, 9, 2, 16), who: "Elliot", text: "moved it to Done" }],
   }),
   seedTask({
-    id: "ACT-27", title: "Keyboard shortcuts everywhere", status: "done", priority: "medium", size: "m", project: "Polish", start: "2026-09-14", due: "2026-09-30",
-    labels: ["Feature"], assignee: "ines", public: true, votes: 88, shipped: "2026-09-30",
+    id: "ACT-27",
+    title: "Keyboard shortcuts everywhere",
+    status: "done",
+    priority: "medium",
+    size: "m",
+    project: "Polish",
+    start: "2026-09-14",
+    due: "2026-09-30",
+    labels: ["Feature"],
+    assignee: "ines",
+    public: true,
+    votes: 88,
+    shipped: "2026-09-30",
     activity: [{ at: Date.UTC(2026, 8, 30, 10), who: "Ines", text: "moved it to Done" }],
   }),
   seedTask({
-    id: "ACT-21", title: "Workspaces with roles", status: "done", priority: "high", size: "xl", project: "Teams", start: "2026-08-17", due: "2026-09-12",
-    labels: ["Feature"], assignee: "mara", public: true, votes: 143, shipped: "2026-09-12",
+    id: "ACT-21",
+    title: "Workspaces with roles",
+    status: "done",
+    priority: "high",
+    size: "xl",
+    project: "Teams",
+    start: "2026-08-17",
+    due: "2026-09-12",
+    labels: ["Feature"],
+    assignee: "mara",
+    public: true,
+    votes: 143,
+    shipped: "2026-09-12",
     activity: [{ at: Date.UTC(2026, 8, 12, 14), who: "Mara", text: "moved it to Done" }],
   }),
 ];
 
 const seedSuggestions: Suggestion[] = [
   {
-    id: "sg1", title: "A timeline view with dependencies", by: "Priya", at: T0 - 3 * D, votes: 47,
+    id: "sg1",
+    title: "A timeline view with dependencies",
+    by: "Priya",
+    at: T0 - 3 * D,
+    votes: 47,
     details: "Being able to say one task blocks another, and see the arrows on the timeline.",
   },
   {
-    id: "sg2", title: "Post to Slack when something ships", by: "Tomás", at: T0 - 5 * D, votes: 33,
+    id: "sg2",
+    title: "Post to Slack when something ships",
+    by: "Tomás",
+    at: T0 - 5 * D,
+    votes: 33,
     details: "A message in a channel with the changelog entry, so the whole team hears about it.",
   },
   { id: "sg3", title: "Import a board from Trello", by: "Wen", at: T0 - 9 * H, votes: 21 },
@@ -375,7 +623,7 @@ export type BoardAction =
 
 const log = (task: Task, text: string): Task => ({
   ...task,
-  activity: [...task.activity, { at: Date.now(), who: "You", text }],
+  activity: [...task.activity, { id: newId(), at: Date.now(), who: me.name, text }],
 });
 
 function patchTask(state: BoardState, id: string, patch: Partial<Task>, note?: string): BoardState {
@@ -422,7 +670,7 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
         description: "",
         subtasks: [],
         comments: 0,
-        activity: [{ at: Date.now(), who: "You", text: action.note ?? "created the task" }],
+        activity: [{ id: newId(), at: Date.now(), who: me.name, text: action.note ?? "created the task" }],
         ...action.patch,
         status,
       };
@@ -452,7 +700,11 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
         if (next.tasks[task.id]) continue;
         const column = [...next.columns[task.status]];
         column.splice(Math.min(index, column.length), 0, task.id);
-        next = { ...next, tasks: { ...next.tasks, [task.id]: task }, columns: { ...next.columns, [task.status]: column } };
+        next = {
+          ...next,
+          tasks: { ...next.tasks, [task.id]: task },
+          columns: { ...next.columns, [task.status]: column },
+        };
       }
       return next;
     }
@@ -481,8 +733,11 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
     case "comment": {
       const task = state.tasks[action.id];
       if (!task) return state;
-      const comment: Comment = { id: `c${Date.now()}`, who: "You", at: Date.now(), body: action.body };
-      const next = log({ ...task, comments: task.comments + 1, thread: [...(task.thread ?? []), comment] }, "commented");
+      const comment: Comment = { id: newId(), who: me.name, at: Date.now(), body: action.body };
+      const next = log(
+        { ...task, comments: task.comments + 1, thread: [...(task.thread ?? []), comment] },
+        "commented",
+      );
       return { ...state, tasks: { ...state.tasks, [task.id]: next } };
     }
 
@@ -492,7 +747,10 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
       const voted = !task.voted;
       return {
         ...state,
-        tasks: { ...state.tasks, [task.id]: { ...task, voted, votes: Math.max(0, (task.votes ?? 0) + (voted ? 1 : -1)) } },
+        tasks: {
+          ...state.tasks,
+          [task.id]: { ...task, voted, votes: Math.max(0, (task.votes ?? 0) + (voted ? 1 : -1)) },
+        },
       };
     }
 
@@ -501,10 +759,10 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
 
     case "suggest": {
       const suggestion: Suggestion = {
-        id: `sg${Date.now()}`,
+        id: newId(),
         title: action.title,
         details: action.details,
-        by: "You",
+        by: me.name,
         at: Date.now(),
         votes: 1,
         voted: true,
@@ -529,12 +787,22 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
     case "acceptSuggestion": {
       const s = state.roadmap.suggestions.find((x) => x.id === action.id);
       if (!s) return state;
-      const without = { ...state, roadmap: { ...state.roadmap, suggestions: state.roadmap.suggestions.filter((x) => x !== s) } };
+      const without = {
+        ...state,
+        roadmap: { ...state.roadmap, suggestions: state.roadmap.suggestions.filter((x) => x !== s) },
+      };
       return boardReducer(without, {
         type: "add",
         status: "todo",
         title: s.title,
-        patch: { public: true, votes: s.votes, voted: s.voted, labels: ["Feature"], description: s.details ?? "" },
+        patch: {
+          public: true,
+          votes: s.votes,
+          voted: s.voted,
+          labels: labels.some((l) => l.id === "Feature") ? ["Feature"] : [],
+          description: s.details ?? "",
+          origin: s.id,
+        },
         note: `accepted a suggestion from ${s.by}`,
       });
     }

@@ -1,10 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import Link from "next/link";
+import { useActionState, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Dialog as D } from "radix-ui";
 import { Icon, type IconName } from "@/components/ui/icons";
-import { people, seedBoard, timeAgo, type BoardState, type Task } from "@/lib/board-store";
-import { Avatar, AvatarStack } from "@/components/ui/display";
+import {
+  demoMeta,
+  me,
+  people,
+  seedBoard,
+  setBoardMeta,
+  timeAgo,
+  type BoardState,
+  type Person,
+  type Task,
+} from "@/lib/board-store";
+import { createBoard } from "@/lib/actions";
+import { metaFor, type LiveBoard } from "@/lib/live";
+import { AccountButton } from "@/components/account-button";
+import { Input } from "@/components/ui/input";
+import { Avatar, AvatarStack, Spinner } from "@/components/ui/display";
 import { Button } from "@/components/ui/button";
 import { Badge, Kbd } from "@/components/ui/badge";
 import { DitherFill } from "@/components/ui/dither";
@@ -56,6 +71,7 @@ import { PublicRoadmap } from "./roadmap-view";
 import { TableView } from "./table-view";
 import { TimelineView } from "./timeline-view";
 import { TaskDialog } from "./task-dialog";
+import { useBoardSync, type SaveStatus, type Visitor } from "./use-board-sync";
 
 const BOARD_KEY = "acta-demo-board-v5";
 const PREFS_KEY = "acta-demo-prefs-v1";
@@ -93,14 +109,21 @@ export function BoardApp({
   variant = "full",
   view = "board",
   className,
+  live,
 }: {
   variant?: "full" | "embed";
   view?: View;
   className?: string;
+  live?: LiveBoard;
 }) {
   const full = variant === "full";
-  const [demo, rawDispatch] = useReducer(demoReducer, undefined, () => initDemo(seedBoard(), full ? {} : { view }));
+  setBoardMeta(live ? metaFor(live) : demoMeta);
+  const [demo, rawDispatch] = useReducer(demoReducer, undefined, () =>
+    initDemo(live ? live.state : seedBoard(), full ? {} : { view }),
+  );
   const { board: state, prefs, restored } = demo;
+  const { status, here } = useBoardSync(live, state, rawDispatch);
+  const prefsKey = live ? `acta-prefs-${live.board.id}` : PREFS_KEY;
   const setPrefs = useCallback((patch: Partial<Prefs>) => rawDispatch({ type: "prefs", patch }), []);
 
   const dispatch = useCallback(
@@ -117,7 +140,11 @@ export function BoardApp({
                 : `Deleted ${action.ids.length} tasks`
               : `Updated ${action.ids.length} tasks`,
           description:
-            action.type === "delete" ? (one ? state.tasks[action.ids[0]]?.title : "Undo brings them all back.") : action.note,
+            action.type === "delete"
+              ? one
+                ? state.tasks[action.ids[0]]?.title
+                : "Undo brings them all back."
+              : action.note,
           action: { label: "Undo", onClick: () => rawDispatch({ type: "undoTo", depth }) },
         });
       }
@@ -152,27 +179,32 @@ export function BoardApp({
     let board: BoardState | null = null;
     let saved: Partial<Prefs> | null = null;
     try {
-      const b = localStorage.getItem(BOARD_KEY);
+      const b = live ? null : localStorage.getItem(BOARD_KEY);
       if (b) board = JSON.parse(b);
-      const p = localStorage.getItem(PREFS_KEY);
+      const p = localStorage.getItem(prefsKey);
       if (p) saved = JSON.parse(p);
     } catch {}
     rawDispatch({ type: "restore", board, prefs: saved });
-  }, [full]);
+  }, [full, live, prefsKey]);
 
   useEffect(() => {
-    if (!full || !restored) return;
+    if (!full || !restored || live) return;
     try {
       localStorage.setItem(BOARD_KEY, JSON.stringify(state));
     } catch {}
-  }, [full, restored, state]);
+  }, [full, restored, state, live]);
 
   useEffect(() => {
     if (!full || !restored) return;
     try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+      localStorage.setItem(prefsKey, JSON.stringify(prefs));
     } catch {}
-  }, [full, restored, prefs]);
+  }, [full, restored, prefs, prefsKey]);
+
+  const lastPath = live ? `${live.workspace.slug}/${live.board.slug}` : null;
+  useEffect(() => {
+    if (lastPath) document.cookie = `acta-last=${lastPath}; path=/; max-age=31536000; samesite=lax`;
+  }, [lastPath]);
 
   const createTask = useCallback(() => {
     const id = `ACT-${state.next}`;
@@ -218,7 +250,10 @@ export function BoardApp({
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return (t: Task) =>
-      (!q || t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q) || (t.project ?? "").toLowerCase().includes(q)) &&
+      (!q ||
+        t.title.toLowerCase().includes(q) ||
+        t.id.toLowerCase().includes(q) ||
+        (t.project ?? "").toLowerCase().includes(q)) &&
       matches(t, filters);
   }, [query, filters]);
 
@@ -233,6 +268,7 @@ export function BoardApp({
   const sidebar = (
     <Sidebar
       full={full}
+      live={live}
       state={state}
       prefs={prefs}
       setPrefs={setPrefs}
@@ -262,7 +298,9 @@ export function BoardApp({
         className,
       )}
     >
-      <aside className={cn("hidden w-60 shrink-0 flex-col border-r border-line bg-surface", full ? "md:flex" : "lg:flex")}>
+      <aside
+        className={cn("hidden w-60 shrink-0 flex-col border-r border-line bg-surface", full ? "md:flex" : "lg:flex")}
+      >
         {sidebar}
       </aside>
 
@@ -277,7 +315,8 @@ export function BoardApp({
             </D.Root>
           ) : null}
           <div className="flex min-w-0 items-center gap-2.5">
-            <h2 className="truncate font-display text-lg leading-none">Portfolio site</h2>
+            <h2 className="truncate font-display text-lg leading-none">{live ? live.board.name : "Portfolio site"}</h2>
+            {live ? <SaveState status={status} /> : null}
             {state.roadmap.public ? (
               <Tooltip content="The roadmap is public">
                 <button
@@ -291,27 +330,61 @@ export function BoardApp({
           </div>
 
           <div className="ml-auto flex items-center gap-1">
-            <Presence />
-            <Tooltip content={<span>Undo <Kbd className="ml-1 border-ink-3 bg-transparent text-page">⌘Z</Kbd></span>}>
-              <button aria-label="Undo" onClick={undo} disabled={!demo.past.length} className={cn(iconButton, "hidden sm:grid")}>
+            <Presence visitors={live ? here : undefined} />
+            <Tooltip
+              content={
+                <span>
+                  Undo <Kbd className="ml-1 border-ink-3 bg-transparent text-page">⌘Z</Kbd>
+                </span>
+              }
+            >
+              <button
+                aria-label="Undo"
+                onClick={undo}
+                disabled={!demo.past.length}
+                className={cn(iconButton, "hidden sm:grid")}
+              >
                 <Icon name="undo" />
               </button>
             </Tooltip>
-            <Tooltip content={<span>Redo <Kbd className="ml-1 border-ink-3 bg-transparent text-page">⇧⌘Z</Kbd></span>}>
-              <button aria-label="Redo" onClick={redo} disabled={!demo.future.length} className={cn(iconButton, "hidden sm:grid")}>
+            <Tooltip
+              content={
+                <span>
+                  Redo <Kbd className="ml-1 border-ink-3 bg-transparent text-page">⇧⌘Z</Kbd>
+                </span>
+              }
+            >
+              <button
+                aria-label="Redo"
+                onClick={redo}
+                disabled={!demo.future.length}
+                className={cn(iconButton, "hidden sm:grid")}
+              >
                 <Icon name="undo" className="-scale-x-100" />
               </button>
             </Tooltip>
             {full ? (
-              <Tooltip content={<span>Shortcuts <Kbd className="ml-1 border-ink-3 bg-transparent text-page">?</Kbd></span>}>
-                <button aria-label="Keyboard shortcuts" onClick={() => setHelp(true)} className={cn(iconButton, "hidden md:grid")}>
+              <Tooltip
+                content={
+                  <span>
+                    Shortcuts <Kbd className="ml-1 border-ink-3 bg-transparent text-page">?</Kbd>
+                  </span>
+                }
+              >
+                <button
+                  aria-label="Keyboard shortcuts"
+                  onClick={() => setHelp(true)}
+                  className={cn(iconButton, "hidden md:grid")}
+                >
                   <Icon name="keyboard" />
                 </button>
               </Tooltip>
             ) : null}
             <Button variant="primary" size="sm" onClick={createTask} className="ml-1">
               <Icon name="plus" /> <span className="hidden sm:inline">New task</span>
-              {full ? <Kbd className="ml-1 hidden border-on-accent/40 bg-transparent text-on-accent sm:inline-flex">C</Kbd> : null}
+              {full ? (
+                <Kbd className="ml-1 hidden border-on-accent/40 bg-transparent text-on-accent sm:inline-flex">C</Kbd>
+              ) : null}
             </Button>
           </div>
         </header>
@@ -333,7 +406,9 @@ export function BoardApp({
                 <Icon name={v.icon} size="sm" />
                 <span className="hidden @3xl:inline">{v.label}</span>
                 {full ? (
-                  <span className="hidden font-mono text-[10px] text-ink-3 opacity-0 group-hover/tab:opacity-100 @5xl:inline">{i + 1}</span>
+                  <span className="hidden font-mono text-[10px] text-ink-3 opacity-0 group-hover/tab:opacity-100 @5xl:inline">
+                    {i + 1}
+                  </span>
                 ) : null}
               </button>
             ))}
@@ -364,7 +439,13 @@ export function BoardApp({
                 <Kbd className="hidden @xl:inline-flex">/</Kbd>
               ) : null}
             </label>
-            <FilterMenu state={state} filters={filters} setFilter={setFilter} count={filterCount} onClear={() => setPrefs({ filters: {} })} />
+            <FilterMenu
+              state={state}
+              filters={filters}
+              setFilter={setFilter}
+              count={filterCount}
+              onClear={() => setPrefs({ filters: {} })}
+            />
             {prefs.view === "table" || prefs.view === "roadmap" ? (
               <>
                 <DropdownMenu>
@@ -376,10 +457,14 @@ export function BoardApp({
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-48">
                     <DropdownMenuLabel>Group rows by</DropdownMenuLabel>
-                    <DropdownMenuRadioGroup value={prefs.grouping} onValueChange={(v) => setPrefs({ grouping: v as Grouping })}>
+                    <DropdownMenuRadioGroup
+                      value={prefs.grouping}
+                      onValueChange={(v) => setPrefs({ grouping: v as Grouping })}
+                    >
                       {groupings.map((g) => (
                         <DropdownMenuRadioItem key={g} value={g}>
-                          <Icon name={fieldIcon[g as Exclude<Grouping, "none">]} /> {fieldLabel[g as Exclude<Grouping, "none">]}
+                          <Icon name={fieldIcon[g as Exclude<Grouping, "none">]} />{" "}
+                          {fieldLabel[g as Exclude<Grouping, "none">]}
                         </DropdownMenuRadioItem>
                       ))}
                       <DropdownMenuSeparator />
@@ -430,9 +515,7 @@ export function BoardApp({
               <span className="flex h-6 shrink-0 items-center border border-line-strong bg-raised text-xs">
                 <Icon name="sort" size="sm" className="ml-2 text-ink-3" />
                 <span className="ml-1.5 text-ink-3">Sorted by</span>
-                <span className="ml-1.5">
-                  {prefs.sort.key === "id" ? "ID" : columnMeta[prefs.sort.key].label}
-                </span>
+                <span className="ml-1.5">{prefs.sort.key === "id" ? "ID" : columnMeta[prefs.sort.key].label}</span>
                 <Icon name={prefs.sort.dir === 1 ? "arrow-up" : "arrow-down"} size="sm" className="ml-1 text-lapis" />
                 <button
                   aria-label="Clear sort"
@@ -444,7 +527,10 @@ export function BoardApp({
               </span>
             ) : null}
             {filterCount ? (
-              <button onClick={() => setPrefs({ filters: {} })} className="ml-1 shrink-0 text-xs text-ink-3 hover:text-ink">
+              <button
+                onClick={() => setPrefs({ filters: {} })}
+                className="ml-1 shrink-0 text-xs text-ink-3 hover:text-ink"
+              >
                 Clear filters
               </button>
             ) : null}
@@ -464,7 +550,14 @@ export function BoardApp({
               onClearFilters={clearFilters}
             />
           ) : prefs.view === "board" ? (
-            <BoardView state={state} dispatch={dispatch} visible={visible} onOpen={setOpenId} prefs={prefs} setPrefs={setPrefs} />
+            <BoardView
+              state={state}
+              dispatch={dispatch}
+              visible={visible}
+              onOpen={setOpenId}
+              prefs={prefs}
+              setPrefs={setPrefs}
+            />
           ) : prefs.view === "roadmap" ? (
             <TimelineView
               state={state}
@@ -486,7 +579,9 @@ export function BoardApp({
         task={openId ? (state.tasks[openId] ?? null) : null}
         dispatch={dispatch}
         onClose={() => setOpenId(null)}
-        order={Object.values(state.columns).flat().filter((id) => state.tasks[id] && visible(state.tasks[id]))}
+        order={Object.values(state.columns)
+          .flat()
+          .filter((id) => state.tasks[id] && visible(state.tasks[id]))}
         onOpen={setOpenId}
       />
       {full ? <Shortcuts open={help} onOpenChange={setHelp} /> : null}
@@ -494,18 +589,28 @@ export function BoardApp({
   );
 }
 
-function Presence() {
-  const here = [people[1], people[2]];
+function Presence({ visitors }: { visitors?: Visitor[] }) {
+  const here = visitors
+    ? visitors.map((v) => ({ id: v.id, name: v.name, avatar: v.avatar, tone: v.tone as Person["tone"] }))
+    : [people[1], people[2]];
+  if (!here.length) return null;
+  const names = here.map((p) => p.name.split(" ")[0]);
+  const label =
+    names.length === 1
+      ? `${names[0]} is here too`
+      : names.length === 2
+        ? `${names.join(" and ")} are here too`
+        : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} are here too`;
   return (
-    <Tooltip content={`${here.map((p) => p.name.split(" ")[0]).join(" and ")} are here too`}>
+    <Tooltip content={label}>
       <span className="mr-1.5 hidden items-center gap-2 lg:flex">
         <span className="relative flex size-2">
           <span className="absolute inset-0 animate-ping bg-malachite opacity-40 motion-reduce:hidden" />
           <span className="relative size-2 bg-malachite" />
         </span>
         <AvatarStack>
-          {here.map((p) => (
-            <Avatar key={p.id} name={p.name} tone={p.tone} size="sm" />
+          {here.slice(0, 4).map((p) => (
+            <Avatar key={p.id} name={p.name} src={p.avatar} tone={p.tone} size="sm" />
           ))}
         </AvatarStack>
       </span>
@@ -533,7 +638,9 @@ function FilterMenu({
         <Icon name="filter" size="sm" />
         <span className="hidden @2xl:inline">Filter</span>
         {count ? (
-          <span className="grid h-4 min-w-4 place-items-center bg-lapis px-1 font-mono text-[10px] text-on-accent">{count}</span>
+          <span className="grid h-4 min-w-4 place-items-center bg-lapis px-1 font-mono text-[10px] text-on-accent">
+            {count}
+          </span>
         ) : null}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
@@ -581,6 +688,7 @@ function FilterMenu({
 
 function Sidebar({
   full,
+  live,
   state,
   prefs,
   setPrefs,
@@ -591,6 +699,7 @@ function Sidebar({
   onReset,
 }: {
   full: boolean;
+  live?: LiveBoard;
   state: BoardState;
   prefs: Prefs;
   setPrefs: (patch: Partial<Prefs>) => void;
@@ -602,41 +711,67 @@ function Sidebar({
 }) {
   const total = Object.keys(state.tasks).length;
   const doneCount = state.columns.done.length;
-  const mine = Object.values(state.tasks).filter((t) => t.assignee === "elliot" && t.status !== "done").length;
-  const onlyMine = prefs.filters.assignee?.length === 1 && prefs.filters.assignee[0] === "elliot";
+  const mine = Object.values(state.tasks).filter((t) => t.assignee === me.id && t.status !== "done").length;
+  const onlyMine = prefs.filters.assignee?.length === 1 && prefs.filters.assignee[0] === me.id;
   const item = (active: boolean) =>
     cn(
       "flex h-8 w-full items-center gap-2 px-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-lapis",
       active ? "bg-lapis-soft text-lapis-ink" : "text-ink-2 hover:bg-sunken hover:text-ink",
     );
+  const current = live ? live.workspace : workspace;
 
   return (
     <>
       {full ? (
         <div className="flex h-12 shrink-0 items-center justify-between border-b border-line px-3">
-          <Wordmark className="[&>span:last-child]:text-base" />
-          <Badge tone="pyrite">Demo</Badge>
+          <Wordmark href={live ? "/home" : "/"} className="[&>span:last-child]:text-base" />
+          {live ? null : <Badge tone="pyrite">Demo</Badge>}
         </div>
       ) : null}
       <DropdownMenu>
         <DropdownMenuTrigger className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3 text-left outline-none hover:bg-sunken focus-visible:bg-sunken">
-          <Avatar name={workspace.name} sigil={workspace.sigil} tone={workspace.tone} size="sm" />
-          <span className="truncate text-sm font-medium">{workspace.name}</span>
+          <Avatar name={current.name} sigil={current.sigil} tone={current.tone} size="sm" />
+          <span className="truncate text-sm font-medium">{current.name}</span>
           <PixelCaret className="ml-auto text-ink-3" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuContent align="start" className="w-60">
           <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
-          <DropdownMenuRadioGroup
-            value={workspace.name}
-            onValueChange={(name) => setWorkspace(workspaces.find((w) => w.name === name) ?? workspaces[0])}
-          >
-            {workspaces.map((w) => (
-              <DropdownMenuRadioItem key={w.name} value={w.name}>
-                <Avatar name={w.name} sigil={w.sigil} tone={w.tone} size="xs" />
-                {w.name}
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
+          {live ? (
+            <>
+              {live.workspaces.map((w) => (
+                <DropdownMenuItem key={w.id} asChild>
+                  <Link href={`/${w.slug}`}>
+                    <Avatar name={w.name} sigil={w.sigil} tone={w.tone} size="xs" />
+                    <span className="truncate">{w.name}</span>
+                    {w.id === live.workspace.id ? <Icon name="check" className="ml-auto text-lapis" /> : null}
+                  </Link>
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link href={`/${live.workspace.slug}/settings`}>
+                  <Icon name="settings" /> Settings and members
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/new">
+                  <Icon name="plus" /> New workspace
+                </Link>
+              </DropdownMenuItem>
+            </>
+          ) : (
+            <DropdownMenuRadioGroup
+              value={workspace.name}
+              onValueChange={(name) => setWorkspace(workspaces.find((w) => w.name === name) ?? workspaces[0])}
+            >
+              {workspaces.map((w) => (
+                <DropdownMenuRadioItem key={w.name} value={w.name}>
+                  <Avatar name={w.name} sigil={w.sigil} tone={w.tone} size="xs" />
+                  {w.name}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
 
@@ -646,7 +781,7 @@ function Sidebar({
           className={item(onlyMine)}
           aria-pressed={onlyMine}
           onClick={() => {
-            setPrefs({ filters: onlyMine ? {} : { assignee: ["elliot"] } });
+            setPrefs({ filters: onlyMine ? {} : { assignee: [me.id] } });
             onNavigate();
           }}
         >
@@ -654,26 +789,51 @@ function Sidebar({
           My tasks
           {mine ? <span className="ml-auto font-mono text-[11px] text-ink-3">{mine}</span> : null}
         </button>
-        <p className="mt-4 mb-1 px-2 font-mono text-[11px] text-ink-3">Boards</p>
-        {boards.map((b, i) =>
-          i === 0 ? (
-            <button key={b} className={item(!onlyMine)} onClick={onNavigate}>
-              <Icon name="board" size="sm" />
-              <span className="truncate">{b}</span>
-              <span className="ml-auto font-mono text-[11px] text-ink-3">{total}</span>
-            </button>
-          ) : (
-            <Tooltip key={b} content="Only Portfolio site is in the demo" side="right">
-              <button
-                className={cn(item(false), "cursor-default")}
-                onClick={() => toast({ icon: "board", title: b, description: "Only Portfolio site is in the demo." })}
-              >
-                <Icon name="board" size="sm" />
-                <span className="truncate">{b}</span>
-              </button>
-            </Tooltip>
-          ),
-        )}
+        <p className="mt-4 mb-1 flex items-center justify-between px-2 font-mono text-[11px] text-ink-3">
+          Boards
+          {live ? <NewBoard live={live} /> : null}
+        </p>
+        {live
+          ? live.boards.map((b) =>
+              b.id === live.board.id ? (
+                <button key={b.id} className={item(!onlyMine)} onClick={onNavigate} aria-current="page">
+                  <Icon name="board" size="sm" />
+                  <span className="truncate">{b.name}</span>
+                  <span className="ml-auto font-mono text-[11px] text-ink-3">{total}</span>
+                </button>
+              ) : (
+                <Link
+                  key={b.id}
+                  href={`/${live.workspace.slug}/${b.slug}`}
+                  className={item(false)}
+                  onClick={onNavigate}
+                >
+                  <Icon name="board" size="sm" />
+                  <span className="truncate">{b.name}</span>
+                </Link>
+              ),
+            )
+          : boards.map((b, i) =>
+              i === 0 ? (
+                <button key={b} className={item(!onlyMine)} onClick={onNavigate}>
+                  <Icon name="board" size="sm" />
+                  <span className="truncate">{b}</span>
+                  <span className="ml-auto font-mono text-[11px] text-ink-3">{total}</span>
+                </button>
+              ) : (
+                <Tooltip key={b} content="Only Portfolio site is in the demo" side="right">
+                  <button
+                    className={cn(item(false), "cursor-default")}
+                    onClick={() =>
+                      toast({ icon: "board", title: b, description: "Only Portfolio site is in the demo." })
+                    }
+                  >
+                    <Icon name="board" size="sm" />
+                    <span className="truncate">{b}</span>
+                  </button>
+                </Tooltip>
+              ),
+            )}
         <p className="mt-4 mb-1 px-2 font-mono text-[11px] text-ink-3">Views</p>
         {views.map((v) => (
           <button
@@ -697,10 +857,24 @@ function Sidebar({
         </p>
         <div className="mt-1.5 flex h-1.5 gap-px">
           {Array.from({ length: 24 }, (_, i) => (
-            <span key={i} className={cn("flex-1", i < Math.round((doneCount / Math.max(1, total)) * 24) ? "bg-malachite" : "bg-line")} />
+            <span
+              key={i}
+              className={cn(
+                "flex-1",
+                i < Math.round((doneCount / Math.max(1, total)) * 24) ? "bg-malachite" : "bg-line",
+              )}
+            />
           ))}
         </div>
-        {full ? (
+        {live ? (
+          <div className="mt-3 flex items-center justify-between">
+            <span className="flex min-w-0 items-center gap-2">
+              <AccountButton />
+              <span className="truncate text-xs text-ink-2">{live.me.name}</span>
+            </span>
+            <ThemeToggle />
+          </div>
+        ) : full ? (
           <div className="mt-3 flex items-center justify-between">
             <button onClick={onReset} className="flex items-center gap-1.5 text-xs text-ink-3 hover:text-ink">
               <Icon name="reset" size="sm" /> Reset demo
@@ -713,12 +887,70 @@ function Sidebar({
   );
 }
 
-function Inbox({ state, onOpenTask, className }: { state: BoardState; onOpenTask: (id: string) => void; className: string }) {
+function NewBoard({ live }: { live: LiveBoard }) {
+  const [result, action, pending] = useActionState(createBoard, null);
+  return (
+    <D.Root>
+      <Tooltip content="New board" side="right">
+        <D.Trigger
+          aria-label="New board"
+          className="grid size-5 place-items-center text-ink-3 outline-none hover:bg-sunken hover:text-ink focus-visible:ring-2 focus-visible:ring-lapis"
+        >
+          <Icon name="plus" size="sm" />
+        </D.Trigger>
+      </Tooltip>
+      <DialogContent title="New board" description={`A fresh board in ${live.workspace.name}.`} className="max-w-sm">
+        <form action={action} className="flex flex-col gap-3">
+          <input type="hidden" name="workspace" value={live.workspace.id} />
+          <input type="hidden" name="workspaceSlug" value={live.workspace.slug} />
+          <label htmlFor="board-name" className="text-xs font-medium text-ink-2">
+            Name
+          </label>
+          <Input id="board-name" name="name" placeholder="Mobile app" maxLength={60} required autoFocus />
+          {result && !result.ok ? <p className="text-xs text-hematite">{result.message}</p> : null}
+          <Button type="submit" variant="primary" disabled={pending} className="self-end">
+            {pending ? <Spinner className="[&>span.spin-cell]:bg-on-accent/40" /> : <Icon name="plus" />} Create board
+          </Button>
+        </form>
+      </DialogContent>
+    </D.Root>
+  );
+}
+
+function SaveState({ status }: { status: SaveStatus }) {
+  const label = { saved: "Saved", saving: "Saving", offline: "Offline, retrying", error: "Couldn’t save" }[status];
+  return (
+    <span
+      role="status"
+      className={cn(
+        "hidden items-center gap-1.5 font-mono text-[11px] sm:flex",
+        status === "offline" || status === "error" ? "text-hematite" : "text-ink-3",
+      )}
+    >
+      {status === "saving" ? (
+        <Spinner label="Saving" />
+      ) : (
+        <span className={cn("size-1.5", status === "saved" ? "bg-malachite" : "bg-hematite")} />
+      )}
+      {label}
+    </span>
+  );
+}
+
+function Inbox({
+  state,
+  onOpenTask,
+  className,
+}: {
+  state: BoardState;
+  onOpenTask: (id: string) => void;
+  className: string;
+}) {
   const now = useNow();
   const [seen, setSeen] = useState(0);
   const feed = Object.values(state.tasks)
     .flatMap((t) => t.activity.map((a) => ({ ...a, task: t })))
-    .filter((a) => a.who !== "You")
+    .filter((a) => a.who !== me.name)
     .sort((a, b) => b.at - a.at)
     .slice(0, 12);
   const unread = now ? feed.filter((a) => a.at > seen && now - a.at < 2 * 86_400_000).length : 0;
@@ -729,7 +961,9 @@ function Inbox({ state, onOpenTask, className }: { state: BoardState; onOpenTask
         <Icon name="inbox" size="sm" />
         Inbox
         {unread ? (
-          <span className="ml-auto grid h-4 min-w-4 place-items-center bg-lapis px-1 font-mono text-[10px] text-on-accent">{unread}</span>
+          <span className="ml-auto grid h-4 min-w-4 place-items-center bg-lapis px-1 font-mono text-[10px] text-on-accent">
+            {unread}
+          </span>
         ) : null}
       </PopoverTrigger>
       <PopoverContent side="right" align="start" className="w-80">
@@ -748,7 +982,7 @@ function Inbox({ state, onOpenTask, className }: { state: BoardState; onOpenTask
                   className="flex w-full items-start gap-2.5 px-3 py-2 text-left outline-none hover:bg-sunken focus-visible:bg-sunken"
                 >
                   {person ? (
-                    <Avatar name={person.name} tone={person.tone} size="sm" />
+                    <Avatar name={person.name} src={person.avatar} tone={person.tone} size="sm" />
                   ) : (
                     <span className="size-6 shrink-0 border border-dashed border-line-strong" />
                   )}
@@ -837,7 +1071,11 @@ const shortcutGroups: { title: string; items: [string[], string][] }[] = [
 function Shortcuts({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   return (
     <D.Root open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="Keyboard shortcuts" description="Everything in the demo works from the keyboard." className="max-w-2xl">
+      <DialogContent
+        title="Keyboard shortcuts"
+        description="Everything in the demo works from the keyboard."
+        className="max-w-2xl"
+      >
         <div className="grid gap-x-8 gap-y-6 sm:grid-cols-2">
           {shortcutGroups.map((g) => (
             <section key={g.title} className={cn(g.title === "Table" && "sm:row-span-2")}>

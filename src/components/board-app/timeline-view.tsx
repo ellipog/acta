@@ -761,7 +761,7 @@ function Bar({
             >
               {task.title}
             </span>
-            {person && w >= 180 ? <Avatar name={person.name} tone={person.tone} size="xs" className="ml-auto" /> : null}
+            {person && w >= 180 ? <Avatar name={person.name} src={person.avatar} tone={person.tone} size="xs" className="ml-auto" /> : null}
           </span>
         ) : null}
         {readOnly ? null : (

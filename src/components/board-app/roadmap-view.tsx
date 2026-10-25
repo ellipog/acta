@@ -29,6 +29,7 @@ import type { DitherName } from "@/lib/dither-assets";
 import {
   defaultPage,
   formatDue,
+  me,
   personById,
   stageOf,
   statusTitle,
@@ -42,6 +43,7 @@ import {
   type Task,
   type Tone,
 } from "@/lib/board-store";
+import { publicHost, publicPath, SLUG_MAX, slugify, slugProblem } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
 import type { Zoom } from "./fields";
@@ -122,12 +124,6 @@ const nouns: [string, string][] = [
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const article = (s: string) => (/^[aeiou]/i.test(s) ? "an" : "a");
-const slugify = (s: string) =>
-  s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+/, "")
-    .slice(0, 40);
 const byVotes = (a: Task, b: Task) => (b.votes ?? 0) - (a.votes ?? 0);
 const byDue = (a: Task, b: Task) => (a.due ?? "9999").localeCompare(b.due ?? "9999") || byVotes(a, b);
 const byShipped = (a: Task, b: Task) => (b.shipped ?? "").localeCompare(a.shipped ?? "");
@@ -154,7 +150,7 @@ export function PublicRoadmap({
   const [mode, setMode] = useState<Mode>("manage");
   const isPublic = state.roadmap.public;
   const page = state.roadmap.page;
-  const url = `acta.app/r/${page.slug || "untitled"}`;
+  const url = publicPath(me.workspace, page.slug);
 
   const copy = () => {
     navigator.clipboard?.writeText(`https://${url}`).catch(() => {});
@@ -514,21 +510,68 @@ function Toggle({
   label,
   hint,
   checked,
+  disabled,
   onChange,
 }: {
   label: string;
   hint?: string;
   checked: boolean;
+  disabled?: boolean;
   onChange: (v: boolean) => void;
 }) {
   return (
-    <label className="flex cursor-pointer items-start justify-between gap-4">
+    <label className={cn("flex items-start justify-between gap-4", disabled ? "text-ink-3" : "cursor-pointer")}>
       <span className="min-w-0">
         <span className="block text-sm">{label}</span>
         {hint ? <span className="block text-[11px] text-ink-3">{hint}</span> : null}
       </span>
-      <Switch checked={checked} onCheckedChange={onChange} aria-label={label} className="mt-0.5" />
+      <Switch checked={checked} disabled={disabled} onCheckedChange={onChange} aria-label={label} className="mt-0.5" />
     </label>
+  );
+}
+
+function SlugField({ value, onCommit }: { value: string; onCommit: (slug: string) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const trim = (s: string) => s.replace(/-+$/, "");
+  const problem = draft === null ? null : slugProblem(trim(draft));
+  return (
+    <>
+      <div
+        className={cn(
+          "flex h-9 items-center border bg-raised text-sm focus-within:ring-2",
+          problem
+            ? "border-hematite focus-within:ring-hematite/25"
+            : "border-line-strong focus-within:border-lapis focus-within:ring-lapis/25",
+        )}
+      >
+        <span className="shrink-0 border-r border-line bg-sunken px-2 font-mono text-[11px] leading-[2.15rem] text-ink-3">
+          {publicHost}/{me.workspace}/
+        </span>
+        <input
+          id="page-slug"
+          value={draft ?? value}
+          readOnly={me.live}
+          maxLength={SLUG_MAX}
+          spellCheck={false}
+          aria-invalid={Boolean(problem)}
+          aria-describedby="page-slug-hint"
+          onFocus={() => setDraft(value)}
+          onBlur={() => setDraft(null)}
+          onChange={(e) => {
+            const next = slugify(e.target.value);
+            setDraft(next);
+            if (!slugProblem(trim(next))) onCommit(trim(next));
+          }}
+          className="h-full min-w-0 flex-1 bg-transparent px-2 font-mono text-[13px] outline-none"
+        />
+      </div>
+      <p id="page-slug-hint" className={cn("text-[11px]", problem ? "text-hematite" : "text-ink-3")}>
+        {problem ??
+          (me.live
+            ? "The board’s address. Rename the board in workspace settings to change it."
+            : "Letters, numbers and hyphens. Old links keep redirecting after a change.")}
+      </p>
+    </>
   );
 }
 
@@ -581,7 +624,7 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
   const set = (patch: Partial<PublicPage>) => dispatch({ type: "page", patch });
   const customNoun = !nouns.some(([one, many]) => one === page.ideaOne && many === page.ideaMany);
   const [custom, setCustom] = useState(customNoun);
-  const url = `acta.app/r/${page.slug || "untitled"}`;
+  const url = publicPath(me.workspace, page.slug);
 
   return (
     <div className="flex h-full flex-col @4xl:flex-row">
@@ -598,18 +641,8 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
               className="min-h-20"
             />
           </Setting>
-          <Setting label="Address" htmlFor="page-slug" hint="Changing it breaks links you’ve already shared.">
-            <div className="flex h-9 items-center border border-line-strong bg-raised text-sm focus-within:border-lapis focus-within:ring-2 focus-within:ring-lapis/25">
-              <span className="shrink-0 border-r border-line bg-sunken px-2 font-mono text-[11px] leading-[2.15rem] text-ink-3">
-                acta.app/r/
-              </span>
-              <input
-                id="page-slug"
-                value={page.slug}
-                onChange={(e) => set({ slug: slugify(e.target.value) })}
-                className="h-full min-w-0 flex-1 bg-transparent px-2 font-mono text-[13px] outline-none"
-              />
-            </div>
+          <Setting label="Address" htmlFor="page-slug">
+            <SlugField value={page.slug} onCommit={(slug) => set({ slug })} />
           </Setting>
         </Group>
 
@@ -875,6 +908,26 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
           />
         </Group>
 
+        <Group
+          title="Your brand"
+          action={
+            <span className="flex items-center gap-1 border border-line px-1.5 py-px font-mono text-[10px] text-ink-3">
+              <Icon name="lock" size="sm" /> Enterprise
+            </span>
+          }
+        >
+          <Setting label="Custom domain" htmlFor="page-domain" hint="Serve this page from your own domain.">
+            <Input id="page-domain" disabled placeholder="roadmap.yourco.com" className="font-mono text-[13px]" />
+          </Setting>
+          <Toggle
+            label="“Made with Acta” footer"
+            hint="Enterprise pages can drop it."
+            checked
+            disabled
+            onChange={() => {}}
+          />
+        </Group>
+
         <div className="flex items-center justify-between px-4 py-4">
           <span className="text-[11px] text-ink-3">Changes save as you go. ⌘Z undoes them.</span>
           <button
@@ -1070,7 +1123,7 @@ function Visitor({ state, dispatch }: { state: BoardState; dispatch: (a: DemoAct
         {page.showProgress && !shipped ? <Progress task={x} accent={page.accent} /> : null}
         {page.showTeam && person ? (
           <span className="flex items-center gap-1.5 text-[11px] text-ink-3">
-            <Avatar name={person.name} tone={person.tone} size="xs" />
+            <Avatar name={person.name} src={person.avatar} tone={person.tone} size="xs" />
             {person.name.split(" ")[0]}
           </span>
         ) : null}

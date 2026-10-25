@@ -150,7 +150,7 @@ export function TaskCard({
         {person ? (
           <Tooltip content={person.name}>
             <span className="ml-auto">
-              <Avatar name={person.name} tone={person.tone} size="sm" />
+              <Avatar name={person.name} src={person.avatar} tone={person.tone} size="sm" />
             </span>
           </Tooltip>
         ) : null}

@@ -67,7 +67,7 @@ export function RoadmapSection() {
           <div className="border border-ink bg-raised">
             <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3">
               {open ? <Icon name="globe" className="text-lapis" /> : <Icon name="lock" className="text-ink-3" />}
-              <span className="font-mono text-xs text-ink-2">acta.app/r/portfolio-site</span>
+              <span className="font-mono text-xs text-ink-2">acta.page/ellipog/portfolio-site</span>
               <label className="ml-auto flex items-center gap-2.5 text-sm text-ink-2">
                 Public roadmap
                 <Switch checked={open} onCheckedChange={setOpen} aria-label="Public roadmap" />

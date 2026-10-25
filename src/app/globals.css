@@ -307,3 +307,23 @@ section[id] {
   cursor: col-resize;
   touch-action: none;
 }
+
+.legal ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-left: 1.1rem;
+  list-style: square;
+}
+.legal ul ::marker {
+  color: var(--ink-3);
+}
+.legal strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+.legal a {
+  color: var(--lapis);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

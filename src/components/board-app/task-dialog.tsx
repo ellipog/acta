@@ -295,7 +295,7 @@ function TaskBody({
                   return (
                     <li key={c.id} className="flex gap-3">
                       {person ? (
-                        <Avatar name={person.name} tone={person.tone} size="sm" />
+                        <Avatar name={person.name} src={person.avatar} tone={person.tone} size="sm" />
                       ) : (
                         <Avatar name={c.who} tone="lapis" size="sm" />
                       )}

@@ -120,7 +120,7 @@ export function TaskMenu({
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             {person ? (
-              <Avatar name={person.name} tone={person.tone} size="xs" className="!size-4 text-[8px]" />
+              <Avatar name={person.name} src={person.avatar} tone={person.tone} size="xs" className="!size-4 text-[8px]" />
             ) : (
               <span className="size-4 border border-dashed border-line-strong" />
             )}
@@ -138,7 +138,7 @@ export function TaskMenu({
             >
               {people.map((p) => (
                 <ContextMenuRadioItem key={p.id} value={p.id}>
-                  <Avatar name={p.name} tone={p.tone} size="xs" /> {p.name}
+                  <Avatar name={p.name} src={p.avatar} tone={p.tone} size="xs" /> {p.name}
                 </ContextMenuRadioItem>
               ))}
               <ContextMenuRadioItem value="none">
