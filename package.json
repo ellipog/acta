@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "dither": "node scripts/dither.mjs"
+    "dither": "node scripts/dither.mjs",
+    "logo": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/logo.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
