@@ -1,0 +1,866 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { Dialog as D } from "radix-ui";
+import { Icon, type IconName } from "@/components/ui/icons";
+import { people, seedBoard, timeAgo, type BoardState, type Task } from "@/lib/board-store";
+import { Avatar, AvatarStack } from "@/components/ui/display";
+import { Button } from "@/components/ui/button";
+import { Badge, Kbd } from "@/components/ui/badge";
+import { DitherFill } from "@/components/ui/dither";
+import {
+  DialogContent,
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  SheetContent,
+  Tooltip,
+} from "@/components/ui/overlays";
+import { PixelCaret } from "@/components/ui/pixel";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { Wordmark } from "@/components/site-chrome";
+import { toast } from "@/components/ui/toast";
+import { useNow } from "@/lib/hooks";
+import { cn } from "@/lib/utils";
+import type { DitherName } from "@/lib/dither-assets";
+import { BoardView } from "./board-view";
+import { demoReducer, initDemo, type DemoAction } from "./demo-state";
+import {
+  columnMeta,
+  defaultPrefs,
+  fieldIcon,
+  fieldLabel,
+  fieldOptions,
+  matches,
+  valueOf,
+  type FilterField,
+  type Filters,
+  type Grouping,
+  type Prefs,
+  type View,
+} from "./fields";
+import { FieldsMenu } from "./fields-menu";
+import { PublicRoadmap } from "./roadmap-view";
+import { TableView } from "./table-view";
+import { TimelineView } from "./timeline-view";
+import { TaskDialog } from "./task-dialog";
+
+const BOARD_KEY = "acta-demo-board-v5";
+const PREFS_KEY = "acta-demo-prefs-v1";
+
+const workspaces: { name: string; sigil: DitherName; tone: "lapis" | "pyrite" | "malachite" }[] = [
+  { name: "Ellipog Team", sigil: "crystal-cluster", tone: "lapis" },
+  { name: "Personal", sigil: "crystal-prism", tone: "pyrite" },
+  { name: "Side project", sigil: "crystal-tablet", tone: "malachite" },
+];
+
+const boards = ["Portfolio site", "Mobile app", "Brand refresh"];
+
+const views: { id: View; icon: IconName; label: string }[] = [
+  { id: "table", icon: "table", label: "Table" },
+  { id: "board", icon: "board", label: "Board" },
+  { id: "roadmap", icon: "timeline", label: "Roadmap" },
+  { id: "public", icon: "globe", label: "Public" },
+];
+
+const filterFields: FilterField[] = ["status", "assignee", "priority", "label", "project"];
+const groupings: Grouping[] = ["status", "assignee", "priority", "size", "project"];
+
+const tool = (on: boolean) =>
+  cn(
+    "flex h-8 shrink-0 items-center gap-1.5 border px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-lapis",
+    on
+      ? "border-lapis/40 bg-lapis-soft text-lapis-ink"
+      : "border-line bg-raised text-ink-2 hover:border-line-strong hover:text-ink data-[state=open]:border-line-strong data-[state=open]:text-ink",
+  );
+
+const iconButton =
+  "grid size-8 shrink-0 place-items-center text-ink-2 outline-none hover:bg-sunken hover:text-ink focus-visible:ring-2 focus-visible:ring-lapis disabled:pointer-events-none disabled:opacity-35";
+
+export function BoardApp({
+  variant = "full",
+  view = "board",
+  className,
+}: {
+  variant?: "full" | "embed";
+  view?: View;
+  className?: string;
+}) {
+  const full = variant === "full";
+  const [demo, rawDispatch] = useReducer(demoReducer, undefined, () => initDemo(seedBoard(), full ? {} : { view }));
+  const { board: state, prefs, restored } = demo;
+  const setPrefs = useCallback((patch: Partial<Prefs>) => rawDispatch({ type: "prefs", patch }), []);
+
+  const dispatch = useCallback(
+    (action: DemoAction) => {
+      if (action.type === "delete" || action.type === "bulk") {
+        const depth = demo.past.length;
+        const one = action.ids.length === 1;
+        toast({
+          icon: action.type === "delete" ? "trash" : "check",
+          title:
+            action.type === "delete"
+              ? one
+                ? `Deleted ${action.ids[0]}`
+                : `Deleted ${action.ids.length} tasks`
+              : `Updated ${action.ids.length} tasks`,
+          description:
+            action.type === "delete" ? (one ? state.tasks[action.ids[0]]?.title : "Undo brings them all back.") : action.note,
+          action: { label: "Undo", onClick: () => rawDispatch({ type: "undoTo", depth }) },
+        });
+      }
+      rawDispatch(action);
+    },
+    [demo.past.length, state],
+  );
+
+  const undo = useCallback(() => {
+    const step = demo.past.at(-1);
+    if (!step) return void toast({ icon: "undo", title: "Nothing to undo", duration: 1600 });
+    rawDispatch({ type: "undo" });
+    toast({ icon: "undo", title: "Undone", description: step.label, duration: 2400 });
+  }, [demo.past]);
+
+  const redo = useCallback(() => {
+    const step = demo.future[0];
+    if (!step) return void toast({ icon: "undo", title: "Nothing to redo", duration: 1600 });
+    rawDispatch({ type: "redo" });
+    toast({ icon: "undo", title: "Redone", description: step.label, duration: 2400 });
+  }, [demo.future]);
+
+  const [query, setQuery] = useState("");
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [workspace, setWorkspace] = useState(workspaces[0]);
+  const [navOpen, setNavOpen] = useState(false);
+  const [help, setHelp] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!full) return;
+    let board: BoardState | null = null;
+    let saved: Partial<Prefs> | null = null;
+    try {
+      const b = localStorage.getItem(BOARD_KEY);
+      if (b) board = JSON.parse(b);
+      const p = localStorage.getItem(PREFS_KEY);
+      if (p) saved = JSON.parse(p);
+    } catch {}
+    rawDispatch({ type: "restore", board, prefs: saved });
+  }, [full]);
+
+  useEffect(() => {
+    if (!full || !restored) return;
+    try {
+      localStorage.setItem(BOARD_KEY, JSON.stringify(state));
+    } catch {}
+  }, [full, restored, state]);
+
+  useEffect(() => {
+    if (!full || !restored) return;
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    } catch {}
+  }, [full, restored, prefs]);
+
+  const createTask = useCallback(() => {
+    const id = `ACT-${state.next}`;
+    rawDispatch({ type: "add", status: "todo", title: "Untitled task" });
+    setOpenId(id);
+  }, [state.next]);
+
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      const typing = el.closest("input, textarea, select, [contenteditable]");
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && !typing && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if (mod && !typing && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        redo();
+        return;
+      }
+      if (mod || e.altKey || typing || el.closest("[role=dialog], [role=menu], [role=listbox]")) return;
+      const view = ({ "1": "table", "2": "board", "3": "roadmap", "4": "public" } as Record<string, View>)[e.key];
+      if (e.key === "c") {
+        e.preventDefault();
+        createTask();
+      } else if (e.key === "/") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      } else if (e.key === "?") {
+        e.preventDefault();
+        setHelp(true);
+      } else if (view) setPrefs({ view });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [full, createTask, undo, redo, setPrefs]);
+
+  const filters = prefs.filters;
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return (t: Task) =>
+      (!q || t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q) || (t.project ?? "").toLowerCase().includes(q)) &&
+      matches(t, filters);
+  }, [query, filters]);
+
+  const filterCount = filterFields.filter((f) => filters[f]?.length).length;
+  const filtered = Boolean(query.trim()) || filterCount > 0;
+  const setFilter = (field: FilterField, values: string[]) => setPrefs({ filters: { ...filters, [field]: values } });
+  const clearFilters = () => {
+    setQuery("");
+    setPrefs({ filters: {} });
+  };
+
+  const sidebar = (
+    <Sidebar
+      full={full}
+      state={state}
+      prefs={prefs}
+      setPrefs={setPrefs}
+      workspace={workspace}
+      setWorkspace={setWorkspace}
+      onOpenTask={(id) => {
+        setNavOpen(false);
+        setOpenId(id);
+      }}
+      onNavigate={() => setNavOpen(false)}
+      onReset={() => {
+        dispatch({ type: "reset", state: seedBoard() });
+        setPrefs({ ...defaultPrefs, view: prefs.view });
+        setQuery("");
+        setOpenId(null);
+      }}
+    />
+  );
+
+  const showChips = filterCount > 0 || (prefs.view === "table" && prefs.sort);
+
+  return (
+    <div
+      className={cn(
+        "flex overflow-hidden bg-page text-left text-ink",
+        full ? "h-dvh" : "h-[36rem] border border-line-strong",
+        className,
+      )}
+    >
+      <aside className={cn("hidden w-60 shrink-0 flex-col border-r border-line bg-surface", full ? "md:flex" : "lg:flex")}>
+        {sidebar}
+      </aside>
+
+      <div className="@container flex min-w-0 flex-1 flex-col">
+        <header className="flex h-12 shrink-0 items-center gap-1.5 border-b border-line bg-surface px-2 sm:px-4">
+          {full ? (
+            <D.Root open={navOpen} onOpenChange={setNavOpen}>
+              <D.Trigger aria-label="Open navigation" className={cn(iconButton, "md:hidden")}>
+                <Icon name="menu" />
+              </D.Trigger>
+              <SheetContent title="Navigation">{sidebar}</SheetContent>
+            </D.Root>
+          ) : null}
+          <div className="flex min-w-0 items-center gap-2.5">
+            <h2 className="truncate font-display text-lg leading-none">Portfolio site</h2>
+            {state.roadmap.public ? (
+              <Tooltip content="The roadmap is public">
+                <button
+                  onClick={() => setPrefs({ view: "public" })}
+                  className="hidden h-6 shrink-0 items-center gap-1.5 border border-lapis/30 bg-lapis-soft px-1.5 text-[11px] text-lapis-ink hover:border-lapis sm:flex"
+                >
+                  <Icon name="globe" size="sm" /> Public
+                </button>
+              </Tooltip>
+            ) : null}
+          </div>
+
+          <div className="ml-auto flex items-center gap-1">
+            <Presence />
+            <Tooltip content={<span>Undo <Kbd className="ml-1 border-ink-3 bg-transparent text-page">⌘Z</Kbd></span>}>
+              <button aria-label="Undo" onClick={undo} disabled={!demo.past.length} className={cn(iconButton, "hidden sm:grid")}>
+                <Icon name="undo" />
+              </button>
+            </Tooltip>
+            <Tooltip content={<span>Redo <Kbd className="ml-1 border-ink-3 bg-transparent text-page">⇧⌘Z</Kbd></span>}>
+              <button aria-label="Redo" onClick={redo} disabled={!demo.future.length} className={cn(iconButton, "hidden sm:grid")}>
+                <Icon name="undo" className="-scale-x-100" />
+              </button>
+            </Tooltip>
+            {full ? (
+              <Tooltip content={<span>Shortcuts <Kbd className="ml-1 border-ink-3 bg-transparent text-page">?</Kbd></span>}>
+                <button aria-label="Keyboard shortcuts" onClick={() => setHelp(true)} className={cn(iconButton, "hidden md:grid")}>
+                  <Icon name="keyboard" />
+                </button>
+              </Tooltip>
+            ) : null}
+            <Button variant="primary" size="sm" onClick={createTask} className="ml-1">
+              <Icon name="plus" /> <span className="hidden sm:inline">New task</span>
+              {full ? <Kbd className="ml-1 hidden border-on-accent/40 bg-transparent text-on-accent sm:inline-flex">C</Kbd> : null}
+            </Button>
+          </div>
+        </header>
+
+        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-surface pr-2 sm:pr-4">
+          <div role="tablist" aria-label="Views" className="flex h-full shrink-0 items-center pl-1 sm:pl-2">
+            {views.map((v, i) => (
+              <button
+                key={v.id}
+                role="tab"
+                aria-selected={prefs.view === v.id}
+                aria-label={v.label}
+                onClick={() => setPrefs({ view: v.id })}
+                className={cn(
+                  "group/tab -mb-px flex h-full items-center gap-1.5 border-b-2 px-2.5 text-sm outline-none focus-visible:bg-sunken",
+                  prefs.view === v.id ? "border-lapis text-ink" : "border-transparent text-ink-2 hover:text-ink",
+                )}
+              >
+                <Icon name={v.icon} size="sm" />
+                <span className="hidden @3xl:inline">{v.label}</span>
+                {full ? (
+                  <span className="hidden font-mono text-[10px] text-ink-3 opacity-0 group-hover/tab:opacity-100 @5xl:inline">{i + 1}</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+
+          <div className="-mr-2 ml-auto flex min-w-0 items-center gap-1.5 overflow-x-auto py-1 pr-2 sm:-mr-4 sm:pr-4">
+            <label className="flex h-8 shrink-0 items-center gap-2 border border-line bg-raised px-2 focus-within:border-lapis">
+              <Icon name="search" size="sm" className="text-ink-3" />
+              <input
+                ref={searchRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setQuery("");
+                    e.currentTarget.blur();
+                  }
+                }}
+                placeholder="Search"
+                aria-label="Search tasks"
+                className="w-20 bg-transparent text-sm outline-none placeholder:text-ink-3 @xl:w-28 @5xl:w-40"
+              />
+              {query ? (
+                <button aria-label="Clear search" onClick={() => setQuery("")} className="text-ink-3 hover:text-ink">
+                  <Icon name="x" size="sm" />
+                </button>
+              ) : full ? (
+                <Kbd className="hidden @xl:inline-flex">/</Kbd>
+              ) : null}
+            </label>
+            <FilterMenu state={state} filters={filters} setFilter={setFilter} count={filterCount} onClear={() => setPrefs({ filters: {} })} />
+            {prefs.view === "table" || prefs.view === "roadmap" ? (
+              <>
+                <DropdownMenu>
+                  <DropdownMenuTrigger className={tool(prefs.grouping !== "none")}>
+                    <Icon name="group" size="sm" />
+                    <span className="hidden @2xl:inline">
+                      {prefs.grouping === "none" ? "Group" : fieldLabel[prefs.grouping]}
+                    </span>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuLabel>Group rows by</DropdownMenuLabel>
+                    <DropdownMenuRadioGroup value={prefs.grouping} onValueChange={(v) => setPrefs({ grouping: v as Grouping })}>
+                      {groupings.map((g) => (
+                        <DropdownMenuRadioItem key={g} value={g}>
+                          <Icon name={fieldIcon[g as Exclude<Grouping, "none">]} /> {fieldLabel[g as Exclude<Grouping, "none">]}
+                        </DropdownMenuRadioItem>
+                      ))}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuRadioItem value="none">
+                        <Icon name="list" /> No grouping
+                      </DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                {prefs.view === "table" ? (
+                  <FieldsMenu
+                    prefs={prefs}
+                    setPrefs={setPrefs}
+                    trigger={
+                      <button className={tool(prefs.columns.some((c) => c.hidden && c.id !== "updated"))}>
+                        <Icon name="columns" size="sm" />
+                        <span className="hidden @2xl:inline">Fields</span>
+                      </button>
+                    }
+                  />
+                ) : null}
+              </>
+            ) : null}
+          </div>
+        </div>
+
+        {showChips ? (
+          <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-line bg-surface px-2 py-1.5 sm:px-4">
+            {filterFields
+              .filter((f) => filters[f]?.length)
+              .map((f) => (
+                <span key={f} className="flex h-6 shrink-0 items-center border border-line-strong bg-raised text-xs">
+                  <Icon name={fieldIcon[f]} size="sm" className="ml-2 text-ink-3" />
+                  <span className="ml-1.5 text-ink-3">{fieldLabel[f]}</span>
+                  <span className="ml-1.5 max-w-48 truncate">
+                    {filters[f]!.map((v) => fieldOptions[f].find((o) => o.value === v)?.label ?? v).join(", ")}
+                  </span>
+                  <button
+                    aria-label={`Remove the ${fieldLabel[f].toLowerCase()} filter`}
+                    onClick={() => setFilter(f, [])}
+                    className="ml-1 grid h-full w-6 place-items-center border-l border-line text-ink-3 hover:bg-sunken hover:text-ink"
+                  >
+                    <Icon name="x" size="sm" />
+                  </button>
+                </span>
+              ))}
+            {prefs.view === "table" && prefs.sort ? (
+              <span className="flex h-6 shrink-0 items-center border border-line-strong bg-raised text-xs">
+                <Icon name="sort" size="sm" className="ml-2 text-ink-3" />
+                <span className="ml-1.5 text-ink-3">Sorted by</span>
+                <span className="ml-1.5">
+                  {prefs.sort.key === "id" ? "ID" : columnMeta[prefs.sort.key].label}
+                </span>
+                <Icon name={prefs.sort.dir === 1 ? "arrow-up" : "arrow-down"} size="sm" className="ml-1 text-lapis" />
+                <button
+                  aria-label="Clear sort"
+                  onClick={() => setPrefs({ sort: null })}
+                  className="ml-1.5 grid h-full w-6 place-items-center border-l border-line text-ink-3 hover:bg-sunken hover:text-ink"
+                >
+                  <Icon name="x" size="sm" />
+                </button>
+              </span>
+            ) : null}
+            {filterCount ? (
+              <button onClick={() => setPrefs({ filters: {} })} className="ml-1 shrink-0 text-xs text-ink-3 hover:text-ink">
+                Clear filters
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        <main className="min-h-0 flex-1">
+          {prefs.view === "table" ? (
+            <TableView
+              state={state}
+              dispatch={dispatch}
+              visible={visible}
+              onOpen={setOpenId}
+              prefs={prefs}
+              setPrefs={setPrefs}
+              filtered={filtered}
+              onClearFilters={clearFilters}
+            />
+          ) : prefs.view === "board" ? (
+            <BoardView state={state} dispatch={dispatch} visible={visible} onOpen={setOpenId} prefs={prefs} setPrefs={setPrefs} />
+          ) : prefs.view === "roadmap" ? (
+            <TimelineView
+              state={state}
+              dispatch={dispatch}
+              visible={visible}
+              onOpen={setOpenId}
+              prefs={prefs}
+              setPrefs={setPrefs}
+              filtered={filtered}
+              onClearFilters={clearFilters}
+            />
+          ) : (
+            <PublicRoadmap state={state} dispatch={dispatch} visible={visible} onOpen={setOpenId} />
+          )}
+        </main>
+      </div>
+
+      <TaskDialog
+        task={openId ? (state.tasks[openId] ?? null) : null}
+        dispatch={dispatch}
+        onClose={() => setOpenId(null)}
+        order={Object.values(state.columns).flat().filter((id) => state.tasks[id] && visible(state.tasks[id]))}
+        onOpen={setOpenId}
+      />
+      {full ? <Shortcuts open={help} onOpenChange={setHelp} /> : null}
+    </div>
+  );
+}
+
+function Presence() {
+  const here = [people[1], people[2]];
+  return (
+    <Tooltip content={`${here.map((p) => p.name.split(" ")[0]).join(" and ")} are here too`}>
+      <span className="mr-1.5 hidden items-center gap-2 lg:flex">
+        <span className="relative flex size-2">
+          <span className="absolute inset-0 animate-ping bg-malachite opacity-40 motion-reduce:hidden" />
+          <span className="relative size-2 bg-malachite" />
+        </span>
+        <AvatarStack>
+          {here.map((p) => (
+            <Avatar key={p.id} name={p.name} tone={p.tone} size="sm" />
+          ))}
+        </AvatarStack>
+      </span>
+    </Tooltip>
+  );
+}
+
+function FilterMenu({
+  state,
+  filters,
+  setFilter,
+  count,
+  onClear,
+}: {
+  state: BoardState;
+  filters: Filters;
+  setFilter: (field: FilterField, values: string[]) => void;
+  count: number;
+  onClear: () => void;
+}) {
+  const all = Object.values(state.tasks);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger className={tool(count > 0)}>
+        <Icon name="filter" size="sm" />
+        <span className="hidden @2xl:inline">Filter</span>
+        {count ? (
+          <span className="grid h-4 min-w-4 place-items-center bg-lapis px-1 font-mono text-[10px] text-on-accent">{count}</span>
+        ) : null}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuLabel>Filter by</DropdownMenuLabel>
+        {filterFields.map((f) => {
+          const on = filters[f] ?? [];
+          return (
+            <DropdownMenuSub key={f}>
+              <DropdownMenuSubTrigger>
+                <Icon name={fieldIcon[f]} /> {fieldLabel[f]}
+                {on.length ? <span className="font-mono text-[11px] text-lapis">{on.length}</span> : null}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-56">
+                {fieldOptions[f].map((o) => (
+                  <DropdownMenuCheckboxItem
+                    key={o.value}
+                    checked={on.includes(o.value)}
+                    onCheckedChange={(checked) =>
+                      setFilter(f, checked ? [...on, o.value] : on.filter((v) => v !== o.value))
+                    }
+                  >
+                    {o.icon}
+                    <span className={cn("truncate", o.muted && "text-ink-3")}>{o.label}</span>
+                    <span className="ml-auto pl-2 font-mono text-[11px] text-ink-3">
+                      {all.filter((t) => valueOf(t, f).includes(o.value)).length}
+                    </span>
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          );
+        })}
+        {count ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onClear}>
+              <Icon name="x" /> Clear filters
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function Sidebar({
+  full,
+  state,
+  prefs,
+  setPrefs,
+  workspace,
+  setWorkspace,
+  onOpenTask,
+  onNavigate,
+  onReset,
+}: {
+  full: boolean;
+  state: BoardState;
+  prefs: Prefs;
+  setPrefs: (patch: Partial<Prefs>) => void;
+  workspace: (typeof workspaces)[number];
+  setWorkspace: (w: (typeof workspaces)[number]) => void;
+  onOpenTask: (id: string) => void;
+  onNavigate: () => void;
+  onReset: () => void;
+}) {
+  const total = Object.keys(state.tasks).length;
+  const doneCount = state.columns.done.length;
+  const mine = Object.values(state.tasks).filter((t) => t.assignee === "elliot" && t.status !== "done").length;
+  const onlyMine = prefs.filters.assignee?.length === 1 && prefs.filters.assignee[0] === "elliot";
+  const item = (active: boolean) =>
+    cn(
+      "flex h-8 w-full items-center gap-2 px-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-lapis",
+      active ? "bg-lapis-soft text-lapis-ink" : "text-ink-2 hover:bg-sunken hover:text-ink",
+    );
+
+  return (
+    <>
+      {full ? (
+        <div className="flex h-12 shrink-0 items-center justify-between border-b border-line px-3">
+          <Wordmark className="[&>span:last-child]:text-base" />
+          <Badge tone="pyrite">Demo</Badge>
+        </div>
+      ) : null}
+      <DropdownMenu>
+        <DropdownMenuTrigger className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3 text-left outline-none hover:bg-sunken focus-visible:bg-sunken">
+          <Avatar name={workspace.name} sigil={workspace.sigil} tone={workspace.tone} size="sm" />
+          <span className="truncate text-sm font-medium">{workspace.name}</span>
+          <PixelCaret className="ml-auto text-ink-3" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-56">
+          <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={workspace.name}
+            onValueChange={(name) => setWorkspace(workspaces.find((w) => w.name === name) ?? workspaces[0])}
+          >
+            {workspaces.map((w) => (
+              <DropdownMenuRadioItem key={w.name} value={w.name}>
+                <Avatar name={w.name} sigil={w.sigil} tone={w.tone} size="xs" />
+                {w.name}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2 text-sm">
+        <Inbox state={state} onOpenTask={onOpenTask} className={item(false)} />
+        <button
+          className={item(onlyMine)}
+          aria-pressed={onlyMine}
+          onClick={() => {
+            setPrefs({ filters: onlyMine ? {} : { assignee: ["elliot"] } });
+            onNavigate();
+          }}
+        >
+          <Icon name="user" size="sm" />
+          My tasks
+          {mine ? <span className="ml-auto font-mono text-[11px] text-ink-3">{mine}</span> : null}
+        </button>
+        <p className="mt-4 mb-1 px-2 font-mono text-[11px] text-ink-3">Boards</p>
+        {boards.map((b, i) =>
+          i === 0 ? (
+            <button key={b} className={item(!onlyMine)} onClick={onNavigate}>
+              <Icon name="board" size="sm" />
+              <span className="truncate">{b}</span>
+              <span className="ml-auto font-mono text-[11px] text-ink-3">{total}</span>
+            </button>
+          ) : (
+            <Tooltip key={b} content="Only Portfolio site is in the demo" side="right">
+              <button
+                className={cn(item(false), "cursor-default")}
+                onClick={() => toast({ icon: "board", title: b, description: "Only Portfolio site is in the demo." })}
+              >
+                <Icon name="board" size="sm" />
+                <span className="truncate">{b}</span>
+              </button>
+            </Tooltip>
+          ),
+        )}
+        <p className="mt-4 mb-1 px-2 font-mono text-[11px] text-ink-3">Views</p>
+        {views.map((v) => (
+          <button
+            key={v.id}
+            className={item(false)}
+            onClick={() => {
+              setPrefs({ view: v.id });
+              onNavigate();
+            }}
+          >
+            <Icon name={v.icon} size="sm" />
+            {v.label}
+            {prefs.view === v.id ? <span className="ml-auto size-1.5 bg-lapis" /> : null}
+          </button>
+        ))}
+      </nav>
+
+      <div className="shrink-0 border-t border-line p-3">
+        <p className="font-mono text-[11px] text-ink-3">
+          {doneCount} of {total} done
+        </p>
+        <div className="mt-1.5 flex h-1.5 gap-px">
+          {Array.from({ length: 24 }, (_, i) => (
+            <span key={i} className={cn("flex-1", i < Math.round((doneCount / Math.max(1, total)) * 24) ? "bg-malachite" : "bg-line")} />
+          ))}
+        </div>
+        {full ? (
+          <div className="mt-3 flex items-center justify-between">
+            <button onClick={onReset} className="flex items-center gap-1.5 text-xs text-ink-3 hover:text-ink">
+              <Icon name="reset" size="sm" /> Reset demo
+            </button>
+            <ThemeToggle />
+          </div>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+function Inbox({ state, onOpenTask, className }: { state: BoardState; onOpenTask: (id: string) => void; className: string }) {
+  const now = useNow();
+  const [seen, setSeen] = useState(0);
+  const feed = Object.values(state.tasks)
+    .flatMap((t) => t.activity.map((a) => ({ ...a, task: t })))
+    .filter((a) => a.who !== "You")
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 12);
+  const unread = now ? feed.filter((a) => a.at > seen && now - a.at < 2 * 86_400_000).length : 0;
+
+  return (
+    <Popover onOpenChange={(open) => !open && now && setSeen(now)}>
+      <PopoverTrigger className={className}>
+        <Icon name="inbox" size="sm" />
+        Inbox
+        {unread ? (
+          <span className="ml-auto grid h-4 min-w-4 place-items-center bg-lapis px-1 font-mono text-[10px] text-on-accent">{unread}</span>
+        ) : null}
+      </PopoverTrigger>
+      <PopoverContent side="right" align="start" className="w-80">
+        <div className="flex items-center justify-between border-b border-line px-3 py-2.5">
+          <span className="text-sm font-medium">Inbox</span>
+          <span className="font-mono text-[11px] text-ink-3">Latest from your team</span>
+        </div>
+        <ol className="max-h-96 overflow-y-auto py-1">
+          {feed.map((a, i) => {
+            const person = people.find((p) => p.name.startsWith(a.who));
+            const fresh = now !== null && a.at > seen && now - a.at < 2 * 86_400_000;
+            return (
+              <li key={`${a.task.id}-${a.at}-${i}`}>
+                <button
+                  onClick={() => onOpenTask(a.task.id)}
+                  className="flex w-full items-start gap-2.5 px-3 py-2 text-left outline-none hover:bg-sunken focus-visible:bg-sunken"
+                >
+                  {person ? (
+                    <Avatar name={person.name} tone={person.tone} size="sm" />
+                  ) : (
+                    <span className="size-6 shrink-0 border border-dashed border-line-strong" />
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-xs text-ink-2">
+                      <span className="font-medium text-ink">{a.who}</span> {a.text}
+                    </span>
+                    <span className="mt-0.5 block truncate text-xs">
+                      <span className="font-mono text-[11px] text-ink-3">{a.task.id}</span> {a.task.title}
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 flex-col items-end gap-1.5">
+                    <span className="font-mono text-[10px] text-ink-3">{now ? timeAgo(a.at, now) : ""}</span>
+                    {fresh ? <span className="size-1.5 bg-lapis" aria-label="Unread" /> : null}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+        <div className="flex justify-end border-t border-line px-3 py-2">
+          <button
+            disabled={!unread}
+            onClick={() => now && setSeen(now)}
+            className="text-[11px] text-ink-3 hover:text-ink disabled:opacity-40"
+          >
+            Mark all read
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+const shortcutGroups: { title: string; items: [string[], string][] }[] = [
+  {
+    title: "Anywhere",
+    items: [
+      [["C"], "New task"],
+      [["/"], "Search"],
+      [["1"], "Table"],
+      [["2"], "Board"],
+      [["3"], "Roadmap"],
+      [["4"], "Public roadmap"],
+      [["⌘", "Z"], "Undo"],
+      [["⇧", "⌘", "Z"], "Redo"],
+      [["?"], "These shortcuts"],
+    ],
+  },
+  {
+    title: "Table",
+    items: [
+      [["←", "↑", "↓", "→"], "Move between cells"],
+      [["Enter"], "Edit the cell"],
+      [["Space"], "Open the task"],
+      [["X"], "Select the row"],
+      [["⇧", "↑ ↓"], "Extend the selection"],
+      [["⌘", "A"], "Select all rows"],
+      [["Delete"], "Clear the cell"],
+      [["⌘", "⌫"], "Delete the rows"],
+      [["⌘", "C"], "Copy a cell"],
+      [["⌘", "V"], "Paste into the cells"],
+      [["Esc"], "Clear the selection"],
+    ],
+  },
+  {
+    title: "Roadmap",
+    items: [
+      [["Drag"], "Move a bar, or its ends"],
+      [["←", "→"], "Move a bar a day"],
+      [["⇧", "← →"], "Change its length"],
+      [["Click"], "Schedule a task without dates"],
+    ],
+  },
+  {
+    title: "Board",
+    items: [
+      [["Space"], "Pick up or drop a card"],
+      [["←", "→"], "Carry it across columns"],
+      [["↑", "↓"], "Carry it within a column"],
+      [["Enter"], "Open the card"],
+    ],
+  },
+];
+
+function Shortcuts({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  return (
+    <D.Root open={open} onOpenChange={onOpenChange}>
+      <DialogContent title="Keyboard shortcuts" description="Everything in the demo works from the keyboard." className="max-w-2xl">
+        <div className="grid gap-x-8 gap-y-6 sm:grid-cols-2">
+          {shortcutGroups.map((g) => (
+            <section key={g.title} className={cn(g.title === "Table" && "sm:row-span-2")}>
+              <h3 className="mb-2 flex items-center gap-2 font-mono text-[11px] text-ink-3">
+                <DitherFill level={50} tone="lapis" className="size-2" />
+                {g.title}
+              </h3>
+              <dl className="divide-y divide-line border-y border-line">
+                {g.items.map(([keys, what]) => (
+                  <div key={what} className="flex items-center justify-between gap-4 py-1.5 text-sm">
+                    <dt className="text-ink-2">{what}</dt>
+                    <dd className="flex shrink-0 gap-1">
+                      {keys.map((k) => (
+                        <Kbd key={k}>{k}</Kbd>
+                      ))}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          ))}
+        </div>
+      </DialogContent>
+    </D.Root>
+  );
+}

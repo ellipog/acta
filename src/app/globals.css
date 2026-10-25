@@ -1,0 +1,309 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  --page: #f3f0e8;
+  --surface: #faf8f3;
+  --raised: #fdfcf8;
+  --sunken: #ebe7dc;
+  --ink: #1d2230;
+  --ink-2: #4a5060;
+  --ink-3: #7a7f8c;
+  --line: #d9d4c8;
+  --line-strong: #b9b3a5;
+
+  --lapis: #2c4a8c;
+  --lapis-hover: #233d76;
+  --lapis-soft: #dde4f2;
+  --lapis-ink: #1e3566;
+  --pyrite: #b39a4a;
+  --pyrite-soft: #efe6cb;
+  --pyrite-ink: #6e5a1e;
+  --malachite: #2f6b57;
+  --malachite-soft: #dcebe3;
+  --malachite-ink: #1f4d3e;
+  --hematite: #9b3b2e;
+  --hematite-soft: #f2deda;
+  --hematite-ink: #6e271e;
+  --on-accent: #f7f5ef;
+
+  --depth-1: #efebe1;
+  --depth-2: #eae5d9;
+  --depth-3: #e5dfd1;
+  --depth-4: #dfd8c8;
+  --bedrock: #1a1d24;
+  --bedrock-2: #242833;
+  --bedrock-ink: #ebe6db;
+  --bedrock-muted: #8f8b82;
+
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --page: #15171c;
+  --surface: #1c1f25;
+  --raised: #23272e;
+  --sunken: #111317;
+  --ink: #e9e5db;
+  --ink-2: #b3afa6;
+  --ink-3: #807d77;
+  --line: #2e323a;
+  --line-strong: #454a54;
+
+  --lapis: #7f9be0;
+  --lapis-hover: #9ab0ea;
+  --lapis-soft: #1f2a44;
+  --lapis-ink: #bccaf1;
+  --pyrite: #d2b86a;
+  --pyrite-soft: #3a321c;
+  --pyrite-ink: #e6d395;
+  --malachite: #6db396;
+  --malachite-soft: #1b3129;
+  --malachite-ink: #a6d8c3;
+  --hematite: #e07a6a;
+  --hematite-soft: #3b1f1b;
+  --hematite-ink: #f0b0a5;
+  --on-accent: #11131a;
+
+  --depth-1: #13151a;
+  --depth-2: #121418;
+  --depth-3: #101216;
+  --depth-4: #0f1013;
+  --bedrock: #090a0c;
+  --bedrock-2: #121418;
+  --bedrock-ink: #e9e5db;
+  --bedrock-muted: #77746e;
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-lapis: var(--lapis);
+  --color-lapis-hover: var(--lapis-hover);
+  --color-lapis-soft: var(--lapis-soft);
+  --color-lapis-ink: var(--lapis-ink);
+  --color-pyrite: var(--pyrite);
+  --color-pyrite-soft: var(--pyrite-soft);
+  --color-pyrite-ink: var(--pyrite-ink);
+  --color-malachite: var(--malachite);
+  --color-malachite-soft: var(--malachite-soft);
+  --color-malachite-ink: var(--malachite-ink);
+  --color-hematite: var(--hematite);
+  --color-hematite-soft: var(--hematite-soft);
+  --color-hematite-ink: var(--hematite-ink);
+  --color-on-accent: var(--on-accent);
+  --color-depth-1: var(--depth-1);
+  --color-depth-2: var(--depth-2);
+  --color-depth-3: var(--depth-3);
+  --color-depth-4: var(--depth-4);
+  --color-bedrock: var(--bedrock);
+  --color-bedrock-2: var(--bedrock-2);
+  --color-bedrock-ink: var(--bedrock-ink);
+  --color-bedrock-muted: var(--bedrock-muted);
+
+  --font-display: var(--font-marcellus);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-caption: var(--font-garamond);
+}
+
+body {
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+::selection {
+  background: var(--lapis);
+  color: var(--on-accent);
+}
+
+input,
+textarea {
+  caret-color: var(--lapis);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  background-color: var(--line-strong);
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--ink-3);
+}
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+}
+
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--lapis);
+    outline-offset: 2px;
+  }
+}
+
+@utility dither-12 {
+  background-color: var(--dither, currentColor);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h1v1H0zM2 2h1v1H2z'/%3E%3C/svg%3E") 0 0 / 4px 4px repeat;
+}
+@utility dither-25 {
+  background-color: var(--dither, currentColor);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h1v1H0zM2 0h1v1H2zM0 2h1v1H0zM2 2h1v1H2z'/%3E%3C/svg%3E") 0 0 / 4px 4px repeat;
+}
+@utility dither-50 {
+  background-color: var(--dither, currentColor);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h1v1H0zM2 0h1v1H2zM1 1h1v1H1zM3 1h1v1H3zM0 2h1v1H0zM2 2h1v1H2zM1 3h1v1H1zM3 3h1v1H3z'/%3E%3C/svg%3E") 0 0 / 4px 4px repeat;
+}
+@utility dither-75 {
+  background-color: var(--dither, currentColor);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h4v1H0zM1 1h1v1H1zM3 1h1v1H3zM0 2h4v1H0zM1 3h1v1H1zM3 3h1v1H3z'/%3E%3C/svg%3E") 0 0 / 4px 4px repeat;
+}
+
+@utility dither-image {
+  background-color: var(--dither, currentColor);
+  mask-repeat: no-repeat;
+  mask-size: 100% 100%;
+  image-rendering: pixelated;
+}
+
+@utility strata {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--line) 0 1px,
+    transparent 1px 6px,
+    var(--line) 6px 7px,
+    transparent 7px 9px,
+    var(--line-strong) 9px 10px,
+    transparent 10px 16px
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+section[id] {
+  scroll-margin-top: 3.5rem;
+}
+
+@keyframes drip-fall {
+  0% { transform: translateY(0) scaleY(0.4); opacity: 0; }
+  50% { transform: translateY(0) scaleY(1); opacity: 1; }
+  58% { transform: translateY(0) scaleY(1.5); opacity: 1; }
+  78% { transform: translateY(var(--fall)); opacity: 1; }
+  79%, 100% { transform: translateY(var(--fall)); opacity: 0; }
+}
+@keyframes drip-splash {
+  0%, 78% { clip-path: inset(0 50% 0 50%); opacity: 0; }
+  80% { clip-path: inset(0 40% 0 40%); opacity: 1; }
+  92% { clip-path: inset(0 0 0 0); opacity: 1; }
+  100% { clip-path: inset(0 0 0 0); opacity: 0; }
+}
+.drip {
+  animation: drip-fall 4.2s ease-in infinite;
+}
+.drip-splash {
+  background: repeating-linear-gradient(90deg, currentColor 0 2px, transparent 2px 6px);
+  animation: drip-splash 4.2s steps(6, end) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .drip,
+  .drip-splash {
+    animation: none !important;
+    opacity: 0;
+  }
+}
+
+@keyframes toast-in {
+  from { transform: translateY(8px); opacity: 0; }
+}
+@keyframes toast-timer {
+  from { clip-path: inset(0 0 0 0); }
+  to { clip-path: inset(0 100% 0 0); }
+}
+.toast-in {
+  animation: toast-in 160ms steps(4, end);
+}
+.toast-timer {
+  animation: toast-timer linear forwards;
+}
+
+@keyframes grain {
+  to { mask-position: 4px 0; -webkit-mask-position: 4px 0; }
+}
+@keyframes sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(400%); }
+}
+@keyframes spin-cell {
+  0%, 11% { background: var(--ink); }
+  12%, 100% { background: var(--line-strong); }
+}
+.grain {
+  animation: grain 0.6s steps(4, end) infinite;
+}
+.sweep {
+  animation: sweep 1.6s steps(16, end) infinite;
+}
+.spin-cell {
+  animation: spin-cell 0.96s steps(1, end) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .grain,
+  .sweep,
+  .spin-cell {
+    animation: none !important;
+  }
+}
+
+@keyframes sheet-in-left {
+  from { transform: translateX(-100%); }
+}
+@keyframes sheet-in-right {
+  from { transform: translateX(100%); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+.sheet[data-state="open"][data-side="left"] {
+  animation: sheet-in-left 200ms steps(5, end);
+}
+.sheet[data-state="open"][data-side="right"] {
+  animation: sheet-in-right 200ms steps(5, end);
+}
+.sheet-overlay[data-state="open"] {
+  animation: fade-in 200ms steps(4, end);
+}
+
+.col-resize {
+  cursor: col-resize;
+  touch-action: none;
+}

@@ -1,0 +1,157 @@
+{
+  "basalt-rise": {
+    "width": 220,
+    "height": 195,
+    "deep": true
+  },
+  "cave-ice-beam": {
+    "width": 480,
+    "height": 321,
+    "deep": false
+  },
+  "cave-ice-chamber": {
+    "width": 480,
+    "height": 360,
+    "deep": false
+  },
+  "cave-karli": {
+    "width": 300,
+    "height": 419,
+    "deep": false
+  },
+  "cave-kingston-stalactite": {
+    "width": 300,
+    "height": 384,
+    "deep": false
+  },
+  "cave-stalactites": {
+    "width": 480,
+    "height": 360,
+    "deep": false
+  },
+  "crystal-block": {
+    "width": 190,
+    "height": 144,
+    "deep": false
+  },
+  "crystal-cluster": {
+    "width": 180,
+    "height": 185,
+    "deep": false
+  },
+  "crystal-column": {
+    "width": 150,
+    "height": 213,
+    "deep": false
+  },
+  "crystal-lozenge": {
+    "width": 200,
+    "height": 111,
+    "deep": false
+  },
+  "crystal-prism": {
+    "width": 160,
+    "height": 173,
+    "deep": false
+  },
+  "crystal-rhomb": {
+    "width": 200,
+    "height": 122,
+    "deep": false
+  },
+  "crystal-shard": {
+    "width": 180,
+    "height": 180,
+    "deep": false
+  },
+  "crystal-tablet": {
+    "width": 180,
+    "height": 116,
+    "deep": false
+  },
+  "crystal-tower": {
+    "width": 160,
+    "height": 263,
+    "deep": false
+  },
+  "devils-postpile": {
+    "width": 300,
+    "height": 361,
+    "deep": false
+  },
+  "karli-hall": {
+    "width": 230,
+    "height": 322,
+    "deep": true
+  },
+  "mineral-geode-interior": {
+    "width": 480,
+    "height": 320,
+    "deep": false
+  },
+  "mineral-lapis-carving": {
+    "width": 360,
+    "height": 360,
+    "deep": false
+  },
+  "mineral-lapis-surface": {
+    "width": 400,
+    "height": 352,
+    "deep": false
+  },
+  "mineral-pyrite-cube": {
+    "width": 360,
+    "height": 240,
+    "deep": false
+  },
+  "point-sublime": {
+    "width": 576,
+    "height": 275,
+    "deep": false
+  },
+  "rock-basalt-columns": {
+    "width": 480,
+    "height": 360,
+    "deep": false
+  },
+  "rock-basalt-lake": {
+    "width": 300,
+    "height": 400,
+    "deep": false
+  },
+  "stalactite-bedrock": {
+    "width": 210,
+    "height": 269,
+    "deep": false
+  },
+  "surface-panorama": {
+    "width": 640,
+    "height": 333,
+    "deep": true
+  },
+  "terrain-badlands-strata": {
+    "width": 640,
+    "height": 403,
+    "deep": false
+  },
+  "terrain-coyote-buttes": {
+    "width": 360,
+    "height": 240,
+    "deep": false
+  },
+  "terrain-mars-crater": {
+    "width": 480,
+    "height": 360,
+    "deep": false
+  },
+  "terrain-mars-melas-chasma": {
+    "width": 640,
+    "height": 360,
+    "deep": false
+  },
+  "terrain-mars-relief": {
+    "width": 480,
+    "height": 360,
+    "deep": false
+  }
+}
