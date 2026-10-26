@@ -27,6 +27,8 @@ const lapis = "#2c4a8c";
 const onAccent = "#f7f5ef";
 
 const n = (v) => Math.round(v * 100) / 100;
+// For a viewBox, so rounding never trims the ink at its edge.
+const up = (v) => Math.ceil(v * 100) / 100;
 
 // The mark in `color`. With `backing`, its silhouette is filled first so
 // whatever lies behind doesn't show through between the hatching.
@@ -86,9 +88,10 @@ function wordmarkSvg(x, y, font, color) {
 
 // The lockups in the header's own px: the Wordmark is a 28 px mark and ACTA
 // at 20 px, 10 px apart, caps centred on the mark. Stacked puts a larger mark
-// over the same word.
+// over the same word. Every file here shows the mark well over 64 px, so it
+// is drawn as the plate rather than the header's heavier mark.
 function lockup(color, { stacked = false } = {}) {
-  const detail = "mark";
+  const detail = "plate";
   const font = 20;
   const k = font / em;
   if (!stacked) {
@@ -109,7 +112,7 @@ function lockup(color, { stacked = false } = {}) {
 
 // A lockup scaled to `height` with its top-left corner at x, y.
 function placeLockup({ width, height: vh, body }, x, y, height) {
-  return `<svg x="${n(x)}" y="${n(y)}" width="${n((height * width) / vh)}" height="${n(height)}" viewBox="0 0 ${n(width)} ${n(vh)}">${body}</svg>`;
+  return `<svg x="${n(x)}" y="${n(y)}" width="${n((height * width) / vh)}" height="${n(height)}" viewBox="0 0 ${up(width)} ${up(vh)}">${body}</svg>`;
 }
 
 function canvasSvg(width, height, background, body) {
@@ -126,13 +129,11 @@ function tileSvg(size, { scale, radius = 0, detail = logoDetailFor(size * scale)
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">${rect}${placeMark(detail, (size - w) / 2, (size - h) / 2, h, { color, backing })}</svg>`;
 }
 
-// A 1200×630 social card with the lockup across the middle third.
-function bannerSvg(background, color, { backing } = {}) {
+// A 1200×630 social card with the lockup `height` tall, centred on `middle`.
+function bannerSvg(background, color, { middle = 315, height = 150 } = {}) {
   const word = lockup(color);
-  const height = 150;
   const width = (height * word.width) / word.height;
-  const plate = backing ? `<rect x="${n(600 - width / 2 - 48)}" y="${315 - height / 2 - 40}" width="${n(width + 96)}" height="${height + 80}" fill="${backing}"/>` : "";
-  return canvasSvg(1200, 630, background, plate + placeLockup(word, 600 - width / 2, 315 - height / 2, height));
+  return canvasSvg(1200, 630, background, placeLockup(word, 600 - width / 2, middle - height / 2, height));
 }
 
 const png = (svg) => sharp(Buffer.from(svg)).png().toBuffer();
@@ -216,9 +217,8 @@ const tiles = {
 const markFile = (detail, color) =>
   markSvg(detail, { color, attrs: ` width="${n(markWidth(detail, 1024))}" height="1024"` });
 const lockupFile = (color, height, options) => {
-  const word = lockup(color, options);
-  const width = (height * word.width) / word.height;
-  return canvasSvg(width, height, null, placeLockup(word, 0, 0, height));
+  const { width, height: vh, body } = lockup(color, options);
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${up(width)} ${up(vh)}" width="${n((height * width) / vh)}" height="${height}">${body}</svg>`;
 };
 
 const panorama = { width: 1200, height: 630 };
@@ -233,7 +233,9 @@ const kit = [
     [`tile/acta-tile-${name}`, tileSvg(1024, { scale: 0.66, background, color })],
     [`banner/acta-banner-${name}`, bannerSvg(background, color)],
   ]),
-  // The hero's plate behind them: Holmes's panorama in lapis over ink.
+  // The hero's plate: Holmes's panorama in lapis with its depths in ink.
+  // The tile sets the mark on paper over it; the banner lays it out like the
+  // hero, the lockup on open paper and the canyon below.
   [
     "tile/acta-tile-panorama",
     await ditherPng(
@@ -252,10 +254,10 @@ const kit = [
       panorama,
       paper,
       [
-        ["surface-panorama", lapis, 2, -40, -18],
-        ["surface-panorama.deep", ink, 2, -40, -18],
+        ["surface-panorama", lapis, 2, -40, 250],
+        ["surface-panorama.deep", ink, 2, -40, 250],
       ],
-      bannerSvg(null, ink, { backing: paper }),
+      bannerSvg(null, ink, { middle: 125, height: 100 }),
     ),
   ],
 ];
