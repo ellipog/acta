@@ -34,7 +34,7 @@ import {
   type Task,
   type Tone,
 } from "@/lib/board-store";
-import { boardSlugProblem, publicHost, publicHref, publicPath, SLUG_MAX, slugify } from "@/lib/slugs";
+import { boardSlugProblem, publicHref, publicPath, SLUG_MAX, slugify } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
 import { arts, byShipped, byVotes, cap, stageIds, stageMeta, Vein, Visitor } from "./roadmap-page";
@@ -463,8 +463,8 @@ function SlugField({ value, onCommit }: { value: string; onCommit: (slug: string
             : "border-line-strong focus-within:border-lapis focus-within:ring-lapis/25",
         )}
       >
-        <span className="shrink-0 border-r border-line bg-sunken px-2 font-mono text-[11px] leading-[2.15rem] text-ink-3">
-          {publicHost}/{me.workspace}/
+        <span className="max-w-[55%] shrink-0 truncate border-r border-line bg-sunken px-2 font-mono text-[11px] leading-[2.15rem] text-ink-3">
+          {publicPath(me.workspace)}/
         </span>
         <input
           id="page-slug"

@@ -2,11 +2,13 @@
 
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
+import { newKey, type Access } from "@/lib/agents/keys";
 import { avatarBucket, maxAvatarBytes, providerPictures } from "@/lib/avatars";
 import { createAdminClient, serviceReady } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 export type Result = { ok: boolean; message: string } | null;
+export type KeyResult = { ok: boolean; message: string; token?: string } | null;
 
 async function requireUser() {
   const supabase = await createClient();
@@ -91,4 +93,38 @@ export async function deleteAccount(_: Result, form: FormData): Promise<Result> 
   const { error } = await createAdminClient().auth.admin.deleteUser(user.id);
   if (error) return { ok: false, message: "We couldn’t delete the account. Try again, or write to us." };
   redirect("/?account=deleted");
+}
+
+const levels: Access[] = ["read", "write", "manage"];
+const isUuid = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+// The key is shown once. Only its hash is stored
+export async function createAgentKey(_: KeyResult, form: FormData): Promise<KeyResult> {
+  const { supabase } = await requireUser();
+  const name = String(form.get("name") ?? "")
+    .trim()
+    .slice(0, 40);
+  const access = String(form.get("access")) as Access;
+  const some = form.get("reach") === "some";
+  const workspaces = form.getAll("workspace").map(String).filter(isUuid).slice(0, 50);
+  if (!name) return { ok: false, message: "Name the key after the agent that will use it." };
+  if (!levels.includes(access)) return { ok: false, message: "Choose what the key can do." };
+  if (some && !workspaces.length) return { ok: false, message: "Choose at least one workspace." };
+  const { count } = await supabase.from("agent_keys").select("id", { count: "exact", head: true });
+  if ((count ?? 0) >= 25) return { ok: false, message: "You can have 25 keys. Revoke one you don’t use first." };
+  const key = newKey();
+  const { error } = await supabase
+    .from("agent_keys")
+    .insert({ name, access, workspaces: some ? workspaces : null, hash: key.hash, hint: key.hint });
+  if (error) return { ok: false, message: "The key wasn’t made. Try again." };
+  refresh();
+  return { ok: true, message: "Key made.", token: key.token };
+}
+
+export async function revokeAgentKey(id: string): Promise<Result> {
+  const { supabase } = await requireUser();
+  const { data, error } = await supabase.from("agent_keys").delete().eq("id", id).select("id");
+  if (error || !data?.length) return { ok: false, message: "That key wasn’t revoked. Try again." };
+  refresh();
+  return { ok: true, message: "Revoked. Agents using it lost access straight away." };
 }

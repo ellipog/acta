@@ -14,6 +14,7 @@ import { avatarSide } from "@/lib/avatars";
 import { loadClient } from "@/lib/supabase/browser";
 import { cn } from "@/lib/utils";
 import { changePicture, deleteAccount, rename } from "./actions";
+import { AgentKeys, type AgentKey, type KeyPlace } from "./agent-keys";
 
 const methods: Record<string, { label: string; icon: IconName }> = {
   email: { label: "Email link", icon: "mail" },
@@ -163,7 +164,15 @@ function PictureField({ user }: { user: CurrentUser }) {
   );
 }
 
-export function AccountView({ user }: { user: CurrentUser }) {
+export function AccountView({
+  user,
+  keys,
+  workspaces,
+}: {
+  user: CurrentUser;
+  keys: AgentKey[];
+  workspaces: KeyPlace[];
+}) {
   const [named, renameAction, renaming] = useActionState(rename, null);
   const [deleted, deleteAction, deleting] = useActionState(deleteAccount, null);
   const [confirm, setConfirm] = useState("");
@@ -248,6 +257,10 @@ export function AccountView({ user }: { user: CurrentUser }) {
         >
           {leaving ? <Spinner /> : <Icon name="sign-out" />} Sign out
         </Button>
+      </Section>
+
+      <Section title="Agents">
+        <AgentKeys keys={keys} workspaces={workspaces} />
       </Section>
 
       <Section title="Delete account">

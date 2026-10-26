@@ -40,6 +40,7 @@ export type CommentRow = {
   author: string | null;
   body: string;
   created_at: string;
+  via?: string | null;
 };
 export type ActivityRow = {
   id: string;
@@ -48,6 +49,7 @@ export type ActivityRow = {
   actor: string | null;
   text: string;
   created_at: string;
+  via?: string | null;
 };
 export type SuggestionRow = {
   id: string;
@@ -462,6 +464,7 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
             who: ctx.nameOf(ev.row.author),
             at: Date.parse(ev.row.created_at),
             body: ev.row.body,
+            via: ev.row.via ?? undefined,
           },
         };
       return ev.old ? { kind: "uncomment", id: ev.old.id } : { kind: "none" };
@@ -470,7 +473,13 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
         return {
           kind: "activity",
           task: taskKey(ctx.prefix, ev.row.number),
-          entry: { id: ev.row.id, who: ctx.nameOf(ev.row.actor), at: Date.parse(ev.row.created_at), text: ev.row.text },
+          entry: {
+            id: ev.row.id,
+            who: ctx.nameOf(ev.row.actor),
+            at: Date.parse(ev.row.created_at),
+            text: ev.row.text,
+            via: ev.row.via ?? undefined,
+          },
         };
       return ev.old ? { kind: "unactivity", id: ev.old.id } : { kind: "none" };
     case "suggestions":

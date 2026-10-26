@@ -4,6 +4,7 @@ import { authReady, supabaseKey, supabaseUrl } from "@/lib/supabase/env";
 import { publicHost, slugProblem } from "@/lib/slugs";
 
 function publicRewrite(request: NextRequest) {
+  if (!publicHost) return null;
   const host = request.headers.get("host")?.split(":")[0];
   if (host !== publicHost && host !== `www.${publicHost}`) return null;
   const parts = request.nextUrl.pathname.split("/").filter(Boolean);
@@ -35,8 +36,13 @@ export async function proxy(request: NextRequest) {
   const { data } = await supabase.auth.getClaims();
 
   // Signed-in visits to /home go straight to the last board, skipping two server redirects.
-  // The board page sends people to the workspace if that board is gone
+  // The board page sends people to the workspace if that board is gone, and to /home?stale if the
+  // workspace is, which forgets it so /home picks another one
   const last = request.cookies.get("acta-last")?.value;
+  if (request.nextUrl.pathname === "/home" && request.nextUrl.searchParams.has("stale")) {
+    response.cookies.delete("acta-last");
+    return response;
+  }
   if (request.nextUrl.pathname === "/home" && data?.claims && last && /^[a-z0-9-]+\/[a-z0-9-]+$/.test(last)) {
     const redirect = NextResponse.redirect(new URL(`/${last}`, request.url));
     response.cookies.getAll().forEach((c) => redirect.cookies.set(c));
@@ -46,5 +52,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|api/collect|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|webp|gif|ico|txt|xml)$).*)"],
+  matcher: ["/((?!_next/static|_next/image|api/collect|api/mcp|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|webp|gif|ico|txt|xml)$).*)"],
 };

@@ -4,7 +4,10 @@ import { redirect } from "next/navigation";
 import { SiteFooter, SiteHeader } from "@/components/site-chrome";
 import { Skeleton } from "@/components/ui/display";
 import { getCurrentUser } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
+import { getWorkspaces } from "@/lib/workspace";
 import { AccountView } from "./account-view";
+import type { AgentKey } from "./agent-keys";
 
 export const metadata: Metadata = {
   title: "Account · Acta",
@@ -35,5 +38,19 @@ export default function AccountPage() {
 async function Account() {
   const user = await getCurrentUser();
   if (!user) redirect("/login?next=/account");
-  return <AccountView user={user} />;
+  const supabase = await createClient();
+  const [{ data: keys }, workspaces] = await Promise.all([
+    supabase
+      .from("agent_keys")
+      .select("id, name, access, workspaces, hint, created_at, used_at")
+      .order("created_at", { ascending: false }),
+    getWorkspaces(),
+  ]);
+  return (
+    <AccountView
+      user={user}
+      keys={(keys ?? []) as AgentKey[]}
+      workspaces={workspaces.map((w) => ({ id: w.id, slug: w.slug, name: w.name }))}
+    />
+  );
 }

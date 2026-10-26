@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Fill, LegalPage } from "@/components/legal-page";
 import { operator } from "@/lib/legal";
+import { siteHost } from "@/lib/slugs";
 
 export const metadata: Metadata = {
   title: "Privacy policy · Acta",
@@ -55,7 +56,7 @@ export default function PrivacyPage() {
       intro={
         <p>
           This explains what Acta collects, why, who handles it for us, and what you can ask us to do with it. It
-          applies to acta.page, app.acta.page and the public roadmaps people publish on them.
+          applies to {siteHost} and the public roadmaps people publish on it.
         </p>
       }
       summary={[
@@ -145,7 +146,7 @@ export default function PrivacyPage() {
             <>
               <p>
                 We set one kind of cookie: the sign-in cookie that keeps you logged in. It’s only set when you sign in,
-                only on app.acta.page, and you can’t use Acta’s account features without it. Because it’s strictly
+                only on {siteHost}, and you can’t use Acta’s account features without it. Because it’s strictly
                 necessary, we don’t need to ask first, so there’s no cookie banner.
               </p>
               <p>

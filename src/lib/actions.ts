@@ -1,6 +1,7 @@
 "use server";
 
 import { refresh } from "next/cache";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { Label, Project } from "./board-store";
 import type { Role } from "./live";
@@ -159,6 +160,7 @@ export async function deleteWorkspace(_: ActionResult, form: FormData): Promise<
   const id = text(form, "workspace", 64);
   const { data, error } = await supabase.from("workspaces").delete().eq("id", id).select("id");
   if (error || !data?.length) return { ok: false, message: "Only owners can delete a workspace." };
+  (await cookies()).delete("acta-last");
   redirect("/home");
 }
 
@@ -167,6 +169,7 @@ export async function leaveWorkspace(_: ActionResult, form: FormData): Promise<A
   const id = text(form, "workspace", 64);
   const { error } = await supabase.from("members").delete().eq("workspace_id", id).eq("user_id", user.id);
   if (error) return { ok: false, message: "That didn’t work. Try again." };
+  (await cookies()).delete("acta-last");
   redirect("/home");
 }
 

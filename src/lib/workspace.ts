@@ -1,5 +1,6 @@
 import "server-only";
 import { cache } from "react";
+import { cookies } from "next/headers";
 import { pageFrom, type BoardState, type Label, type Project, type StatusCategory, type Task } from "./board-store";
 import { fromRow, taskKey, type SuggestionRow, type TaskRow } from "./board-sync";
 import type { DitherName } from "./dither-assets";
@@ -100,6 +101,12 @@ const getContents = cache(async (slug: string) => {
   };
 });
 
+// /home jumps straight to the last board (see proxy.ts). When that workspace has been deleted or left, the
+// pages send people to /home?stale instead of a 404, which clears the cookie and picks another workspace
+export async function lastBoardIn(slug: string) {
+  return ((await cookies()).get("acta-last")?.value ?? "").split("/")[0] === slug;
+}
+
 export const getWorkspace = cache(async (slug: string) => {
   const [session, workspaces, contents] = await Promise.all([getSession(), getWorkspaces(), getContents(slug)]);
   if (!session || !contents) return null;
@@ -111,8 +118,8 @@ export const getWorkspace = cache(async (slug: string) => {
 const statusKeys: StatusCategory[] = ["backlog", "todo", "in_progress", "review", "done"];
 
 type NestedTask = TaskRow & {
-  comments: { id: string; author: string | null; body: string; created_at: string }[];
-  activity: { id: string; actor: string | null; text: string; created_at: string }[];
+  comments: { id: string; author: string | null; body: string; created_at: string; via: string | null }[];
+  activity: { id: string; actor: string | null; text: string; created_at: string; via: string | null }[];
   task_votes: { voter: string }[];
 };
 
@@ -132,7 +139,7 @@ type NestedBoard = {
 
 const boardColumns =
   "id, slug, name, prefix, next_number, labels, projects, roadmap_public, page, " +
-  "tasks(*, comments(id, author, body, created_at), activity(id, actor, text, created_at), task_votes(voter)), " +
+  "tasks(*, comments(id, author, body, created_at, via), activity(id, actor, text, created_at, via), task_votes(voter)), " +
   "suggestions(*, suggestion_votes(voter))";
 
 // One request for a board and everything on it. The votes come back only when they are the viewer's own
@@ -157,7 +164,13 @@ export function boardState(board: NestedBoard, nameOf: (id: string | null) => st
 
   for (const row of board.tasks) {
     const key = taskKey(board.prefix, row.number);
-    const thread = row.comments.map((c) => ({ id: c.id, who: nameOf(c.author), at: Date.parse(c.created_at), body: c.body }));
+    const thread = row.comments.map((c) => ({
+      id: c.id,
+      who: nameOf(c.author),
+      at: Date.parse(c.created_at),
+      body: c.body,
+      via: c.via ?? undefined,
+    }));
     map[key] = {
       id: key,
       ...fromRow(row),
@@ -166,7 +179,7 @@ export function boardState(board: NestedBoard, nameOf: (id: string | null) => st
       comments: thread.length,
       thread,
       activity: row.activity
-        .map((a) => ({ id: a.id, who: nameOf(a.actor), at: Date.parse(a.created_at), text: a.text }))
+        .map((a) => ({ id: a.id, who: nameOf(a.actor), at: Date.parse(a.created_at), text: a.text, via: a.via ?? undefined }))
         .reverse(),
     };
     columns[row.status].push(key);

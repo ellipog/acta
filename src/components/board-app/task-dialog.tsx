@@ -320,6 +320,7 @@ function TaskBody({
                       <div className="min-w-0 flex-1">
                         <p className="text-xs">
                           <span className="font-medium">{c.who}</span>
+                          {c.via ? <span className="text-ink-3"> via {c.via}</span> : null}
                           <span className="ml-1.5 font-mono text-[11px] text-ink-3">{timeAgo(c.at, now)}</span>
                         </p>
                         <Markdown source={c.body} className="mt-1" />
@@ -358,7 +359,8 @@ function TaskBody({
                       {i < all.length - 1 ? <span className="absolute top-3 bottom-[-0.25rem] w-px bg-line" /> : null}
                     </span>
                     <p className="text-xs text-ink-2">
-                      <span className="font-medium text-ink">{a.who}</span> {a.text}
+                      <span className="font-medium text-ink">{a.who}</span>
+                      {a.via ? <span className="text-ink-3"> via {a.via}</span> : null} {a.text}
                       <span className="ml-1.5 font-mono text-[11px] text-ink-3">{timeAgo(a.at, now)}</span>
                     </p>
                   </li>

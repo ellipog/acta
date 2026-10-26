@@ -4,6 +4,7 @@ import { EB_Garamond, Geist, Geist_Mono, Marcellus } from "next/font/google";
 import { Analytics } from "@/components/analytics";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/toast";
+import { siteUrl } from "@/lib/slugs";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -29,6 +30,7 @@ const marcellus = Marcellus({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: "Acta",
   description: "A project manager built in layers: boards, tables, teams and a public roadmap.",
 };

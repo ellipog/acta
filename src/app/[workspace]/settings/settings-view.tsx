@@ -33,7 +33,7 @@ import {
 } from "@/lib/actions";
 import type { Label, Project, Tone } from "@/lib/board-store";
 import { roleLabel, type Me, type Member, type Role, type WorkspaceSummary } from "@/lib/live";
-import { boardSlugProblem, publicHost, SLUG_MAX, slugify, slugProblem } from "@/lib/slugs";
+import { boardSlugProblem, siteHost, SLUG_MAX, slugify, slugProblem } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
 
 type BoardInfo = { id: string; slug: string; name: string; labels: Label[]; projects: Project[] };
@@ -169,7 +169,7 @@ function General({ workspace, disabled }: { workspace: WorkspaceSummary; disable
           )}
         >
           <span className="shrink-0 border-r border-line bg-sunken px-2 font-mono text-[11px] leading-[2.15rem] text-ink-3">
-            {publicHost}/
+            {siteHost}/
           </span>
           <input
             id="ws-slug"
@@ -497,7 +497,7 @@ function BoardEditor({ board, workspace }: { board: BoardInfo; workspace: Worksp
               )}
             >
               <span className="max-w-[55%] shrink-0 truncate border-r border-line bg-sunken px-2 font-mono text-[11px] leading-[2.15rem] text-ink-3">
-                {publicHost}/{workspace.slug}/
+                {siteHost}/{workspace.slug}/
               </span>
               <input
                 id={`slug-${board.id}`}

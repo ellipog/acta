@@ -1,6 +1,8 @@
 export const SLUG_MIN = 3;
 export const SLUG_MAX = 32;
-export const publicHost = "acta.page";
+// Where the app lives. Change it here when Acta moves to its own domain
+export const siteHost = "acta.aaenz.no";
+export const siteUrl = `https://${siteHost}`;
 
 const reserved = new Set([
   "about",
@@ -86,10 +88,12 @@ export function boardSlugProblem(slug: string): string | null {
   return shapeProblem(slug) ?? (slug === "settings" ? "That name is reserved." : null);
 }
 
-export const publicPath = (workspace: string, board?: string) =>
-  `${publicHost}/${workspace}${board ? `/${board}` : ""}`;
-
 const publicOrigin = process.env.NEXT_PUBLIC_PUBLIC_ORIGIN?.replace(/\/+$/, "");
+// A roadmap domain serves /<workspace>/<board> through src/proxy.ts. Without one, roadmaps live under /p
+export const publicHost = publicOrigin ? new URL(publicOrigin).hostname : null;
+
+export const publicPath = (workspace: string, board?: string) =>
+  `${publicHost ?? `${siteHost}/p`}/${workspace}${board ? `/${board}` : ""}`;
 
 export const publicHref = (workspace: string, board: string) =>
   publicOrigin ? `${publicOrigin}/${workspace}/${board}` : `/p/${workspace}/${board}`;

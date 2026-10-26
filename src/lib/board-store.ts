@@ -4,9 +4,10 @@ export type Size = "xs" | "s" | "m" | "l" | "xl";
 export type Tone = "lapis" | "pyrite" | "malachite" | "hematite";
 
 export type Person = { id: string; name: string; tone: Tone; avatar?: string | null };
-export type Activity = { id?: string; at: number; who: string; text: string };
+// via names the agent key a change came through, when it wasn't made in the app
+export type Activity = { id?: string; at: number; who: string; text: string; via?: string };
 export type Subtask = { id: string; title: string; done: boolean };
-export type Comment = { id: string; who: string; at: number; body: string };
+export type Comment = { id: string; who: string; at: number; body: string; via?: string };
 
 export type Task = {
   id: string;

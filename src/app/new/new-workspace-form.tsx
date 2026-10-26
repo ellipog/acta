@@ -6,7 +6,7 @@ import { Eyebrow, Spinner } from "@/components/ui/display";
 import { Icon } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
 import { createWorkspace, slugTaken } from "@/lib/actions";
-import { publicHost, SLUG_MAX, slugify, slugProblem } from "@/lib/slugs";
+import { siteHost, SLUG_MAX, slugify, slugProblem } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
 
 type Check = { slug: string; taken: boolean };
@@ -81,7 +81,7 @@ export function NewWorkspaceForm({ first, name }: { first: boolean; name: string
           )}
         >
           <span className="shrink-0 border-r border-line bg-sunken px-2 font-mono text-[11px] leading-[2.15rem] text-ink-3">
-            {publicHost}/
+            {siteHost}/
           </span>
           <input
             id="slug"

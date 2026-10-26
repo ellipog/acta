@@ -5,4 +5,4 @@ export const operator = {
   email: "elliot@aaenz.no",
 };
 
-export const legalUpdated = "October 25, 2026";
+export const legalUpdated = "October 26, 2026";
