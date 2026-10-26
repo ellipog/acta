@@ -34,7 +34,15 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip } from "@/components/ui/tooltip";
-import { sizePoints, statuses, type BoardState, type StatusCategory, type Task } from "@/lib/board-store";
+import {
+  archiveTasks,
+  closed,
+  sizePoints,
+  statuses,
+  type BoardState,
+  type StatusCategory,
+  type Task,
+} from "@/lib/board-store";
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
 import type { Prefs } from "./fields";
@@ -141,8 +149,15 @@ export function BoardView({ state, dispatch, visible, onOpen, prefs, setPrefs }:
   };
 
   const active = activeId ? state.tasks[activeId] : null;
-  // Canceled shows once something is in it, or while a card is carried there
-  const shown = statuses.filter((s) => s.id !== "canceled" || state.columns.canceled.length || activeId);
+  // Canceled shows once something is in it, and Hide done leaves out both finished columns, except while a card
+  // is carried, so it can still be dropped there
+  const hideDone = Boolean(prefs?.filters.hideDone);
+  const shown = statuses.filter((s) => {
+    if (activeId) return true;
+    if (s.id === "done") return !hideDone;
+    if (s.id === "canceled") return !hideDone && state.columns.canceled.some((id) => state.tasks[id] && visible(state.tasks[id]));
+    return true;
+  });
 
   return (
     <DndContext
@@ -167,6 +182,11 @@ export function BoardView({ state, dispatch, visible, onOpen, prefs, setPrefs }:
               points={points}
               collapsed={collapsed(s.id)}
               onToggle={setPrefs ? () => toggleCollapsed(s.id) : undefined}
+              onArchive={
+                closed(s.id) && ids.some((id) => !state.tasks[id].archived)
+                  ? () => dispatch(archiveTasks(ids.filter((id) => !state.tasks[id].archived), true))
+                  : undefined
+              }
               dispatch={dispatch}
             >
               <SortableContext items={ids} strategy={verticalListSortingStrategy}>
@@ -201,6 +221,7 @@ function Column({
   points,
   collapsed,
   onToggle,
+  onArchive,
   dispatch,
   children,
 }: {
@@ -210,6 +231,7 @@ function Column({
   points: number;
   collapsed: boolean;
   onToggle?: () => void;
+  onArchive?: () => void;
   dispatch: (a: DemoAction) => void;
   children: React.ReactNode;
 }) {
@@ -306,6 +328,11 @@ function Column({
                 <DropdownMenuItem onSelect={() => setComposing("bottom")}>
                   <Icon name="plus" /> Add a task
                 </DropdownMenuItem>
+                {onArchive ? (
+                  <DropdownMenuItem onSelect={onArchive}>
+                    <Icon name="archive" /> Archive all
+                  </DropdownMenuItem>
+                ) : null}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={onToggle}>
                   <Icon name="chevron-left" /> Collapse column

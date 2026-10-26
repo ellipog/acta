@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { startTransition, useActionState, useEffect, useRef, useState } from "react";
+import { startTransition, useActionState, useEffect, useOptimistic, useRef, useState } from "react";
 import { profileEvent } from "@/components/account-button";
 import { Button } from "@/components/ui/button";
 import { Avatar, Eyebrow, Spinner } from "@/components/ui/display";
@@ -13,7 +13,7 @@ import type { CurrentUser } from "@/lib/auth";
 import { avatarSide } from "@/lib/avatars";
 import { loadClient } from "@/lib/supabase/browser";
 import { cn } from "@/lib/utils";
-import { changePicture, deleteAccount, rename } from "./actions";
+import { changePicture, deleteAccount, rename, type Result } from "./actions";
 import { AgentKeys, type AgentKey, type KeyPlace } from "./agent-keys";
 
 const methods: Record<string, { label: string; icon: IconName }> = {
@@ -173,7 +173,13 @@ export function AccountView({
   keys: AgentKey[];
   workspaces: KeyPlace[];
 }) {
-  const [named, renameAction, renaming] = useActionState(rename, null);
+  // The new name shows at once and saves behind it
+  const [name, setName] = useOptimistic(user.name);
+  const [named, renameAction] = useActionState(async (before: Result, form: FormData) => {
+    const next = String(form.get("name") ?? "").trim();
+    if (next) setName(next.slice(0, 80));
+    return rename(before, form);
+  }, null);
   const [deleted, deleteAction, deleting] = useActionState(deleteAccount, null);
   const [confirm, setConfirm] = useState("");
   const [leaving, setLeaving] = useState(false);
@@ -187,10 +193,10 @@ export function AccountView({
   return (
     <div>
       <div className="flex items-center gap-5 pb-10">
-        <Avatar name={user.name} src={user.avatar} size="lg" />
+        <Avatar name={name} src={user.avatar} size="lg" />
         <div className="min-w-0">
           <Eyebrow>Account</Eyebrow>
-          <h1 className="mt-2 truncate font-display text-4xl">{user.name}</h1>
+          <h1 className="mt-2 truncate font-display text-4xl">{name}</h1>
           <p className="mt-1 truncate text-sm text-ink-2">{user.email}</p>
         </div>
       </div>
@@ -219,9 +225,7 @@ export function AccountView({
           </label>
           <div className="flex gap-2">
             <Input id="name" name="name" defaultValue={user.name} maxLength={80} required autoComplete="name" />
-            <Button type="submit" disabled={renaming}>
-              {renaming ? <Spinner /> : null} Save
-            </Button>
+            <Button type="submit">Save</Button>
           </div>
           {named ? (
             <p role="status" className={cn("text-xs", named.ok ? "text-malachite" : "text-hematite")}>

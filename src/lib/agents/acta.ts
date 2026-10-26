@@ -61,6 +61,7 @@ type TaskRow = {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  archived_at?: string | null;
 };
 
 export type TaskInput = {
@@ -89,6 +90,7 @@ export type NewTask = TaskInput & {
 
 export type TaskPatch = TaskInput & {
   shipped?: string | null;
+  archived?: boolean;
   add_labels?: string[];
   remove_labels?: string[];
   add_subtasks?: string[];
@@ -108,6 +110,7 @@ export type Filters = {
   project?: string;
   query?: string;
   deleted?: boolean;
+  archived?: boolean;
   limit?: number;
 };
 
@@ -134,6 +137,16 @@ function day(value: string | null | undefined, field: string) {
   const ok = /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
   if (!ok) throw new Problem(`${field} must be a date like 2026-11-02.`);
   return value;
+}
+
+// Whether the database has the archive column yet. A no is asked again after a minute, so a migration run while
+// the server is up gets noticed
+let archive: { ok: boolean; at: number } | null = null;
+async function archiveReady(db: ReturnType<typeof agentDb>) {
+  if (archive && (archive.ok || Date.now() - archive.at < 60_000)) return archive.ok;
+  const { error } = await db.from("tasks").select("archived_at").limit(1);
+  archive = { ok: !error, at: Date.now() };
+  return archive.ok;
 }
 
 // A date or a time that has passed, for work brought over from elsewhere. A bare date counts as midday UTC,
@@ -194,6 +207,7 @@ function dbProblem(error: { code?: string; message: string }) {
 export function actaFor(agent: Agent) {
   const db = agentDb();
   const can = (need: Access) => accessRank[agent.access] >= accessRank[need];
+  const fields = async () => ((await archiveReady(db)) ? `${listFields}, archived_at` : listFields);
 
   let places: Promise<Place[]> | null = null;
   const workspaces = () =>
@@ -277,7 +291,7 @@ export function actaFor(agent: Agent) {
     const n = numberOf(b, ref);
     const { data } = await db
       .from("tasks")
-      .select(`${listFields}, description, origin`)
+      .select(`${await fields()}, description, origin`)
       .eq("board_id", b.id)
       .eq("number", n)
       .maybeSingle();
@@ -387,6 +401,7 @@ export function actaFor(agent: Agent) {
       public: t.public || undefined,
       votes: t.vote_count || undefined,
       shipped: t.shipped_on,
+      archived: t.archived_at,
       deleted: t.deleted_at,
     });
   }
@@ -454,14 +469,17 @@ export function actaFor(agent: Agent) {
               .order("created_at")
           : Promise.resolve({ data: [] as never[] }),
       ]);
+      const ready = await archiveReady(db);
       const open = await Promise.all(
         (boards ?? []).map(async (b) => {
-          const { count } = await db
+          let q = db
             .from("tasks")
             .select("number", { count: "exact", head: true })
             .eq("board_id", b.id)
             .in("status", openStatuses)
             .is("deleted_at", null);
+          if (ready) q = q.is("archived_at", null);
+          const { count } = await q;
           return [b.id, count ?? 0] as const;
         }),
       );
@@ -490,10 +508,30 @@ export function actaFor(agent: Agent) {
 
     async board(ref: string) {
       const b = await board(ref);
-      const [list, counts, { count: suggestions }] = await Promise.all([
+      const ready = await archiveReady(db);
+      const count = async (s: StatusCategory) => {
+        let q = db
+          .from("tasks")
+          .select("number", { count: "exact", head: true })
+          .eq("board_id", b.id)
+          .eq("status", s)
+          .is("deleted_at", null);
+        if (ready) q = q.is("archived_at", null);
+        const { count } = await q;
+        return [s, count ?? 0] as const;
+      };
+      const [list, counts, { count: suggestions }, { count: archived }] = await Promise.all([
         people(b.workspace_id),
-        Promise.all(taskStatuses.map(async (s) => [s, await columnSize(b, s)] as const)),
+        Promise.all(taskStatuses.map(count)),
         db.from("suggestions").select("id", { count: "exact", head: true }).eq("board_id", b.id),
+        ready
+          ? db
+              .from("tasks")
+              .select("number", { count: "exact", head: true })
+              .eq("board_id", b.id)
+              .is("deleted_at", null)
+              .not("archived_at", "is", null)
+          : Promise.resolve({ count: 0 }),
       ]);
       const page = pageFrom(b.name, b.slug, b.page);
       return compact({
@@ -503,6 +541,7 @@ export function actaFor(agent: Agent) {
         url: boardUrl(b),
         task_prefix: b.prefix,
         tasks_by_status: Object.fromEntries(counts),
+        archived_tasks: archived || undefined,
         labels: (b.labels ?? []).map((l) => l.id),
         projects: (b.projects ?? []).map((p) => p.name),
         people: list.map((p) => compact({ name: p.name, role: p.role, you: p.id === agent.userId || undefined })),
@@ -522,11 +561,17 @@ export function actaFor(agent: Agent) {
     async tasks(ref: string, f: Filters) {
       const b = await board(ref);
       const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
-      let q = db.from("tasks").select(listFields, { count: "exact" }).eq("board_id", b.id);
+      const ready = await archiveReady(db);
+      let q = db.from("tasks").select(await fields(), { count: "exact" }).eq("board_id", b.id);
       if (f.deleted) {
         q = q.not("deleted_at", "is", null);
         if (f.status?.length) q = q.in("status", f.status);
-      } else q = q.is("deleted_at", null).in("status", f.status?.length ? f.status : openStatuses);
+      } else {
+        // Archived work is mostly finished, so asking for it looks at every status
+        const archived = Boolean(f.archived && ready);
+        q = q.is("deleted_at", null).in("status", f.status?.length ? f.status : archived ? [...taskStatuses] : openStatuses);
+        if (ready) q = archived ? q.not("archived_at", "is", null) : q.is("archived_at", null);
+      }
       if (f.assignee !== undefined) {
         const id = await pickPerson(b, f.assignee);
         q = id ? q.eq("assignee", id) : q.is("assignee", null);
@@ -669,6 +714,12 @@ export function actaFor(agent: Agent) {
         fields.public = p.public;
         notes.push(p.public ? "added it to the public roadmap" : "took it off the public roadmap");
       }
+      if (p.archived !== undefined && p.archived !== Boolean(t.archived_at)) {
+        if (!(await archiveReady(db)))
+          throw new Problem("Archiving needs the latest database migration. Ask the person who runs Acta to apply it.");
+        fields.archived_at = p.archived ? new Date().toISOString() : null;
+        notes.push(p.archived ? "archived the task" : "brought the task back from the archive");
+      }
 
       let labels = p.labels ? pickLabels(b, p.labels) : [...t.labels];
       for (const l of pickLabels(b, p.add_labels ?? [])) if (!labels.includes(l)) labels.push(l);
@@ -787,7 +838,7 @@ export function actaFor(agent: Agent) {
       if (!p.by === !p.tasks?.length) throw new Problem("Pass by, to sort the column, or tasks, to set its order.");
       const { data, error } = await db
         .from("tasks")
-        .select(listFields)
+        .select(await fields())
         .eq("board_id", b.id)
         .eq("status", p.status)
         .is("deleted_at", null)
@@ -892,6 +943,7 @@ export function actaFor(agent: Agent) {
             subtasks: t.subtasks,
             public: t.public,
             shipped_on: t.shipped_on,
+            archived_at: t.archived_at ?? null,
             position: await columnSize(b, t.status),
             origin: t.origin,
           },
@@ -948,10 +1000,11 @@ export function actaFor(agent: Agent) {
       const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
       let q = db
         .from("tasks")
-        .select(`board_id, ${listFields}`, { count: "exact" })
+        .select(`board_id, ${await fields()}`, { count: "exact" })
         .in("board_id", ids)
         .is("deleted_at", null)
         .in("status", f.status?.length ? f.status : openStatuses);
+      if (await archiveReady(db)) q = q.is("archived_at", null);
       if (assignee !== undefined) q = assignee ? q.eq("assignee", assignee) : q.is("assignee", null);
       q = search(q, f.query, prefix ? [prefix] : undefined);
       const { data, count, error } = await q.order("updated_at", { ascending: false }).limit(limit);

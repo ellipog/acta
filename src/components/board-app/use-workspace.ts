@@ -39,10 +39,11 @@ export function useWorkspace(live: LiveBoard | undefined) {
     };
     const stop = listen(`counts:${workspaceId}:${hash(ids)}`, [{ table: "tasks", filter: `board_id=in.(${ids})` }], {
       change: (_table, p) => {
-        const row = (p.eventType === "DELETE" ? p.old : p.new) as { board_id?: string; deleted_at?: string | null };
-        // The open board counts its own tasks
+        const row = (p.eventType === "DELETE" ? p.old : p.new) as { board_id?: string };
+        // The open board counts its own tasks. Elsewhere any change could be a task deleted, restored, archived or
+        // brought back, so the counts are read again
         if (row.board_id === liveRef.current?.board.id) return;
-        if (p.eventType !== "UPDATE" || row.deleted_at) refresh();
+        refresh();
       },
       joined: (again) => {
         if (again) refresh();

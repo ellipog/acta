@@ -11,7 +11,7 @@ How to work with it:
 2. Before starting something, check list_tasks for a task that already covers it. Create one if there's none.
 3. When you start a task, move it to in_progress and assign it to "me". Tick subtasks as you finish them. Keep one progress comment per task and update it with edit_comment, adding a new comment only for a milestone, a blocker or a question.
 4. When the work is ready for someone to look at, such as an open pull request, move it to review and comment with the link. Move it to done once it's merged or shipped.
-5. If you delete a task by mistake, restore_task brings it back.
+5. If you delete a task by mistake, restore_task brings it back. To tidy finished work away without deleting it, archive it; list_tasks with archived: true finds it again.
 6. When bringing work over from another tracker, keep its history: give create_tasks each task's created date, a shipped date for finished work, and its comments with their original author and time.
 
 Write titles as short imperatives ("Add CSV export") and descriptions in Markdown. Everything you do shows up live on the board, credited to the person who made this key and marked with the key's name. When you mention a task to the person, include its url.`;
@@ -53,6 +53,10 @@ const fields = {
 const changes = {
   ...z.object(fields).partial().shape,
   shipped: date.nullable().optional().describe("When a done task shipped, YYYY-MM-DD. Moving to done sets today"),
+  archived: z
+    .boolean()
+    .optional()
+    .describe("true puts the task in the archive: off the board, not deleted, still on the public roadmap. false brings it back"),
   add_labels: z.array(z.string()).optional(),
   remove_labels: z.array(z.string()).optional(),
   add_subtasks: z.array(z.string().min(1).max(200)).max(50).optional(),
@@ -135,6 +139,7 @@ export function actaServer(agent: Agent) {
         project: z.string().optional(),
         query: z.string().optional().describe("Words to find in titles and descriptions, or a task id"),
         deleted: z.boolean().optional().describe("Show deleted tasks instead, newest first, to find one to restore"),
+        archived: z.boolean().optional().describe("Show archived tasks instead, in every status unless you pass status"),
         limit: z.number().int().min(1).max(200).optional().describe("Defaults to 50"),
       }),
       annotations: reads,

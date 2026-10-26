@@ -36,6 +36,14 @@ export function forgetBoard(path: string) {
   boards.delete(path);
 }
 
+/** Follows a board to its new address */
+export function moveBoard(from: string, to: string, slug: string) {
+  const hit = boards.get(from);
+  if (!hit) return;
+  boards.delete(from);
+  boards.set(to, { ...hit, board: { ...hit.board, slug } });
+}
+
 // Each workspace's frame: who you are, its boards and people. Enough to draw the sidebar while a board loads
 export type Shell = Pick<LiveBoard, "me" | "workspace" | "workspaces" | "boards" | "members">;
 const shells = new Map<string, Shell>();

@@ -25,6 +25,7 @@ import { Select } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import { useNow } from "@/lib/hooks";
 import {
+  archiveTasks,
   closed,
   formatDue,
   labels,
@@ -133,7 +134,14 @@ export function TableView({
         patch: patchFor(grouping, o.value),
       }))
       // Canceled only shows once something is in it
-      .filter((g) => g.rows.length || (grouping === "status" && !filteringThis && g.key !== "status:canceled"));
+      .filter(
+        (g) =>
+          g.rows.length ||
+          (grouping === "status" &&
+            !filteringThis &&
+            g.key !== "status:canceled" &&
+            !(prefs.filters.hideDone && g.key === "status:done")),
+      );
   }, [rows, grouping, prefs.filters, filtered]);
 
   const isCollapsed = (g: Group) => prefs.collapsed.includes(g.key);
@@ -694,6 +702,23 @@ export function TableView({
                           </button>
                           <span className="font-mono text-[11px] text-ink-3">{g.rows.length}</span>
                           {pts ? <span className="font-mono text-[11px] text-ink-3">· {pts} pt</span> : null}
+                          {(g.key === "status:done" || g.key === "status:canceled") && g.rows.some((r) => !r.archived) ? (
+                            <Tooltip content={`Archive everything in ${g.title}`}>
+                              <button
+                                onClick={() =>
+                                  dispatch(
+                                    archiveTasks(
+                                      g.rows.filter((r) => !r.archived).map((r) => r.id),
+                                      true,
+                                    ),
+                                  )
+                                }
+                                className="flex h-6 items-center gap-1.5 px-1.5 text-xs text-ink-3 opacity-0 group-hover/grp:opacity-100 hover:bg-raised hover:text-ink focus-visible:opacity-100 pointer-coarse:opacity-100"
+                              >
+                                <Icon name="archive" size="sm" /> Archive all
+                              </button>
+                            </Tooltip>
+                          ) : null}
                           <Tooltip content={`Add to ${g.title}`}>
                             <button
                               aria-label={`Add a task to ${g.title}`}
@@ -862,6 +887,11 @@ export function TableView({
           setField={(field, value) => setField(sel, field, value)}
           setDue={(d) => setDue(sel, d)}
           onDelete={() => dispatch({ type: "delete", ids: sel })}
+          archived={sel.every((id) => state.tasks[id]?.archived)}
+          onArchive={(on) => {
+            dispatch(archiveTasks(sel, on));
+            setSelected([]);
+          }}
         />
       ) : null}
     </div>
@@ -930,6 +960,11 @@ function TitleCell({
       >
         {task.title}
       </button>
+      {task.archived ? (
+        <span className="flex shrink-0 items-center gap-1 border border-line px-1 font-mono text-[10px] text-ink-3">
+          <Icon name="archive" size="sm" /> Archived
+        </span>
+      ) : null}
       {task.comments ? (
         <span className="flex shrink-0 items-center gap-1 font-mono text-[11px] text-ink-3">
           <Icon name="comment" size="sm" />
@@ -1113,12 +1148,17 @@ function BulkBar({
   setField,
   setDue,
   onDelete,
+  archived,
+  onArchive,
 }: {
   ids: string[];
   onClear: () => void;
   setField: (field: GroupField, value: string) => void;
   setDue: (due: string | undefined) => void;
   onDelete: () => void;
+  // Whether every selected task is archived, so the button brings them back
+  archived: boolean;
+  onArchive: (on: boolean) => void;
 }) {
   const [dueOpen, setDueOpen] = useState(false);
   const fields: GroupField[] = ["status", "assignee", "priority", "size", "project"];
@@ -1176,6 +1216,9 @@ function BulkBar({
             </PopoverContent>
           </Popover>
           <span className="mx-1 h-5 w-px shrink-0 bg-line" />
+          <button onClick={() => onArchive(!archived)} className={button}>
+            <Icon name="archive" size="sm" /> {archived ? "Unarchive" : "Archive"}
+          </button>
           <button onClick={onDelete} className={cn(button, "hover:bg-hematite-soft hover:text-hematite")}>
             <Icon name="trash" size="sm" /> Delete
           </button>

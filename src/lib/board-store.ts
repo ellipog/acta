@@ -31,6 +31,8 @@ export type Task = {
   votes?: number;
   voted?: boolean;
   shipped?: string;
+  // When it was put away. Archived tasks leave the board without being deleted
+  archived?: string;
   origin?: string;
 };
 
@@ -120,6 +122,14 @@ export const statuses: { id: StatusCategory; title: string; rock: string }[] = [
 
 /** Done or canceled: nothing left to do */
 export const closed = (status: StatusCategory) => status === "done" || status === "canceled";
+
+/** Puts tasks away, or brings them back */
+export const archiveTasks = (ids: string[], on: boolean): BoardAction => ({
+  type: "bulk",
+  ids,
+  patch: { archived: on ? new Date().toISOString() : undefined },
+  note: on ? "archived the task" : "brought the task back from the archive",
+});
 
 export const statusTitle: Record<StatusCategory, string> = {
   backlog: "Backlog",

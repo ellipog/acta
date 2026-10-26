@@ -44,6 +44,7 @@ export function TaskCard({
       className={cn(
         "group relative border border-line bg-raised p-3 text-left transition-colors hover:border-line-strong",
         done && "bg-surface",
+        task.archived && "border-dashed opacity-70",
         className,
       )}
       {...props}

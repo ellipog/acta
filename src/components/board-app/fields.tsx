@@ -3,6 +3,7 @@ import { Avatar } from "@/components/ui/display";
 import type { IconName } from "@/components/ui/icons";
 import type { SelectOption } from "@/components/ui/select";
 import {
+  closed,
   labels,
   labelTone,
   people,
@@ -34,7 +35,13 @@ export type GroupField = "status" | "priority" | "assignee" | "project" | "size"
 export type Grouping = GroupField | "none";
 export type SortKey = ColumnId | "id";
 export type FilterField = "status" | "priority" | "assignee" | "label" | "project";
-export type Filters = Partial<Record<FilterField, string[]>>;
+export type Filters = Partial<Record<FilterField, string[]>> & {
+  // Leaves out done and canceled tasks
+  hideDone?: boolean;
+  // Shows archived tasks, which are otherwise left out
+  archived?: boolean;
+};
+export const filterFields: FilterField[] = ["status", "assignee", "priority", "label", "project"];
 export type View = "table" | "board" | "roadmap" | "public";
 export type Zoom = "month" | "quarter" | "year";
 
@@ -48,6 +55,8 @@ export type Prefs = {
   zoom: Zoom;
   collapsed: string[];
   filters: Filters;
+  // Filters saved for this board, which it opens with
+  keptFilters: Filters;
 };
 
 export const columnMeta: Record<
@@ -91,6 +100,7 @@ export const defaultPrefs: Prefs = {
   zoom: "month",
   collapsed: [],
   filters: {},
+  keptFilters: {},
 };
 
 const Unassigned = () => <span className="size-5 shrink-0 border border-dashed border-line-strong" />;
@@ -235,7 +245,24 @@ export const compare: Record<SortKey, (a: Task, b: Task) => number> = {
 };
 
 export function matches(t: Task, filters: Filters) {
-  return (Object.entries(filters) as [FilterField, string[]][]).every(
-    ([field, values]) => !values.length || valueOf(t, field).some((v) => values.includes(v)),
-  );
+  if (t.archived && !filters.archived) return false;
+  if (filters.hideDone && closed(t.status)) return false;
+  return filterFields.every((field) => {
+    const values = filters[field];
+    return !values?.length || valueOf(t, field).some((v) => values.includes(v));
+  });
 }
+
+/** Filters without the empty parts, in a set order, so two can be compared */
+export function tidyFilters(filters: Filters): Filters {
+  const out: Filters = {};
+  if (filters.hideDone) out.hideDone = true;
+  if (filters.archived) out.archived = true;
+  for (const f of filterFields) if (filters[f]?.length) out[f] = [...filters[f]!].sort();
+  return out;
+}
+
+export const sameFilters = (a: Filters, b: Filters) =>
+  JSON.stringify(tidyFilters(a)) === JSON.stringify(tidyFilters(b));
+
+export const hasFilters = (f: Filters) => Object.keys(tidyFilters(f)).length > 0;

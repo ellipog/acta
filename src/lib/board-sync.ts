@@ -27,6 +27,8 @@ export type TaskRow = {
   subtasks: Subtask[];
   public: boolean;
   shipped_on: string | null;
+  // Missing until the archive migration runs
+  archived_at?: string | null;
   vote_count: number;
   position: number;
   origin: string | null;
@@ -76,7 +78,8 @@ type SyncedField =
   | "description"
   | "subtasks"
   | "public"
-  | "shipped";
+  | "shipped"
+  | "archived";
 
 const fields: SyncedField[] = [
   "title",
@@ -92,6 +95,7 @@ const fields: SyncedField[] = [
   "subtasks",
   "public",
   "shipped",
+  "archived",
 ];
 
 const wireName: Record<SyncedField, string> = {
@@ -108,6 +112,7 @@ const wireName: Record<SyncedField, string> = {
   subtasks: "subtasks",
   public: "public",
   shipped: "shipped_on",
+  archived: "archived_at",
 };
 
 export const taskKey = (prefix: string, n: number) => `${prefix}-${n}`;
@@ -138,6 +143,7 @@ export function fromRow(row: TaskRow): Pick<Task, SyncedField | "votes"> {
     subtasks: row.subtasks ?? [],
     public: row.public,
     shipped: row.shipped_on ?? undefined,
+    archived: row.archived_at ?? undefined,
     votes: row.vote_count,
   };
 }

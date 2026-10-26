@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useActionState, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Dialog as D } from "radix-ui";
 import { Icon, type IconName } from "@/components/ui/icons";
 import {
@@ -18,12 +18,11 @@ import {
   type Person,
   type Task,
 } from "@/lib/board-store";
-import { createBoard } from "@/lib/actions";
-import { setCount, useCounts } from "@/lib/board-cache";
+import { rememberBoard, setCount } from "@/lib/board-cache";
+import { settleEdits, useBoardEdits, withEdits } from "@/lib/board-edits";
 import { metaFor, type LiveBoard } from "@/lib/live";
 import { authReady } from "@/lib/supabase/env";
 import { AccountButton } from "@/components/account-button";
-import { Input } from "@/components/ui/input";
 import { Avatar, AvatarStack, Spinner } from "@/components/ui/display";
 import { Button } from "@/components/ui/button";
 import { Badge, Kbd } from "@/components/ui/badge";
@@ -59,7 +58,11 @@ import {
   fieldIcon,
   fieldLabel,
   fieldOptions,
+  filterFields,
+  hasFilters,
   matches,
+  sameFilters,
+  tidyFilters,
   valueOf,
   type FilterField,
   type Filters,
@@ -68,6 +71,7 @@ import {
   type View,
 } from "./fields";
 import { FieldsMenu } from "./fields-menu";
+import { BoardLinks, NewBoard } from "./board-nav";
 import { useBoardSync, type SaveStatus, type Visitor } from "./use-board-sync";
 import { useWorkspace } from "./use-workspace";
 
@@ -110,7 +114,6 @@ const views: { id: View; icon: IconName; label: string }[] = [
   { id: "public", icon: "globe", label: "Public" },
 ];
 
-const filterFields: FilterField[] = ["status", "assignee", "priority", "label", "project"];
 const groupings: Grouping[] = ["status", "assignee", "priority", "size", "project"];
 
 const tool = (on: boolean) =>
@@ -128,7 +131,7 @@ export function BoardApp({
   variant = "full",
   view = "board",
   className,
-  live,
+  live: incoming,
 }: {
   variant?: "full" | "embed";
   view?: View;
@@ -136,6 +139,12 @@ export function BoardApp({
   live?: LiveBoard;
 }) {
   const full = variant === "full";
+  // Changes to boards that are still saving show straight away
+  const edits = useBoardEdits();
+  const live = useMemo(() => incoming && withEdits(incoming, edits), [incoming, edits]);
+  useEffect(() => {
+    if (incoming) settleEdits(incoming);
+  }, [incoming, edits]);
   const meta = live ? metaFor(live) : demoMeta;
   setBoardMeta(meta);
   // Boards you left stay mounted out of sight for a while, and one could have set its own people and labels
@@ -145,10 +154,10 @@ export function BoardApp({
     initDemo(live ? live.state : seedBoard(), full ? {} : { view }),
   );
   const { board: state, prefs, restored } = demo;
-  const { status, here } = useBoardSync(live, state, rawDispatch);
+  const { status, here, knownAt } = useBoardSync(live, state, rawDispatch);
   useWorkspace(full ? live : undefined);
   const liveId = live?.board.id;
-  const taskCount = Object.keys(state.tasks).length;
+  const taskCount = Object.values(state.tasks).filter((t) => !t.archived).length;
   useEffect(() => {
     if (liveId) setCount(liveId, taskCount);
   }, [liveId, taskCount]);
@@ -157,7 +166,17 @@ export function BoardApp({
 
   const dispatch = useCallback(
     (action: DemoAction) => {
-      if (action.type === "delete" || action.type === "bulk") {
+      if (action.type === "bulk" && "archived" in action.patch) {
+        const depth = demo.past.length;
+        const one = action.ids.length === 1;
+        const on = Boolean(action.patch.archived);
+        toast({
+          icon: "archive",
+          title: `${on ? "Archived" : "Unarchived"} ${one ? action.ids[0] : `${action.ids.length} tasks`}`,
+          description: one ? state.tasks[action.ids[0]]?.title : on ? "Show archived in Filter finds them." : undefined,
+          action: { label: "Undo", onClick: () => rawDispatch({ type: "undoTo", depth }) },
+        });
+      } else if (action.type === "delete" || action.type === "bulk") {
         const depth = demo.past.length;
         const one = action.ids.length === 1;
         toast({
@@ -202,18 +221,20 @@ export function BoardApp({
   const [help, setHelp] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
+  // Once per board. A fresh copy from the server mustn't put back what someone changed since
+  const isLive = Boolean(live);
   useEffect(() => {
     if (!full) return;
     let board: BoardState | null = null;
     let saved: Partial<Prefs> | null = null;
     try {
-      const b = live ? null : localStorage.getItem(BOARD_KEY);
+      const b = isLive ? null : localStorage.getItem(BOARD_KEY);
       if (b) board = JSON.parse(b);
       const p = localStorage.getItem(prefsKey);
       if (p) saved = JSON.parse(p);
     } catch {}
     rawDispatch({ type: "restore", board, prefs: saved });
-  }, [full, live, prefsKey]);
+  }, [full, isLive, prefsKey]);
 
   useEffect(() => {
     if (!full || !restored || live) return;
@@ -294,23 +315,72 @@ export function BoardApp({
   }, [full, createTask, undo, redo, setPrefs]);
 
   const filters = prefs.filters;
-  const visible = useMemo(() => {
+  const found = useMemo(() => {
     const q = query.trim().toLowerCase();
     return (t: Task) =>
-      (!q ||
-        t.title.toLowerCase().includes(q) ||
-        t.id.toLowerCase().includes(q) ||
-        (t.project ?? "").toLowerCase().includes(q)) &&
-      matches(t, filters);
-  }, [query, filters]);
+      !q ||
+      t.title.toLowerCase().includes(q) ||
+      t.id.toLowerCase().includes(q) ||
+      (t.project ?? "").toLowerCase().includes(q);
+  }, [query]);
+  const visible = useMemo(() => (t: Task) => found(t) && matches(t, filters), [found, filters]);
+  // Archived work stays on the public roadmap, so its preview shows it too
+  const onRoadmap = useMemo(() => (t: Task) => found(t) && matches(t, { ...filters, archived: true }), [found, filters]);
 
-  const filterCount = filterFields.filter((f) => filters[f]?.length).length;
+  const filterCount = Object.keys(tidyFilters(filters)).length;
   const filtered = Boolean(query.trim()) || filterCount > 0;
   const setFilter = (field: FilterField, values: string[]) => setPrefs({ filters: { ...filters, [field]: values } });
   const clearFilters = () => {
     setQuery("");
     setPrefs({ filters: {} });
   };
+
+  // Filters are for the visit at hand unless someone saves them for the board
+  const boardName = live ? live.board.name : demoBoard;
+  const unsaved = !sameFilters(filters, prefs.keptFilters);
+  const keepFilters = useCallback(
+    (next: Filters, quiet = false) => {
+      const kept = tidyFilters(next);
+      setPrefs({ keptFilters: kept });
+      // The board may already be out of sight, where its own saving waits until it's shown again
+      try {
+        const stored = JSON.parse(localStorage.getItem(prefsKey) ?? "{}");
+        localStorage.setItem(prefsKey, JSON.stringify({ ...stored, keptFilters: kept }));
+      } catch {}
+      if (!quiet)
+        toast({
+          icon: hasFilters(kept) ? "filter" : "x",
+          title: hasFilters(kept) ? "Filters saved" : "Saved filters forgotten",
+          description: hasFilters(kept) ? `${boardName} opens with them from now on.` : `${boardName} opens unfiltered.`,
+          duration: 2400,
+        });
+    },
+    [setPrefs, prefsKey, boardName],
+  );
+
+  // Leaving with unsaved filters asks once whether to keep them
+  const leaving = useRef({ filters, kept: prefs.keptFilters, keepFilters, boardName, restored });
+  useEffect(() => {
+    leaving.current = { filters, kept: prefs.keptFilters, keepFilters, boardName, restored };
+  });
+  const asked = useRef("");
+  useEffect(() => {
+    if (!full) return;
+    return () => {
+      const { filters, kept, keepFilters, boardName, restored } = leaving.current;
+      const key = JSON.stringify(tidyFilters(filters));
+      if (!restored || sameFilters(filters, kept) || asked.current === key) return;
+      asked.current = key;
+      const keeping = hasFilters(filters);
+      toast({
+        icon: "filter",
+        title: keeping ? `Keep your filters on ${boardName}?` : `Open ${boardName} unfiltered next time?`,
+        description: keeping ? "Saved filters come back when you return." : "Its saved filters are still on.",
+        action: { label: keeping ? "Save" : "Forget", onClick: () => keepFilters(filters, false) },
+        duration: 8000,
+      });
+    };
+  }, [full]);
 
   const sidebar = (
     <Sidebar
@@ -324,6 +394,9 @@ export function BoardApp({
         setOpenId(id);
       }}
       onNavigate={() => setNavOpen(false)}
+      keep={() => {
+        if (live) rememberBoard(live, state, knownAt());
+      }}
       onReset={() => {
         dispatch({ type: "reset", state: seedBoard() });
         setPrefs({ ...defaultPrefs, view: prefs.view });
@@ -334,6 +407,9 @@ export function BoardApp({
   );
 
   const showChips = filterCount > 0 || (prefs.view === "table" && prefs.sort);
+  const chip = "flex h-6 shrink-0 items-center border border-line-strong bg-raised text-xs";
+  const chipClose =
+    "ml-1 grid h-full w-6 place-items-center border-l border-line text-ink-3 hover:bg-sunken hover:text-ink";
 
   return (
     <TooltipProvider>
@@ -489,8 +565,13 @@ export function BoardApp({
                 state={state}
                 filters={filters}
                 setFilter={setFilter}
+                setFilters={(patch) => setPrefs({ filters: { ...filters, ...patch } })}
                 count={filterCount}
                 onClear={() => setPrefs({ filters: {} })}
+                unsaved={unsaved}
+                kept={hasFilters(prefs.keptFilters)}
+                onSave={() => keepFilters(filters)}
+                onForget={() => keepFilters({})}
               />
               {prefs.view === "table" || prefs.view === "roadmap" ? (
                 <>
@@ -539,6 +620,32 @@ export function BoardApp({
 
           {showChips ? (
             <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-line bg-surface px-2 py-1.5 sm:px-4">
+              {filters.hideDone ? (
+                <span className={chip}>
+                  <Icon name="eye-off" size="sm" className="ml-2 text-ink-3" />
+                  <span className="ml-1.5">Done hidden</span>
+                  <button
+                    aria-label="Show done tasks"
+                    onClick={() => setPrefs({ filters: { ...filters, hideDone: false } })}
+                    className={chipClose}
+                  >
+                    <Icon name="x" size="sm" />
+                  </button>
+                </span>
+              ) : null}
+              {filters.archived ? (
+                <span className={chip}>
+                  <Icon name="archive" size="sm" className="ml-2 text-ink-3" />
+                  <span className="ml-1.5">Showing archived</span>
+                  <button
+                    aria-label="Hide archived tasks"
+                    onClick={() => setPrefs({ filters: { ...filters, archived: false } })}
+                    className={chipClose}
+                  >
+                    <Icon name="x" size="sm" />
+                  </button>
+                </span>
+              ) : null}
               {filterFields
                 .filter((f) => filters[f]?.length)
                 .map((f) => (
@@ -573,12 +680,28 @@ export function BoardApp({
                 </span>
               ) : null}
               {filterCount ? (
-                <button
-                  onClick={() => setPrefs({ filters: {} })}
-                  className="ml-1 shrink-0 text-xs text-ink-3 hover:text-ink"
-                >
-                  Clear filters
-                </button>
+                <>
+                  <button
+                    onClick={() => setPrefs({ filters: {} })}
+                    className="ml-1 shrink-0 text-xs text-ink-3 hover:text-ink"
+                  >
+                    Clear filters
+                  </button>
+                  {unsaved ? (
+                    <Tooltip content={`Open ${boardName} with these filters from now on`}>
+                      <button
+                        onClick={() => keepFilters(filters)}
+                        className="ml-auto flex h-6 shrink-0 items-center gap-1.5 border border-lapis/40 bg-lapis-soft px-2 text-xs text-lapis-ink hover:border-lapis"
+                      >
+                        <Icon name="check" size="sm" /> Save filters
+                      </button>
+                    </Tooltip>
+                  ) : (
+                    <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-ink-3">
+                      <Icon name="check" size="sm" /> Saved
+                    </span>
+                  )}
+                </>
               ) : null}
             </div>
           ) : null}
@@ -616,7 +739,7 @@ export function BoardApp({
                 onClearFilters={clearFilters}
               />
             ) : (
-              <PublicRoadmap state={state} dispatch={dispatch} visible={visible} onOpen={setOpenId} />
+              <PublicRoadmap state={state} dispatch={dispatch} visible={onRoadmap} onOpen={setOpenId} />
             )}
           </main>
         </div>
@@ -671,16 +794,29 @@ function FilterMenu({
   state,
   filters,
   setFilter,
+  setFilters,
   count,
   onClear,
+  unsaved,
+  kept,
+  onSave,
+  onForget,
 }: {
   state: BoardState;
   filters: Filters;
   setFilter: (field: FilterField, values: string[]) => void;
+  setFilters: (patch: Filters) => void;
   count: number;
   onClear: () => void;
+  unsaved: boolean;
+  kept: boolean;
+  onSave: () => void;
+  onForget: () => void;
 }) {
-  const all = Object.values(state.tasks);
+  const everything = Object.values(state.tasks);
+  const all = filters.archived ? everything : everything.filter((t) => !t.archived);
+  const archived = everything.length - everything.filter((t) => !t.archived).length;
+  const finished = all.filter((t) => closed(t.status)).length;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className={tool(count > 0)}>
@@ -693,6 +829,23 @@ function FilterMenu({
         ) : null}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuCheckboxItem
+          checked={Boolean(filters.hideDone)}
+          onCheckedChange={(on) => setFilters({ hideDone: on })}
+          onSelect={(e) => e.preventDefault()}
+        >
+          <Icon name="eye-off" /> Hide done
+          <span className="ml-auto pl-2 font-mono text-[11px] text-ink-3">{finished}</span>
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem
+          checked={Boolean(filters.archived)}
+          onCheckedChange={(on) => setFilters({ archived: on })}
+          onSelect={(e) => e.preventDefault()}
+        >
+          <Icon name="archive" /> Show archived
+          <span className="ml-auto pl-2 font-mono text-[11px] text-ink-3">{archived}</span>
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
         <DropdownMenuLabel>Filter by</DropdownMenuLabel>
         {filterFields.map((f) => {
           const on = filters[f] ?? [];
@@ -722,13 +875,21 @@ function FilterMenu({
             </DropdownMenuSub>
           );
         })}
+        {count || kept ? <DropdownMenuSeparator /> : null}
+        {count && unsaved ? (
+          <DropdownMenuItem onSelect={onSave}>
+            <Icon name="check" /> Save filters for this board
+          </DropdownMenuItem>
+        ) : null}
+        {kept ? (
+          <DropdownMenuItem onSelect={onForget}>
+            <Icon name="reset" /> Forget saved filters
+          </DropdownMenuItem>
+        ) : null}
         {count ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={onClear}>
-              <Icon name="x" /> Clear filters
-            </DropdownMenuItem>
-          </>
+          <DropdownMenuItem onSelect={onClear}>
+            <Icon name="x" /> Clear filters
+          </DropdownMenuItem>
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -743,6 +904,7 @@ function Sidebar({
   setPrefs,
   onOpenTask,
   onNavigate,
+  keep,
   onReset,
 }: {
   full: boolean;
@@ -752,14 +914,16 @@ function Sidebar({
   setPrefs: (patch: Partial<Prefs>) => void;
   onOpenTask: (id: string) => void;
   onNavigate: () => void;
+  keep: () => void;
   onReset: () => void;
 }) {
-  const total = Object.keys(state.tasks).length;
-  const doneCount = state.columns.done.length;
+  // Archived tasks are put away, so they count for neither the board nor its progress
+  const current = Object.values(state.tasks).filter((t) => !t.archived);
+  const total = current.length;
+  const doneCount = current.filter((t) => t.status === "done").length;
   // Canceled work isn't left to do, so it stays out of the progress
-  const planned = total - state.columns.canceled.length;
-  const counts = useCounts();
-  const mine = Object.values(state.tasks).filter((t) => t.assignee === me.id && !closed(t.status)).length;
+  const planned = total - current.filter((t) => t.status === "canceled").length;
+  const mine = current.filter((t) => t.assignee === me.id && !closed(t.status)).length;
   const onlyMine = prefs.filters.assignee?.length === 1 && prefs.filters.assignee[0] === me.id;
   const item = (active: boolean) =>
     cn(
@@ -844,51 +1008,23 @@ function Sidebar({
           Boards
           {live ? <NewBoard live={live} /> : null}
         </p>
-        {live
-          ? live.boards.map((b) =>
-              b.id === live.board.id ? (
-                <button key={b.id} className={item(!onlyMine)} onClick={onNavigate} aria-current="page">
-                  <Icon name="board" size="sm" />
-                  <span className="truncate">{b.name}</span>
-                  <span className="ml-auto font-mono text-[11px] text-ink-3">{total}</span>
-                </button>
-              ) : (
-                <Link
-                  key={b.id}
-                  href={`/${live.workspace.slug}/${b.slug}`}
-                  className={item(false)}
-                  onClick={onNavigate}
-                >
-                  <Icon name="board" size="sm" />
-                  <span className="truncate">{b.name}</span>
-                  {(counts[b.id] ?? b.count) !== undefined ? (
-                    <span className="ml-auto font-mono text-[11px] text-ink-3">{counts[b.id] ?? b.count}</span>
-                  ) : null}
-                </Link>
-              ),
-            )
-          : (
-              <button className={item(!onlyMine)} onClick={onNavigate} aria-current="page">
-                <Icon name="board" size="sm" />
-                <span className="truncate">{demoBoard}</span>
-                <span className="ml-auto font-mono text-[11px] text-ink-3">{total}</span>
-              </button>
-            )}
-        <p className="mt-4 mb-1 px-2 font-mono text-[11px] text-ink-3">Views</p>
-        {views.map((v) => (
-          <button
-            key={v.id}
-            className={item(false)}
-            onClick={() => {
-              setPrefs({ view: v.id });
-              onNavigate();
-            }}
-          >
-            <Icon name={v.icon} size="sm" />
-            {v.label}
-            {prefs.view === v.id ? <span className="ml-auto size-1.5 bg-lapis" /> : null}
+        {live ? (
+          <BoardLinks
+            live={live}
+            total={total}
+            active={!onlyMine}
+            isPublic={state.roadmap.public}
+            item={item}
+            onNavigate={onNavigate}
+            keep={keep}
+          />
+        ) : (
+          <button className={item(!onlyMine)} onClick={onNavigate} aria-current="page">
+            <Icon name="board" size="sm" />
+            <span className="truncate">{demoBoard}</span>
+            <span className="ml-auto font-mono text-[11px] text-ink-3">{total}</span>
           </button>
-        ))}
+        )}
       </nav>
 
       <div className="shrink-0 border-t border-line p-3">
@@ -924,36 +1060,6 @@ function Sidebar({
         ) : null}
       </div>
     </>
-  );
-}
-
-function NewBoard({ live }: { live: LiveBoard }) {
-  const [result, action, pending] = useActionState(createBoard, null);
-  return (
-    <D.Root>
-      <Tooltip content="New board" side="right">
-        <D.Trigger
-          aria-label="New board"
-          className="grid size-5 place-items-center text-ink-3 outline-none hover:bg-sunken hover:text-ink focus-visible:ring-2 focus-visible:ring-lapis"
-        >
-          <Icon name="plus" size="sm" />
-        </D.Trigger>
-      </Tooltip>
-      <DialogContent title="New board" description={`A fresh board in ${live.workspace.name}.`} className="max-w-sm">
-        <form action={action} className="flex flex-col gap-3">
-          <input type="hidden" name="workspace" value={live.workspace.id} />
-          <input type="hidden" name="workspaceSlug" value={live.workspace.slug} />
-          <label htmlFor="board-name" className="text-xs font-medium text-ink-2">
-            Name
-          </label>
-          <Input id="board-name" name="name" placeholder="Mobile app" maxLength={60} required autoFocus />
-          {result && !result.ok ? <p className="text-xs text-hematite">{result.message}</p> : null}
-          <Button type="submit" variant="primary" disabled={pending} className="self-end">
-            {pending ? <Spinner className="[&>span.spin-cell]:bg-on-accent/40" /> : <Icon name="plus" />} Create board
-          </Button>
-        </form>
-      </DialogContent>
-    </D.Root>
   );
 }
 

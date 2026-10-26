@@ -16,6 +16,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { Select } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import {
+  archiveTasks,
   closed,
   formatDue,
   labelTone,
@@ -456,13 +457,23 @@ function TaskBody({
             </p>
             <button
               onClick={() => {
+                dispatch(archiveTasks([task.id], !task.archived));
+                if (!task.archived) onClose();
+              }}
+              className="mt-auto flex h-8 items-center gap-2 border border-transparent px-2 text-xs text-ink-3 hover:text-ink"
+            >
+              <Icon name="archive" size="sm" />
+              {task.archived ? "Bring back from the archive" : "Archive task"}
+            </button>
+            <button
+              onClick={() => {
                 if (!confirmDelete) return setConfirmDelete(true);
                 dispatch({ type: "delete", ids: [task.id] });
                 onClose();
               }}
               onBlur={() => setConfirmDelete(false)}
               className={cn(
-                "mt-auto flex h-8 items-center gap-2 border px-2 text-xs",
+                "flex h-8 items-center gap-2 border px-2 text-xs",
                 confirmDelete ? "border-hematite bg-hematite text-on-accent" : "border-transparent text-ink-3 hover:text-hematite",
               )}
             >

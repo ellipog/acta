@@ -3,9 +3,9 @@ import { Suspense } from "react";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { AppTopBar } from "@/components/app-chrome";
-import { Skeleton } from "@/components/ui/display";
 import type { Label, Project } from "@/lib/board-store";
 import { getAuth, getWorkspace } from "@/lib/workspace";
+import { SettingsLoading } from "./settings-loading";
 import { SettingsView } from "./settings-view";
 
 export const metadata: Metadata = {
@@ -15,19 +15,12 @@ export const metadata: Metadata = {
 
 export default function SettingsPage({ params }: PageProps<"/[workspace]/settings">) {
   return (
-    <Suspense
-      fallback={
-        <>
-          <AppTopBar />
-          <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-12 sm:px-6">
-            <Skeleton className="h-10 w-64" />
-            <Skeleton className="mt-10 h-40" />
-            <Skeleton className="mt-6 h-64" />
-          </main>
-        </>
-      }
-    >
-      <Settings params={params} />
+    // The inner fallback reads the address, which only the browser knows when it moves here. The outer one is
+    // what the page starts as
+    <Suspense fallback={<SettingsLoading />}>
+      <Suspense fallback={<SettingsLoading cached />}>
+        <Settings params={params} />
+      </Suspense>
     </Suspense>
   );
 }

@@ -73,8 +73,9 @@ function mergePrefs(saved: Partial<Prefs> | null, base: Prefs): Prefs {
     ...base,
     ...saved,
     columns: known.length ? [...known, ...missing] : base.columns,
-    // Filters are for the visit at hand. One kept from last week hides tasks nobody remembers hiding
-    filters: base.filters,
+    // Only filters someone chose to save come back. One left from last week hides tasks nobody remembers hiding
+    filters: saved.keptFilters ?? base.filters,
+    keptFilters: saved.keptFilters ?? {},
     collapsed: saved.collapsed ?? [],
   };
 }

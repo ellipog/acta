@@ -88,6 +88,22 @@ export function boardSlugProblem(slug: string): string | null {
   return shapeProblem(slug) ?? (slug === "settings" ? "That name is reserved." : null);
 }
 
+/** A free address for a new board, given the ones its workspace already uses */
+export function boardSlugFor(name: string, taken: Iterable<string>) {
+  let base = slugify(name).replace(/-+$/, "");
+  if (boardSlugProblem(base)) base = `${base || "board"}-board`.slice(0, 28).replace(/-+$/, "");
+  const used = new Set(taken);
+  if (!used.has(base)) return base;
+  for (let i = 2; i < 100; i++) if (!used.has(`${base}-${i}`)) return `${base}-${i}`;
+  return `${base}-${Date.now().toString(36)}`;
+}
+
+/** The letters a board's task ids start with */
+export const boardPrefixFor = (name: string) => {
+  const x = name.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return /^[A-Z]/.test(x) ? x.slice(0, 3) : "ACT";
+};
+
 const publicOrigin = process.env.NEXT_PUBLIC_PUBLIC_ORIGIN?.replace(/\/+$/, "");
 // A roadmap domain serves /<workspace>/<board> through src/proxy.ts. Without one, roadmaps live under /p
 export const publicHost = publicOrigin ? new URL(publicOrigin).hostname : null;

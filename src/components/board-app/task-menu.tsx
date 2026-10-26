@@ -17,6 +17,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
+  archiveTasks,
   people,
   personById,
   priorities,
@@ -151,6 +152,9 @@ export function TaskMenu({
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => navigator.clipboard?.writeText(task.id).catch(() => {})}>
           <Icon name="copy" /> Copy ID
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => dispatch(archiveTasks([task.id], !task.archived))}>
+          <Icon name="archive" /> {task.archived ? "Unarchive" : "Archive"}
         </ContextMenuItem>
         <ContextMenuItem danger onSelect={() => dispatch({ type: "delete", ids: [task.id] })}>
           <Icon name="trash" /> Delete

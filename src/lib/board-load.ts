@@ -102,15 +102,21 @@ export function boardState(board: NestedBoard, nameOf: (id: string | null) => st
   };
 }
 
-// Tasks on each board, for the counts beside board names, by board ids or by the workspace's address. A failure
-// leaves the counts out rather than the boards
+// Tasks on each board, for the counts beside board names, by board ids or by the workspace's address. Archived
+// tasks are left out. A failure leaves the counts out rather than the boards
 export async function countTasks(supabase: SupabaseClient, where: { ids: string[] } | { workspace: string }) {
   if ("ids" in where && !where.ids.length) return {};
-  const query =
-    "ids" in where
-      ? supabase.from("boards").select("id, tasks(count)").in("id", where.ids)
-      : supabase.from("boards").select("id, tasks(count), workspaces!inner(slug)").eq("workspaces.slug", where.workspace);
-  const { data, error } = await query.is("tasks.deleted_at", null);
+  const read = (archive: boolean) => {
+    const query = (
+      "ids" in where
+        ? supabase.from("boards").select("id, tasks(count)").in("id", where.ids)
+        : supabase.from("boards").select("id, tasks(count), workspaces!inner(slug)").eq("workspaces.slug", where.workspace)
+    ).is("tasks.deleted_at", null);
+    return archive ? query.is("tasks.archived_at", null) : query;
+  };
+  let { data, error } = await read(true);
+  // Before the archive migration there's no archived_at to leave out
+  if (error) ({ data, error } = await read(false));
   if (error || !data) return {};
   return Object.fromEntries(
     data.map((b) => [b.id as string, (b.tasks as unknown as { count: number }[] | null)?.[0]?.count ?? 0]),

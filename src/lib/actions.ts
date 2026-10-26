@@ -3,9 +3,8 @@
 import { refresh } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import type { Label, Project } from "./board-store";
 import type { Role } from "./live";
-import { boardSlugProblem, slugify, slugProblem } from "./slugs";
+import { boardPrefixFor, boardSlugFor, boardSlugProblem, slugify, slugProblem } from "./slugs";
 import { createClient } from "./supabase/server";
 import { getAuth, readBoard } from "./workspace";
 
@@ -55,19 +54,9 @@ export async function createWorkspace(_: ActionResult, form: FormData): Promise<
 }
 
 async function freeBoardSlug(supabase: Awaited<ReturnType<typeof createClient>>, workspaceId: string, name: string) {
-  let base = slugify(name).replace(/-+$/, "");
-  if (boardSlugProblem(base)) base = `${base || "board"}-board`.slice(0, 28).replace(/-+$/, "");
   const { data } = await supabase.from("boards").select("slug").eq("workspace_id", workspaceId);
-  const taken = new Set((data ?? []).map((b) => b.slug));
-  if (!taken.has(base)) return base;
-  for (let i = 2; i < 100; i++) if (!taken.has(`${base}-${i}`)) return `${base}-${i}`;
-  return `${base}-${Date.now().toString(36)}`;
+  return boardSlugFor(name, (data ?? []).map((b) => b.slug as string));
 }
-
-const prefixFor = (name: string) => {
-  const x = name.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  return /^[A-Z]/.test(x) ? x.slice(0, 3) : "ACT";
-};
 
 export async function createBoard(_: ActionResult, form: FormData): Promise<ActionResult> {
   const workspace = text(form, "workspace", 64);
@@ -78,60 +67,9 @@ export async function createBoard(_: ActionResult, form: FormData): Promise<Acti
   const slug = await freeBoardSlug(supabase, workspace, name);
   const { error } = await supabase
     .from("boards")
-    .insert({ workspace_id: workspace, slug, name, prefix: prefixFor(name) });
+    .insert({ workspace_id: workspace, slug, name, prefix: boardPrefixFor(name) });
   if (error) return { ok: false, message: "The board wasn’t created. Try again." };
   redirect(`/${workspaceSlug}/${slug}`);
-}
-
-export async function renameBoard(_: ActionResult, form: FormData): Promise<ActionResult> {
-  const { supabase } = await signedIn();
-  const id = text(form, "board", 64);
-  const name = text(form, "name");
-  const slug = text(form, "slug", 32);
-  if (!name) return { ok: false, message: "A board needs a name." };
-  const problem = slug ? boardSlugProblem(slug) : null;
-  if (problem) return { ok: false, message: `The address: ${problem.toLowerCase()}` };
-  const { error } = await supabase
-    .from("boards")
-    .update(slug ? { name, slug } : { name })
-    .eq("id", id);
-  if (error)
-    return { ok: false, message: error.code === "23505" ? "Another board here has that address." : "That didn’t save." };
-  refresh();
-  return { ok: true, message: "Saved." };
-}
-
-export async function saveBoardMeta(boardId: string, labels: Label[], projects: Project[]): Promise<ActionResult> {
-  const { supabase } = await signedIn();
-  const clean = <T extends { tone: string }>(list: T[], key: "id" | "name") =>
-    list
-      .map((x) => ({
-        ...x,
-        [key]: String((x as Record<string, unknown>)[key] ?? "")
-          .trim()
-          .slice(0, 40),
-      }))
-      .filter(
-        (x, i, all) =>
-          x[key as keyof typeof x] && all.findIndex((y) => y[key as keyof typeof y] === x[key as keyof typeof x]) === i,
-      )
-      .slice(0, 30);
-  const { error } = await supabase
-    .from("boards")
-    .update({ labels: clean(labels, "id"), projects: clean(projects, "name") })
-    .eq("id", boardId);
-  if (error) return { ok: false, message: "That didn’t save." };
-  refresh();
-  return { ok: true, message: "Saved." };
-}
-
-export async function deleteBoard(_: ActionResult, form: FormData): Promise<ActionResult> {
-  const { supabase } = await signedIn();
-  const id = text(form, "board", 64);
-  const workspaceSlug = text(form, "workspaceSlug", 32);
-  const { data, error } = await supabase.from("boards").delete().eq("id", id).select("id");
-  if (error || !data?.length) return { ok: false, message: "Only owners and admins can delete boards." };
-  redirect(`/${workspaceSlug}/settings`);
 }
 
 export async function updateWorkspace(_: ActionResult, form: FormData): Promise<ActionResult> {
