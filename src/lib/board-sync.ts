@@ -410,6 +410,8 @@ export type Change =
   | { kind: "suggestion"; suggestion: Suggestion }
   | { kind: "unsuggestion"; id: string }
   | { kind: "board"; public?: boolean; page?: PublicPage; next?: number }
+  | { kind: "reorder"; status: StatusCategory }
+  | { kind: "column"; status: StatusCategory; ids: string[] }
   | { kind: "none" };
 
 export type RemoteEvent =
@@ -417,7 +419,8 @@ export type RemoteEvent =
   | { table: "comments"; row?: CommentRow; old?: { id: string } }
   | { table: "activity"; row?: ActivityRow; old?: { id: string } }
   | { table: "suggestions"; row?: SuggestionRow; old?: { id: string } }
-  | { table: "boards"; row: BoardRow };
+  | { table: "boards"; row: BoardRow }
+  | { table: "order"; status: StatusCategory; numbers: number[] };
 
 export type Context = {
   prefix: string;
@@ -450,9 +453,11 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
       const changed: Partial<Task> = {};
       for (const f of [...fields, "votes"] as (SyncedField | "votes")[])
         if (!same(prev[f], incoming[f])) (changed as Record<string, unknown>)[f] = incoming[f];
-      return Object.keys(changed).length
-        ? { kind: "task", id, fields: changed, position: ev.row.position }
-        : { kind: "none" };
+      if (Object.keys(changed).length) return { kind: "task", id, fields: changed, position: ev.row.position };
+      // Only the position changed, so someone reordered the column
+      return Math.round(ev.row.position) === base.columns[prev.status].indexOf(id)
+        ? { kind: "none" }
+        : { kind: "reorder", status: prev.status };
     }
     case "comments":
       if (ev.row)
@@ -501,13 +506,26 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
       return ev.old ? { kind: "unsuggestion", id: ev.old.id } : { kind: "none" };
     case "boards":
       return { kind: "board", public: ev.row.roadmap_public, page: ctx.page(ev.row.page), next: ev.row.next_number };
+    case "order":
+      return { kind: "column", status: ev.status, ids: ev.numbers.map((n) => taskKey(ctx.prefix, n)) };
   }
 }
 
 export function apply(state: BoardState, c: Change, pending?: BoardState): BoardState {
   switch (c.kind) {
     case "none":
+    case "reorder":
       return state;
+    case "column": {
+      const ids = state.columns[c.status];
+      // A reorder you haven't saved yet wins over one from someone else
+      if (pending && !sameList(pending.columns[c.status], ids)) return state;
+      const here = new Set(ids);
+      const order = c.ids.filter((id) => here.has(id));
+      const known = new Set(order);
+      const column = [...order, ...ids.filter((id) => !known.has(id))];
+      return sameList(column, ids) ? state : { ...state, columns: { ...state.columns, [c.status]: column } };
+    }
     case "task": {
       const prev = state.tasks[c.id];
       if (c.remove) {
@@ -548,7 +566,14 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
     }
     case "comment": {
       const t = state.tasks[c.task];
-      if (!t || (t.thread ?? []).some((x) => x.id === c.comment.id)) return state;
+      if (!t) return state;
+      const known = (t.thread ?? []).find((x) => x.id === c.comment.id);
+      if (known) {
+        // An edited comment
+        if (known.body === c.comment.body) return state;
+        const thread = t.thread!.map((x) => (x === known ? { ...x, body: c.comment.body } : x));
+        return { ...state, tasks: { ...state.tasks, [c.task]: { ...t, thread } } };
+      }
       const thread = [...(t.thread ?? []), c.comment].sort((a, b) => a.at - b.at);
       return { ...state, tasks: { ...state.tasks, [c.task]: { ...t, thread, comments: thread.length } } };
     }

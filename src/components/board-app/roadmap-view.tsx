@@ -385,6 +385,14 @@ function Manage({
               hint: t.id,
             }))}
           />
+          <div className="mt-3 border-t border-line pt-3">
+            <Toggle
+              label="Add new tasks"
+              hint="New tasks start on the roadmap. You can take any of them off."
+              checked={page.newTasksPublic}
+              onChange={(newTasksPublic) => dispatch({ type: "page", patch: { newTasksPublic } })}
+            />
+          </div>
         </section>
       </aside>
     </div>
@@ -852,7 +860,7 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
           <button
             onClick={() => {
               setCustom(false);
-              dispatch({ type: "page", patch: defaultPage });
+              dispatch({ type: "page", patch: { ...defaultPage, newTasksPublic: page.newTasksPublic } });
             }}
             className="text-[11px] text-ink-3 hover:text-hematite"
           >

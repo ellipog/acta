@@ -7,10 +7,11 @@ import type { Agent } from "./keys";
 const instructions = `Acta is a project manager. Work lives on boards, named "workspace/board". Each task has an id made of the board's prefix and a number, like ACT-12. A task moves todo → in_progress → review → done.
 
 How to work with it:
-1. Find the board for the project you're in. Look for a line like "Acta board: workspace/board" in AGENTS.md, CLAUDE.md or the README. If there isn't one, call list_boards, ask the person which board to use, and offer to add that line.
+1. Find the board for the project you're in. Look for a line like "Acta board: workspace/board" in AGENTS.md, CLAUDE.md or the README. If there isn't one, call list_boards, ask the person which board to use, and offer to add that line. search_tasks looks across every board at once, for example for what's assigned to "me".
 2. Before starting something, check list_tasks for a task that already covers it. Create one if there's none.
-3. When you start a task, move it to in_progress and assign it to "me". Tick subtasks as you finish them, and leave a short comment when you reach a milestone or hit a blocker.
+3. When you start a task, move it to in_progress and assign it to "me". Tick subtasks as you finish them. Keep one progress comment per task and update it with edit_comment, adding a new comment only for a milestone, a blocker or a question.
 4. When the work is ready for someone to look at, such as an open pull request, move it to review and comment with the link. Move it to done once it's merged or shipped.
+5. If you delete a task by mistake, restore_task brings it back.
 
 Write titles as short imperatives ("Add CSV export") and descriptions in Markdown. Everything you do shows up live on the board, credited to the person who made this key and marked with the key's name. When you mention a task to the person, include its url.`;
 
@@ -100,11 +101,29 @@ export function actaServer(agent: Agent) {
         label: z.string().optional(),
         project: z.string().optional(),
         query: z.string().optional().describe("Words to find in titles and descriptions, or a task id"),
+        deleted: z.boolean().optional().describe("Show deleted tasks instead, newest first, to find one to restore"),
         limit: z.number().int().min(1).max(200).optional().describe("Defaults to 50"),
       }),
       annotations: reads,
     },
     run(({ board, ...filters }) => acta.tasks(board, filters)),
+  );
+
+  server.registerTool(
+    "search_tasks",
+    {
+      title: "Search every board",
+      description:
+        "Finds tasks across every board this key can reach, most recently changed first, each with its board. Shows open tasks unless you pass status. Use it for \"what's assigned to me?\" or when you don't know which board a task is on.",
+      inputSchema: z.object({
+        query: z.string().optional().describe("Words to find in titles and descriptions, or a task id like ACT-12"),
+        assignee: z.string().optional().describe('"me", or a person\'s name'),
+        status: z.array(status).optional().describe("Only these statuses"),
+        limit: z.number().int().min(1).max(200).optional().describe("Defaults to 50"),
+      }),
+      annotations: reads,
+    },
+    run((filters) => acta.searchAll(filters)),
   );
 
   server.registerTool(
@@ -151,7 +170,9 @@ export function actaServer(agent: Agent) {
                 description: fields.description.optional(),
                 status: fields.status.optional(),
                 priority: priority.optional(),
-                public: fields.public.optional(),
+                public: fields.public
+                  .optional()
+                  .describe("Show it on the public roadmap. Defaults to the board's new_tasks_public setting"),
                 subtasks: z.array(z.string().min(1).max(200)).max(50).optional().describe("Checklist items"),
               }),
             )
@@ -168,7 +189,7 @@ export function actaServer(agent: Agent) {
       {
         title: "Update a task",
         description:
-          "Changes a task. Only the fields you pass change. Set status to move it between columns, assignee \"me\" to take it, and use the subtask fields to tick off its checklist. Each change is logged on the task.",
+          "Changes a task. Only the fields you pass change. Set status to move it between columns, assignee \"me\" to take it, and use the subtask fields to work through its checklist. place, before or after moves the card within its column, so you can put the most important work at the top. Each change is logged on the task.",
         inputSchema: z
           .object({ board, task })
           .extend(z.object(fields).partial().shape)
@@ -178,6 +199,13 @@ export function actaServer(agent: Agent) {
             add_subtasks: z.array(z.string().min(1).max(200)).max(50).optional(),
             complete_subtasks: z.array(z.string()).optional().describe("Subtask ids or titles to tick"),
             reopen_subtasks: z.array(z.string()).optional().describe("Subtask ids or titles to untick"),
+            rename_subtasks: z
+              .array(z.object({ subtask: z.string().describe("Its id or current title"), title: z.string().min(1).max(200) }))
+              .optional(),
+            remove_subtasks: z.array(z.string()).optional().describe("Subtask ids or titles to remove"),
+            place: z.enum(["top", "bottom"]).optional().describe("Move the card to the top or bottom of its column"),
+            before: task.optional().describe("Put the card just above this task, which must be in the same column"),
+            after: task.optional().describe("Put the card just below this task, which must be in the same column"),
           }),
         annotations: { ...writes, idempotentHint: true },
       },
@@ -188,7 +216,8 @@ export function actaServer(agent: Agent) {
       "add_comment",
       {
         title: "Comment on a task",
-        description: "Adds a Markdown comment to a task, for progress notes, blockers, questions or links.",
+        description:
+          "Adds a Markdown comment to a task, for progress notes, blockers, questions or links. Returns the comment's id, for edit_comment.",
         inputSchema: z.object({ board, task, body: z.string().min(1).max(10000) }),
         annotations: writes,
       },
@@ -196,11 +225,39 @@ export function actaServer(agent: Agent) {
     );
 
     server.registerTool(
+      "edit_comment",
+      {
+        title: "Edit a comment",
+        description:
+          "Replaces the text of a comment this key wrote, such as a running progress note. Other people's comments, and comments from other keys, can't be edited. get_task marks yours.",
+        inputSchema: z.object({
+          board,
+          comment: z.string().describe("The comment's id, from add_comment or get_task"),
+          body: z.string().min(1).max(10000),
+        }),
+        annotations: { ...writes, idempotentHint: true },
+      },
+      run(({ board, comment, body }) => acta.editComment(board, comment, body)),
+    );
+
+    server.registerTool(
+      "restore_task",
+      {
+        title: "Restore a deleted task",
+        description:
+          "Brings back a deleted task with its id, comments and history, at the bottom of its column. list_tasks with deleted: true shows what can be restored.",
+        inputSchema: z.object({ board, task }),
+        annotations: { ...writes, idempotentHint: true },
+      },
+      run(({ board, task }) => acta.restoreTask(board, task)),
+    );
+
+    server.registerTool(
       "delete_task",
       {
         title: "Delete a task",
         description:
-          "Removes a task from the board. Only for tasks created by mistake or duplicates. Finished work should be moved to done instead.",
+          "Removes a task from the board. Only for tasks created by mistake or duplicates. Finished work should be moved to done instead. restore_task undoes it.",
         inputSchema: z.object({ board, task }),
         annotations: { ...writes, destructiveHint: true, idempotentHint: true },
       },
@@ -246,7 +303,7 @@ export function actaServer(agent: Agent) {
       {
         title: "Update the public roadmap",
         description:
-          "Publishes or hides a board's public roadmap and sets its title, introduction, voting and whether visitors can send ideas. Tasks appear on it when their public field is true.",
+          "Publishes or hides a board's public roadmap and sets its title, introduction, voting, whether visitors can send ideas and whether new tasks go on it. Tasks appear on it when their public field is true.",
         inputSchema: z.object({
           board,
           public: z.boolean().optional(),
@@ -254,6 +311,10 @@ export function actaServer(agent: Agent) {
           tagline: z.string().max(400).optional().describe("The introduction under the title"),
           voting: z.boolean().optional(),
           ideas: z.boolean().optional().describe("Let visitors send ideas"),
+          new_tasks_public: z
+            .boolean()
+            .optional()
+            .describe("Put new tasks on the roadmap unless they say otherwise. Applies to people and agents"),
         }),
         annotations: { ...writes, idempotentHint: true },
       },

@@ -59,6 +59,7 @@ type TaskRow = {
   vote_count: number;
   created_at: string;
   updated_at: string;
+  deleted_at: string | null;
 };
 
 export type TaskInput = {
@@ -81,6 +82,11 @@ export type TaskPatch = TaskInput & {
   add_subtasks?: string[];
   complete_subtasks?: string[];
   reopen_subtasks?: string[];
+  rename_subtasks?: { subtask: string; title: string }[];
+  remove_subtasks?: string[];
+  place?: "top" | "bottom";
+  before?: string;
+  after?: string;
 };
 
 export type Filters = {
@@ -89,12 +95,16 @@ export type Filters = {
   label?: string;
   project?: string;
   query?: string;
+  deleted?: boolean;
   limit?: number;
 };
 
+// Enough of a board to name its tasks
+type Spot = { prefix: string; ref: string };
+
 const boardFields = "id, workspace_id, slug, name, prefix, next_number, labels, projects, roadmap_public, page";
 const listFields =
-  "number, title, status, priority, size, project, labels, start_on, due_on, assignee, subtasks, public, shipped_on, vote_count, created_at, updated_at";
+  "number, title, status, priority, size, project, labels, start_on, due_on, assignee, subtasks, public, shipped_on, vote_count, created_at, updated_at, deleted_at";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
@@ -125,6 +135,15 @@ function boardRef(ref: string) {
   if (!workspace || !board || rest.length)
     throw new Problem(`“${ref}” isn’t a board. Use "workspace/board", as listed by list_boards.`);
   return { workspace, board };
+}
+
+// Matches words in titles and descriptions, or a task id like ACT-12 or 12
+function search<Q extends { or: (filter: string) => Q }>(q: Q, text: string | undefined, prefixes?: string[]) {
+  const words = text?.trim().replace(/["\\]/g, "");
+  if (!words) return q;
+  const id = words.match(/^(?:([A-Za-z][A-Za-z0-9]*)-)?(\d+)$/);
+  const byNumber = id && (!prefixes || !id[1] || prefixes.includes(id[1].toUpperCase())) ? `,number.eq.${id[2]}` : "";
+  return q.or(`title.ilike."%${words}%",description.ilike."%${words}%"${byNumber}`);
 }
 
 function dbProblem(error: { code?: string; message: string }) {
@@ -202,8 +221,8 @@ export function actaFor(agent: Agent) {
     return { ...row, workspace: ws, ref: `${ws.slug}/${row.slug}` };
   }
 
-  const taskId = (b: Board, n: number) => `${b.prefix}-${n}`;
-  const taskUrl = (b: Board, n: number) => `${siteUrl}/${b.ref}#${taskId(b, n)}`;
+  const taskId = (b: Spot, n: number) => `${b.prefix}-${n}`;
+  const taskUrl = (b: Spot, n: number) => `${siteUrl}/${b.ref}#${taskId(b, n)}`;
   const boardUrl = (b: Board) => `${siteUrl}/${b.ref}`;
 
   function numberOf(b: Board, ref: string | number) {
@@ -215,17 +234,34 @@ export function actaFor(agent: Agent) {
     return Number(match[2]);
   }
 
-  async function row(b: Board, ref: string | number) {
+  async function row(b: Board, ref: string | number, deleted = false) {
     const n = numberOf(b, ref);
     const { data } = await db
       .from("tasks")
-      .select(`${listFields}, description`)
+      .select(`${listFields}, description, origin`)
       .eq("board_id", b.id)
       .eq("number", n)
-      .is("deleted_at", null)
       .maybeSingle();
-    if (!data) throw new Problem(`There’s no task ${taskId(b, n)} on ${b.ref}.`);
-    return data as unknown as TaskRow;
+    const t = data as unknown as (TaskRow & { origin: string | null }) | null;
+    if (!t) throw new Problem(`There’s no task ${taskId(b, n)} on ${b.ref}.`);
+    if (deleted && !t.deleted_at) throw new Problem(`${taskId(b, n)} isn’t deleted.`);
+    if (!deleted && t.deleted_at)
+      throw new Problem(`${taskId(b, n)} was deleted.${can("write") ? " restore_task brings it back." : ""}`);
+    return t;
+  }
+
+  // The column's tasks top to bottom, leaving one out
+  async function columnOrder(b: Board, status: StatusCategory, without: number) {
+    const { data } = await db
+      .from("tasks")
+      .select("number")
+      .eq("board_id", b.id)
+      .eq("status", status)
+      .is("deleted_at", null)
+      .neq("number", without)
+      .order("position")
+      .order("number");
+    return (data ?? []).map((r) => r.number as number);
   }
 
   async function columnSize(b: Board, status: StatusCategory) {
@@ -283,7 +319,7 @@ export function actaFor(agent: Agent) {
     return data as { moved: Record<string, number>; next: number };
   }
 
-  function summary(b: Board, t: TaskRow, who: (id: string | null) => string | undefined) {
+  function summary(b: Spot, t: TaskRow, who: (id: string | null) => string | undefined) {
     const done = t.subtasks.filter((s) => s.done).length;
     return compact({
       id: taskId(b, t.number),
@@ -300,6 +336,7 @@ export function actaFor(agent: Agent) {
       public: t.public || undefined,
       votes: t.vote_count || undefined,
       shipped: t.shipped_on,
+      deleted: t.deleted_at,
     });
   }
 
@@ -308,7 +345,7 @@ export function actaFor(agent: Agent) {
     const [{ data: comments }, { data: activity }] = await Promise.all([
       db
         .from("comments")
-        .select("author, body, created_at, via")
+        .select("id, author, body, created_at, via, agent_key")
         .eq("board_id", b.id)
         .eq("number", t.number)
         .order("created_at"),
@@ -326,7 +363,16 @@ export function actaFor(agent: Agent) {
       description: t.description || undefined,
       subtasks: t.subtasks.length ? t.subtasks.map((s) => ({ id: s.id, title: s.title, done: s.done })) : undefined,
       comments: (comments ?? []).length
-        ? (comments ?? []).map((c) => compact({ by: who(c.author), via: c.via, at: c.created_at, body: c.body }))
+        ? (comments ?? []).map((c) =>
+            compact({
+              id: c.id,
+              by: who(c.author),
+              via: c.via,
+              at: c.created_at,
+              body: c.body,
+              yours: c.agent_key === agent.keyId || undefined,
+            }),
+          )
         : undefined,
       activity: (activity ?? [])
         .reverse()
@@ -415,6 +461,7 @@ export function actaFor(agent: Agent) {
           tagline: page.tagline,
           voting: page.voting,
           ideas: page.ideas,
+          new_tasks_public: page.newTasksPublic,
           suggestions_waiting: suggestions ?? 0,
         }),
       });
@@ -423,31 +470,26 @@ export function actaFor(agent: Agent) {
     async tasks(ref: string, f: Filters) {
       const b = await board(ref);
       const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
-      let q = db
-        .from("tasks")
-        .select(listFields, { count: "exact" })
-        .eq("board_id", b.id)
-        .is("deleted_at", null)
-        .in("status", f.status?.length ? f.status : openStatuses);
+      let q = db.from("tasks").select(listFields, { count: "exact" }).eq("board_id", b.id);
+      if (f.deleted) {
+        q = q.not("deleted_at", "is", null);
+        if (f.status?.length) q = q.in("status", f.status);
+      } else q = q.is("deleted_at", null).in("status", f.status?.length ? f.status : openStatuses);
       if (f.assignee !== undefined) {
         const id = await pickPerson(b, f.assignee);
         q = id ? q.eq("assignee", id) : q.is("assignee", null);
       }
       if (f.label) q = q.contains("labels", pickLabels(b, [f.label]));
       if (f.project) q = q.eq("project", pickProject(b, f.project)!);
-      const text = f.query?.trim().replace(/["\\]/g, "");
-      if (text) {
-        const n = text.match(/^(?:[A-Za-z][A-Za-z0-9]*-)?(\d+)$/)?.[1];
-        q = q.or(
-          `title.ilike."%${text}%",description.ilike."%${text}%"${n ? `,number.eq.${n}` : ""}`,
-        );
-      }
-      const { data, count, error } = await q.order("position").order("number").limit(limit);
+      q = search(q, f.query);
+      const { data, count, error } = await (f.deleted
+        ? q.order("deleted_at", { ascending: false })
+        : q.order("position").order("number")
+      ).limit(limit);
       if (error) throw dbProblem(error);
       const who = await nameOf(b.workspace_id);
-      const rows = ((data ?? []) as unknown as TaskRow[]).sort(
-        (a, c) => statusRank[a.status] - statusRank[c.status],
-      );
+      const rows = (data ?? []) as unknown as TaskRow[];
+      if (!f.deleted) rows.sort((a, c) => statusRank[a.status] - statusRank[c.status]);
       return {
         board: b.ref,
         tasks: rows.map((t) => summary(b, t, who)),
@@ -465,6 +507,7 @@ export function actaFor(agent: Agent) {
       const b = await board(ref);
       const sizes = new Map<StatusCategory, number>();
       const created: Record<string, unknown>[] = [];
+      const newPublic = pageFrom(b.name, b.slug, b.page).newTasksPublic;
       const activity: Record<string, unknown>[] = [];
       for (const [i, t] of list.entries()) {
         const title = t.title?.trim();
@@ -487,7 +530,7 @@ export function actaFor(agent: Agent) {
           assignee: (await pickPerson(b, t.assignee)) ?? null,
           description: t.description ?? "",
           subtasks: (t.subtasks ?? []).map((s) => ({ id: `s${randomUUID().slice(0, 8)}`, title: s, done: false })),
-          public: t.public ?? false,
+          public: t.public ?? newPublic,
           shipped_on: status === "done" ? today() : null,
           position,
         });
@@ -586,6 +629,18 @@ export function actaFor(agent: Agent) {
         if (s.done) notes.push(`reopened “${s.title}”`);
         s.done = false;
       }
+      for (const r of p.rename_subtasks ?? []) {
+        const s = find(r.subtask);
+        const title = r.title.trim().slice(0, 200);
+        if (!title || title === s.title) continue;
+        notes.push(`renamed subtask “${s.title}” to “${title}”`);
+        s.title = title;
+      }
+      for (const ref of p.remove_subtasks ?? []) {
+        const s = find(ref);
+        subtasks.splice(subtasks.indexOf(s), 1);
+        notes.push(`removed subtask “${s.title}”`);
+      }
       for (const title of p.add_subtasks ?? []) {
         if (!title.trim()) continue;
         subtasks.push({ id: `s${randomUUID().slice(0, 8)}`, title: title.trim(), done: false });
@@ -593,24 +648,164 @@ export function actaFor(agent: Agent) {
       }
       if (JSON.stringify(subtasks) !== JSON.stringify(t.subtasks)) fields.subtasks = subtasks;
 
-      if (!Object.keys(fields).length) return { unchanged: true, task: summary(b, t, who) };
+      const places = [p.place, p.before, p.after].filter(Boolean).length;
+      if (places > 1) throw new Problem("Use only one of place, before and after.");
+      if (places) {
+        const status = (fields.status as StatusCategory | undefined) ?? t.status;
+        const column = await columnOrder(b, status, t.number);
+        let at = p.place === "top" ? 0 : column.length;
+        const next = p.before ?? p.after;
+        if (next) {
+          const other = numberOf(b, next);
+          const i = column.indexOf(other);
+          if (i === -1)
+            throw new Problem(
+              `${taskId(b, other)} isn’t in ${statusTitle[status]}. Place a task next to one in its own column.`,
+            );
+          at = p.before ? i : i + 1;
+        }
+        column.splice(at, 0, t.number);
+        order = column.map((number, position) => ({ number, position }));
+      }
+
+      if (!Object.keys(fields).length && !places) return { unchanged: true, task: summary(b, t, who) };
       await apply(b, {
-        updated: [{ number: t.number, fields }],
+        updated: Object.keys(fields).length ? [{ number: t.number, fields }] : [],
         order,
         activity: notes.map((text) => ({ id: randomUUID(), number: t.number, text })),
       });
-      return { changed: notes, task: summary(b, await row(b, t.number), who) };
+      const placed = order.length > 1 ? order.findIndex((o) => o.number === t.number) + 1 : undefined;
+      return compact({
+        changed: notes,
+        place_in_column: placed && `${placed} of ${order.length}`,
+        task: summary(b, await row(b, t.number), who),
+      });
     },
 
     async comment(ref: string, task: string, body: string) {
       const b = await board(ref);
       const t = await row(b, task);
       if (!body.trim()) throw new Problem("A comment can’t be empty.");
+      const id = randomUUID();
       await apply(b, {
-        comments: [{ id: randomUUID(), number: t.number, body: body.trim() }],
+        comments: [{ id, number: t.number, body: body.trim() }],
         activity: [{ id: randomUUID(), number: t.number, text: "commented" }],
       });
-      return { commented: taskId(b, t.number), url: taskUrl(b, t.number) };
+      return { comment: id, task: taskId(b, t.number), url: taskUrl(b, t.number) };
+    },
+
+    async editComment(ref: string, id: string, body: string) {
+      const b = await board(ref);
+      if (!body.trim()) throw new Problem("A comment can’t be empty.");
+      const { data: c } = await db
+        .from("comments")
+        .select("id, number, agent_key")
+        .eq("board_id", b.id)
+        .eq("id", id)
+        .maybeSingle();
+      if (!c) throw new Problem(`There’s no comment ${id} on ${b.ref}. get_task lists a task’s comments with their ids.`);
+      if (c.agent_key !== agent.keyId)
+        throw new Problem("This key can only edit comments it wrote. Add a new comment instead.");
+      const { error } = await db.rpc("agent_edit_comment", { p_key: agent.hash, p_comment: id, p_body: body.trim() });
+      if (error) throw dbProblem(error);
+      return { edited: id, task: taskId(b, c.number), url: taskUrl(b, c.number) };
+    },
+
+    async restoreTask(ref: string, task: string) {
+      const b = await board(ref);
+      const t = await row(b, task, true);
+      // Creating a task with a deleted task's number brings that task back
+      await apply(b, {
+        created: [
+          {
+            number: t.number,
+            title: t.title,
+            status: t.status,
+            priority: t.priority,
+            size: t.size,
+            project: t.project,
+            labels: t.labels,
+            start_on: t.start_on,
+            due_on: t.due_on,
+            assignee: t.assignee,
+            description: t.description,
+            subtasks: t.subtasks,
+            public: t.public,
+            shipped_on: t.shipped_on,
+            position: await columnSize(b, t.status),
+            origin: t.origin,
+          },
+        ],
+        activity: [{ id: randomUUID(), number: t.number, text: "restored the task" }],
+      });
+      return { restored: taskId(b, t.number), title: t.title, status: t.status, url: taskUrl(b, t.number) };
+    },
+
+    async searchAll(f: Omit<Filters, "label" | "project" | "deleted">) {
+      const list = await workspaces();
+      const { data: boards } = list.length
+        ? await db
+            .from("boards")
+            .select("id, workspace_id, slug, prefix")
+            .in(
+              "workspace_id",
+              list.map((w) => w.id),
+            )
+        : { data: [] };
+      const spots = new Map<string, Spot>(
+        (boards ?? []).map((x) => [
+          x.id as string,
+          { prefix: x.prefix as string, ref: `${list.find((w) => w.id === x.workspace_id)?.slug}/${x.slug}` },
+        ]),
+      );
+      if (!spots.size) return { tasks: [], shown: 0, total: 0 };
+
+      const everyone = (await Promise.all(list.map((w) => people(w.id)))).flat();
+      const names = new Map(everyone.map((p) => [p.id, p.name]));
+      let assignee: string | null | undefined;
+      if (f.assignee !== undefined) {
+        const who = f.assignee.trim();
+        if (!who) assignee = null;
+        else if (same(who, "me")) assignee = agent.userId;
+        else {
+          const exact = everyone.filter((p) => p.id === who || same(p.name, who));
+          const hits = exact.length ? exact : everyone.filter((p) => p.name.toLowerCase().startsWith(who.toLowerCase()));
+          const ids = [...new Set(hits.map((p) => p.id))];
+          if (ids.length !== 1)
+            throw new Problem(
+              ids.length
+                ? `“${who}” could be ${[...new Set(hits.map((p) => p.name))].join(" or ")}. Use the full name.`
+                : `No one called “${who}” is in these workspaces. Use "me" for yourself.`,
+            );
+          assignee = ids[0];
+        }
+      }
+
+      // A task id like ACT-12 only looks on boards with that prefix
+      const prefix = f.query?.trim().match(/^([A-Za-z][A-Za-z0-9]*)-\d+$/)?.[1].toUpperCase();
+      const ids = [...spots].filter(([, s]) => !prefix || s.prefix === prefix).map(([id]) => id);
+      if (!ids.length) return { tasks: [], shown: 0, total: 0 };
+      const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
+      let q = db
+        .from("tasks")
+        .select(`board_id, ${listFields}`, { count: "exact" })
+        .in("board_id", ids)
+        .is("deleted_at", null)
+        .in("status", f.status?.length ? f.status : openStatuses);
+      if (assignee !== undefined) q = assignee ? q.eq("assignee", assignee) : q.is("assignee", null);
+      q = search(q, f.query, prefix ? [prefix] : undefined);
+      const { data, count, error } = await q.order("updated_at", { ascending: false }).limit(limit);
+      if (error) throw dbProblem(error);
+      const who = (uid: string | null) => (uid ? (names.get(uid) ?? "Former member") : undefined);
+      const rows = (data ?? []) as unknown as (TaskRow & { board_id: string })[];
+      return {
+        tasks: rows.map((t) => {
+          const spot = spots.get(t.board_id)!;
+          return { board: spot.ref, ...summary(spot, t, who), url: taskUrl(spot, t.number) };
+        }),
+        shown: rows.length,
+        total: count ?? rows.length,
+      };
     },
 
     async deleteTask(ref: string, task: string) {
@@ -745,7 +940,14 @@ export function actaFor(agent: Agent) {
 
     async updateRoadmap(
       ref: string,
-      p: { public?: boolean; title?: string; tagline?: string; voting?: boolean; ideas?: boolean },
+      p: {
+        public?: boolean;
+        title?: string;
+        tagline?: string;
+        voting?: boolean;
+        ideas?: boolean;
+        new_tasks_public?: boolean;
+      },
     ) {
       const b = await board(ref);
       const change: Record<string, unknown> = {};
@@ -753,6 +955,7 @@ export function actaFor(agent: Agent) {
       const patch = compact({ title: p.title?.trim().slice(0, 80), tagline: p.tagline?.trim().slice(0, 400) });
       if (p.voting !== undefined) Object.assign(patch, { voting: p.voting });
       if (p.ideas !== undefined) Object.assign(patch, { ideas: p.ideas, ideasPublic: p.ideas });
+      if (p.new_tasks_public !== undefined) Object.assign(patch, { newTasksPublic: p.new_tasks_public });
       if (Object.keys(patch).length) change.page = { ...b.page, ...patch };
       if (Object.keys(change).length) await apply(b, { board: change });
       const live = (change.roadmap_public as boolean | undefined) ?? b.roadmap_public;
@@ -771,6 +974,7 @@ const pageSummary = (page: ReturnType<typeof pageFrom>) => ({
   tagline: page.tagline,
   voting: page.voting,
   ideas: page.ideas,
+  new_tasks_public: page.newTasksPublic,
 });
 
 export type Acta = ReturnType<typeof actaFor>;

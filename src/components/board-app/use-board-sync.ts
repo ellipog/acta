@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { toast } from "@/components/ui/toast";
 import { fetchBoardState } from "@/lib/actions";
-import { defaultPage, type BoardState } from "@/lib/board-store";
+import { defaultPage, type BoardState, type StatusCategory } from "@/lib/board-store";
 import {
   absorb,
   apply,
@@ -42,6 +42,9 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
   const retry = useRef(0);
   const token = useRef<string | null>(null);
   const again = useRef<() => void>(() => {});
+  const saves = useRef(0);
+  const columnTimers = useRef(new Map<StatusCategory, ReturnType<typeof setTimeout>>());
+  const receiveLater = useRef<(ev: RemoteEvent) => void>(() => {});
   const router = useRouter();
   const shape = useRef("");
   const boardId = live?.board.id;
@@ -62,6 +65,38 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     };
   }, [live?.members, prefix]);
 
+  // Someone reordered a column. A reorder arrives as one event per moved card, so this waits for
+  // them to settle and reads the column's saved order
+  const readColumn = useCallback(
+    (status: StatusCategory) => {
+      clearTimeout(columnTimers.current.get(status));
+      columnTimers.current.set(
+        status,
+        setTimeout(async () => {
+          if (!boardId) return;
+          const supabase = await loadClient();
+          for (let tries = 0; tries < 5; tries++) {
+            const saved = saves.current;
+            const { data } = await supabase
+              .from("tasks")
+              .select("number")
+              .eq("board_id", boardId)
+              .eq("status", status)
+              .is("deleted_at", null)
+              .order("position")
+              .order("number");
+            if (!data) return;
+            // A save of ours went out meanwhile, so this order may already be out of date
+            if (!inflight.current && saves.current === saved)
+              return receiveLater.current({ table: "order", status, numbers: data.map((r) => r.number as number) });
+            await new Promise((done) => setTimeout(done, 300));
+          }
+        }, 150),
+      );
+    },
+    [boardId],
+  );
+
   const receive = useCallback(
     (ev: RemoteEvent) => {
       if (!base.current) return;
@@ -72,6 +107,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       const before = base.current;
       const change = resolve(before, ev, ctx);
       if (change.kind === "none") return;
+      if (change.kind === "reorder") return readColumn(change.status);
       if (change.kind === "task" && change.add && latest.current.tasks[change.id] && !before.tasks[change.id]) {
         const from = change.id;
         const to = taskKey(prefix, Math.max(latest.current.next, Number(from.split("-").pop()) + 1));
@@ -80,8 +116,17 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       base.current = apply(before, change);
       dispatch({ type: "rebase", current: (b) => apply(b, change, before), history: (b) => apply(b, change) });
     },
-    [ctx, dispatch, prefix],
+    [ctx, dispatch, prefix, readColumn],
   );
+
+  useEffect(() => {
+    receiveLater.current = receive;
+  }, [receive]);
+
+  useEffect(() => {
+    const timers = columnTimers.current;
+    return () => timers.forEach(clearTimeout);
+  }, []);
 
   const resync = useCallback(async () => {
     if (!boardId || inflight.current) return;
@@ -121,6 +166,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       return;
     }
     inflight.current = true;
+    saves.current++;
     setStatus("saving");
     const supabase = await loadClient();
     const { data, error } = await supabase.rpc("apply_board_changes", {

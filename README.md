@@ -51,7 +51,12 @@ Acta has an MCP server at `/api/mcp`, so AI agents can read and work on boards. 
 Account → Agents: read only, read and write, or manage, for all their workspaces or only some. A key acts as the
 person who made it. The route checks the key, and `agent_apply` and `agent_board` in the database check it again
 before running the app's own write path, so a key never gets further than its owner. Comments and activity that
-came through a key carry its name in `via`, shown as “Elliot via Claude Code”.
+came through a key carry its name in `via`, shown as “Elliot via Claude Code”. A comment also remembers the key that
+wrote it in `agent_key`, and `agent_edit_comment` only lets that key edit it.
+
+Read keys can list and search tasks across every board they reach. Write keys can also create, change, reorder,
+comment on, delete and restore tasks. Manage keys can also create boards, change board settings and run the public
+roadmap. A board's `newTasksPublic` page setting puts new tasks on its roadmap, for people and agents alike.
 
 A line like `Acta board: workspace/board` in a project's AGENTS.md or CLAUDE.md tells agents which board to use.
 

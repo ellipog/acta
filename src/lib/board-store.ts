@@ -65,6 +65,7 @@ export type PublicPage = {
   sort: "votes" | "date";
   zoom: "month" | "quarter" | "year";
   timelineGroup: "stage" | "project";
+  newTasksPublic: boolean;
 };
 
 export const defaultPage: PublicPage = {
@@ -89,6 +90,7 @@ export const defaultPage: PublicPage = {
   sort: "votes",
   zoom: "quarter",
   timelineGroup: "stage",
+  newTasksPublic: false,
 };
 
 export const pageFrom = (name: string, slug: string, page: object): PublicPage => ({
@@ -695,6 +697,7 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
         subtasks: [],
         comments: 0,
         activity: [{ id: newId(), at: Date.now(), who: me.name, text: action.note ?? "created the task" }],
+        ...(state.roadmap.page.newTasksPublic ? { public: true } : {}),
         ...action.patch,
         status,
       };
