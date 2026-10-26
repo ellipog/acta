@@ -186,7 +186,7 @@ export function DitherPlayground() {
         </div>
         <p className="text-xs text-ink-3">
           Paste the recipe into <code className="font-mono">assets/dither.config.mjs</code>, rename it, and run{" "}
-          <code className="font-mono">npm run dither</code>. Sources live in{" "}
+          <code className="font-mono">bun run dither</code>. Sources live in{" "}
           <code className="font-mono">assets/source</code>; add a crop there if you need one.
         </p>
       </div>

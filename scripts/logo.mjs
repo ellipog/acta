@@ -1,5 +1,5 @@
 // Writes the app icons and the logo kit from the mark in src/lib/logo.ts.
-// Run `npm run logo` after changing the drawing.
+// Run `bun run logo` after changing the drawing.
 //
 //   src/app/icon.svg        tab icon, ink on light tabs and paper on dark ones
 //   src/app/favicon.ico     16/32/48 px fallback on a paper tile

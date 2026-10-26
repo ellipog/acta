@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "acta",
-      "runtimeExecutable": "npm",
+      "runtimeExecutable": "bun",
       "runtimeArgs": [
         "run",
         "dev",
@@ -15,7 +15,7 @@
     },
     {
       "name": "acta-prod",
-      "runtimeExecutable": "npm",
+      "runtimeExecutable": "bun",
       "runtimeArgs": [
         "run",
         "start",

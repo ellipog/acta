@@ -297,7 +297,7 @@ export default function LibraryPage() {
             </div>
           </Section>
 
-          <Section id="images" title="Images" note="1-bit masks from npm run dither, painted with CSS. Click through for sources.">
+          <Section id="images" title="Images" note="1-bit masks from bun run dither, painted with CSS. Click through for sources.">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
               {images.map((name) => {
                 const a = ditherAssets[name];

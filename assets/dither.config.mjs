@@ -1,4 +1,4 @@
-// Dither recipes. Run `npm run dither` after changing anything here.
+// Dither recipes. Run `bun run dither` after changing anything here.
 //
 // Every recipe turns one source image (in assets/source) into a 1-bit PNG
 // mask in public/dither. Ink pixels are opaque, everything else is

@@ -9,9 +9,9 @@ realtime and storage).
 ## Running it
 
 ```bash
-npm install
+bun install
 cp .env.example .env.local
-npm run dev
+bun run dev
 ```
 
 The app runs at http://localhost:3000. Without Supabase keys the marketing site, `/demo` and `/library` still
@@ -46,11 +46,11 @@ by `src/proxy.ts`.
 
 | Command | What it does |
 | --- | --- |
-| `npm run dev` | Start the dev server |
-| `npm run build` | Production build |
-| `npm run lint` | ESLint |
-| `npm run dither` | Re-render the one-bit images in `public/dither` from `assets/source` |
-| `npm run logo` | Re-draw the favicon and app icons from `src/lib/logo.ts` |
+| `bun run dev` | Start the dev server |
+| `bun run build` | Production build |
+| `bun run lint` | ESLint |
+| `bun run dither` | Re-render the one-bit images in `public/dither` from `assets/source` |
+| `bun run logo` | Re-draw the favicon and app icons from `src/lib/logo.ts` |
 
 ## Layout
 
