@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Icon, type IconName } from "./icons";
-import { Tooltip } from "./overlays";
+import { Tooltip } from "./tooltip";
 
 const inlinePattern = /(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\)|@[A-Za-z]+)/g;
 

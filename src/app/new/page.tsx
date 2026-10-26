@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { Wordmark } from "@/components/site-chrome";
+import { Wordmark } from "@/components/wordmark";
 import { Dither } from "@/components/ui/dither";
 import { Skeleton } from "@/components/ui/display";
 import { getSession, getWorkspaces } from "@/lib/workspace";
@@ -49,9 +49,8 @@ function Shell() {
 }
 
 async function Content() {
-  const session = await getSession();
+  const [session, workspaces] = await Promise.all([getSession(), getWorkspaces()]);
   if (!session) redirect("/login?next=/new");
-  const workspaces = await getWorkspaces();
   return (
     <>
       <div className="flex items-center justify-between">

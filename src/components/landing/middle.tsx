@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { Icon } from "@/components/ui/icons";
-import { BoardApp } from "@/components/board-app/board-app";
-import { PriorityIcon, StatusMarker } from "@/components/board";
+import { AppSkeleton } from "@/components/app-chrome";
+import { PriorityIcon, StatusMarker } from "@/components/markers";
 import { Avatar } from "@/components/ui/display";
 import { Badge } from "@/components/ui/badge";
 import { Dither, DitherFill, DitherShadow } from "@/components/ui/dither";
 import type { DitherName } from "@/lib/dither-assets";
+import { BoardEmbed } from "./board-embed";
 import { Fig, SectionMark } from "./parts";
 
 export function BoardSection() {
@@ -29,7 +30,7 @@ export function BoardSection() {
           </figure>
         </div>
         <DitherShadow offset={8}>
-          <BoardApp variant="embed" />
+          <BoardEmbed fallback={<AppSkeleton embed />} />
         </DitherShadow>
         <p className="mt-5 text-sm text-ink-3">
           Nothing here is saved.{" "}
@@ -178,7 +179,8 @@ export function HandsSection() {
   return (
     <section id="hands" className="bg-depth-3">
       <div className="mx-auto grid max-w-6xl items-center gap-12 px-4 py-24 sm:px-6 md:grid-cols-[auto_1fr]">
-        <figure className="mx-auto md:mx-0">
+        {/* The picture is a fixed size, so narrow screens crop it rather than scroll sideways */}
+        <figure className="mx-auto max-w-full min-w-0 overflow-hidden md:mx-0">
           <Dither name="karli-hall" tone="pyrite" deep="ink" scale={2} label="The chaitya hall at Karli" />
           <Fig n="2" title="The hall at Karli" className="mt-3 max-w-[460px]">
             Cut from one cliff by many hands, over generations.

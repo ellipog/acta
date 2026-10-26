@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { Wordmark } from "@/components/site-chrome";
+import { Wordmark } from "@/components/wordmark";
 import { Avatar, Skeleton } from "@/components/ui/display";
 import { Dither } from "@/components/ui/dither";
 import type { DitherName } from "@/lib/dither-assets";

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Icon } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import { Dither } from "@/components/ui/dither";
-import { CreditList, Wordmark } from "@/components/site-chrome";
+import { Wordmark } from "@/components/wordmark";
 import { actaRoadmapHref } from "@/lib/slugs";
 import { authReady } from "@/lib/supabase/env";
 import { SectionMark } from "./parts";
@@ -133,11 +133,11 @@ export function BedrockSection() {
       </div>
 
       <footer className="relative border-t border-bedrock-2">
-        <div className="mx-auto grid max-w-6xl gap-10 px-4 py-14 sm:px-6 md:grid-cols-[1fr_2fr_1fr]">
+        <div className="mx-auto grid max-w-6xl gap-10 px-4 py-14 sm:px-6 md:grid-cols-[1fr_1fr]">
           <div>
             <Wordmark />
             <p className="mt-3 max-w-xs text-sm text-bedrock-muted">
-              Acta, Latin for “things done.” A project manager for small teams, built in layers.
+              Acta, Latin for “things done.” A project manager, built in layers.
             </p>
             <nav aria-label="Footer" className="mt-6 flex gap-4 text-xs text-bedrock-muted">
               <Link href={actaRoadmapHref} className="hover:text-bedrock-ink">
@@ -150,13 +150,6 @@ export function BedrockSection() {
                 Terms
               </Link>
             </nav>
-          </div>
-          <div id="credits">
-            <p className="font-mono text-[11px] tracking-[0.14em] text-bedrock-muted uppercase">Image credits</p>
-            <CreditList
-              className="mt-3 text-bedrock-muted"
-              linkClassName="decoration-bedrock-2 hover:text-bedrock-ink hover:decoration-bedrock-muted"
-            />
           </div>
           <div>
             <p className="font-mono text-[11px] tracking-[0.14em] text-bedrock-muted uppercase">Colophon</p>

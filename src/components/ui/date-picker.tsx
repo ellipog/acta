@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { DitherFill } from "./dither";
-import { Popover, PopoverContent, PopoverTrigger } from "./overlays";
+import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 import { PixelArrow, PixelCaret } from "./pixel";
 import { MONTHS, addDays, addMonths, localToday, pad, parts, toIso, weekday } from "@/lib/dates";
 

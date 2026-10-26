@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Dither } from "@/components/ui/dither";
 import { ditherAssets } from "@/lib/dither-assets";
 import { authReady } from "@/lib/supabase/env";
+import { cn } from "@/lib/utils";
 
 const notes = [
   { x: 63, y: 21, side: "right", rock: "Kaibab Fm.", status: "Todo", note: "youngest layer" },
@@ -13,50 +14,73 @@ const notes = [
 
 const PLATE = { width: ditherAssets["surface-panorama"].width * 2, height: ditherAssets["surface-panorama"].height * 2 };
 
+// The name is set like a core sample: loose sediment at the top, settling into solid bedrock at the bottom
+const strata: { to: number; tone: string; level?: 25 | 50 | 75 }[] = [
+  { to: 24, tone: "var(--pyrite)", level: 50 },
+  { to: 46, tone: "var(--lapis)", level: 50 },
+  { to: 68, tone: "var(--lapis)", level: 75 },
+  { to: 100, tone: "var(--ink)" },
+];
+
+function Strata({ children }: { children: string }) {
+  return (
+    <span className="relative block">
+      <span className="invisible">{children}</span>
+      {strata.map((band, i) => {
+        const from = i ? strata[i - 1].to : 0;
+        return (
+          <span
+            key={band.to}
+            aria-hidden
+            className={cn("absolute inset-0", band.level && `dither-${band.level}`)}
+            style={{
+              color: band.tone,
+              backgroundColor: "transparent",
+              clipPath: `inset(calc(${from}% + ${i ? 2 : 0}px) 0 ${100 - band.to}% 0)`,
+            }}
+          >
+            {children}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 export function Hero() {
   return (
     <section id="surface" className="relative overflow-hidden bg-page">
-      <div className="mx-auto max-w-6xl px-4 pt-14 sm:px-6 sm:pt-20">
-        <div className="grid items-end gap-10 md:grid-cols-[1fr_auto]">
-          <div>
-            <p className="font-mono text-[11px] tracking-[0.16em] text-ink-3 uppercase">Acta · Latin, “things done”</p>
-            <h1 className="mt-5 font-display text-[clamp(3.25rem,8.5vw,6.75rem)] leading-[0.92] tracking-[-0.01em]">
-              Work, laid down
-              <br />
-              in layers.
-            </h1>
-            <p className="mt-7 max-w-md text-lg leading-relaxed text-ink-2">
-              A calm project manager for small teams. Boards, tables, a timeline and a public roadmap, and
-              nothing you’ll have to dig through.
-            </p>
-            <div className="mt-8 flex flex-wrap items-center gap-3">
-              <Button variant="primary" size="lg" asChild>
-                <Link href="/demo">
-                  Open the demo <Icon name="arrow-right" />
-                </Link>
+      <div className="mx-auto max-w-6xl px-4 pt-10 sm:px-6 sm:pt-14">
+        <div className="flex items-baseline justify-between gap-6 border-b border-line pb-3 font-mono text-[11px] tracking-[0.16em] text-ink-3 uppercase">
+          <span>Latin, “things done”</span>
+          <span className="hidden sm:inline">A project manager, in layers</span>
+        </div>
+        <h1 aria-label="Acta" className="mt-6 font-display text-[clamp(5rem,27.6vw,24.6rem)] leading-[0.74] tracking-[0.06em]">
+          <Strata>ACTA</Strata>
+        </h1>
+        <div className="mt-8 grid items-end gap-6 border-t border-line pt-6 md:grid-cols-[minmax(0,1fr)_auto]">
+          <p className="max-w-lg text-lg leading-relaxed text-ink-2">
+            A calm project manager. Boards, tables, a timeline and a public roadmap, and nothing
+            you’ll have to dig through.
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button variant="primary" size="lg" asChild>
+              <Link href="/demo">
+                Open the demo <Icon name="arrow-right" />
+              </Link>
+            </Button>
+            {authReady ? (
+              <Button size="lg" asChild>
+                <Link href="/new">Start a board</Link>
               </Button>
-              {authReady ? (
-                <Button size="lg" asChild>
-                  <Link href="/new">Start a board</Link>
-                </Button>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="hidden pb-2 text-right md:block">
-            <p className="font-caption text-2xl">Plate I.</p>
-            <p className="mt-1 font-caption text-[15px] leading-snug text-ink-2">
-              Panorama from Point Sublime,
-              <br />
-              looking east.
-            </p>
+            ) : null}
           </div>
         </div>
       </div>
 
-      <figure className="relative mt-6" style={{ height: PLATE.height }}>
+      <figure className="relative mt-10" style={{ height: PLATE.height }}>
         <div className="absolute top-0 left-1/2 -translate-x-1/2" style={{ width: PLATE.width, height: PLATE.height }}>
-          <Dither name="surface-panorama" tone="lapis" deep="ink" scale={2} label="Grand Canyon from Point Sublime, after W. H. Holmes" />
+          <Dither name="surface-panorama" tone="lapis" deep="ink" scale={2} label="The Grand Canyon from Point Sublime" />
           <div className="absolute inset-0 hidden lg:block">
             {notes.map((n) => (
               <Annotation key={n.rock} {...n} />
@@ -67,8 +91,8 @@ export function Hero() {
 
       <div className="mx-auto max-w-6xl px-4 pt-4 pb-16 sm:px-6">
         <p className="max-w-2xl font-caption text-[15px] leading-snug text-ink-2">
-          <span className="text-ink">Read it top to bottom.</span> New work settles on top; finished work sinks into
-          bedrock and stays there. W. H. Holmes, <span className="not-italic">Atlas of the Grand Cañon</span>, 1882.
+          <span className="text-ink">Plate I. Point Sublime, looking east.</span> Read it top to bottom: new work
+          settles on top, finished work sinks into bedrock and stays there.
         </p>
       </div>
     </section>

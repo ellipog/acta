@@ -1,6 +1,6 @@
 # Acta
 
-Latin for “things done.” A calm project manager for small teams: boards, tables, a timeline, custom fields,
+Latin for “things done.” A calm project manager: boards, tables, a timeline, custom fields,
 workspaces with roles, live collaboration and an opt-in public roadmap with votes and suggestions.
 
 Built with Next.js 16 (App Router, Cache Components), React 19, Tailwind CSS 4 and Supabase (auth, Postgres,

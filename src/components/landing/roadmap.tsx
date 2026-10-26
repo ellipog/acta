@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/ui/icons";
-import { StatusMarker } from "@/components/board";
+import { StatusMarker } from "@/components/markers";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/controls";
 import { Input } from "@/components/ui/input";

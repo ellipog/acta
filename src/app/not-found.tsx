@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Wordmark } from "@/components/site-chrome";
+import { Wordmark } from "@/components/wordmark";
 import { Dither } from "@/components/ui/dither";
 
 export const metadata: Metadata = {

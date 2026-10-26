@@ -1,15 +1,22 @@
 import Link from "next/link";
 import { AccountButton } from "@/components/account-button";
-import { Wordmark } from "@/components/site-chrome";
+import { Wordmark } from "@/components/wordmark";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Avatar, Skeleton } from "@/components/ui/display";
 import { Icon } from "@/components/ui/icons";
 import type { WorkspaceSummary } from "@/lib/live";
+import { cn } from "@/lib/utils";
 
-export function AppSkeleton() {
+// `embed` matches the board on the landing page, which is shorter and drops the sidebar sooner
+export function AppSkeleton({ embed }: { embed?: boolean }) {
   return (
-    <div aria-busy className="flex h-dvh overflow-hidden bg-page">
-      <aside className="hidden w-60 shrink-0 flex-col gap-3 border-r border-line bg-surface p-3 md:flex">
+    <div aria-busy className={cn("flex overflow-hidden bg-page", embed ? "h-[36rem] border border-line-strong" : "h-dvh")}>
+      <aside
+        className={cn(
+          "hidden w-60 shrink-0 flex-col gap-3 border-r border-line bg-surface p-3",
+          embed ? "lg:flex" : "md:flex",
+        )}
+      >
         <Skeleton className="h-6 w-24" />
         <Skeleton className="mt-3 h-8" />
         <div className="mt-4 flex flex-col gap-2">

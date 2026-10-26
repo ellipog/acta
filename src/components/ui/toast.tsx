@@ -3,7 +3,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
 import { Icon, type IconName } from "./icons";
-import { Surface } from "./overlays";
+import { Surface } from "./surface";
 
 type Toast = {
   id: number;

@@ -17,7 +17,8 @@ export async function proxy(request: NextRequest) {
   const rewrite = publicRewrite(request);
   const pass = () => (rewrite ? NextResponse.rewrite(rewrite, { request }) : NextResponse.next({ request }));
   let response = pass();
-  if (!authReady) return response;
+  // Without a session cookie there's nothing to refresh
+  if (!authReady || !request.cookies.getAll().some((c) => c.name.startsWith("sb-"))) return response;
 
   const supabase = createServerClient(supabaseUrl, supabaseKey, {
     cookies: {
@@ -31,7 +32,16 @@ export async function proxy(request: NextRequest) {
     },
   });
 
-  await supabase.auth.getClaims();
+  const { data } = await supabase.auth.getClaims();
+
+  // Signed-in visits to /home go straight to the last board, skipping two server redirects.
+  // The board page sends people to the workspace if that board is gone
+  const last = request.cookies.get("acta-last")?.value;
+  if (request.nextUrl.pathname === "/home" && data?.claims && last && /^[a-z0-9-]+\/[a-z0-9-]+$/.test(last)) {
+    const redirect = NextResponse.redirect(new URL(`/${last}`, request.url));
+    response.cookies.getAll().forEach((c) => redirect.cookies.set(c));
+    return redirect;
+  }
   return response;
 }
 

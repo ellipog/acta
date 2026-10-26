@@ -7,7 +7,7 @@ import { DitherFill, type DitherTone } from "@/components/ui/dither";
 import { Button } from "@/components/ui/button";
 import { formatShort, useToday } from "@/components/ui/date-picker";
 import { Icon } from "@/components/ui/icons";
-import { Tooltip } from "@/components/ui/overlays";
+import { Tooltip } from "@/components/ui/tooltip";
 import { PixelCaret } from "@/components/ui/pixel";
 import { MONTHS, addDays, addMonths, diffDays, monthEnd, monthStart, parts, weekday } from "@/lib/dates";
 import {

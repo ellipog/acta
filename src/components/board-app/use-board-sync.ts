@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { RealtimeChannel } from "@supabase/supabase-js";
+import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { toast } from "@/components/ui/toast";
 import { fetchBoardState } from "@/lib/actions";
 import { defaultPage, type BoardState } from "@/lib/board-store";
@@ -15,11 +15,16 @@ import {
   resolve,
   taskKey,
   toWire,
+  type ActivityRow,
+  type BoardRow,
+  type CommentRow,
   type Context,
   type RemoteEvent,
+  type SuggestionRow,
+  type TaskRow,
 } from "@/lib/board-sync";
 import { toneFor, type LiveBoard } from "@/lib/live";
-import { getBrowserClient } from "@/lib/supabase/client";
+import { loadClient } from "@/lib/supabase/browser";
 import { supabaseKey, supabaseUrl } from "@/lib/supabase/env";
 import type { DemoAction } from "./demo-state";
 
@@ -87,6 +92,26 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     dispatch({ type: "rebase", current: (b) => absorb(fresh, b, diffBoards(before, b)), history: () => null });
   }, [boardId, dispatch]);
 
+  // Picks up anything saved between the server reading the board and the live feed starting,
+  // without reading the whole board again. The margin allows for clocks that drift
+  const catchUp = useCallback(async () => {
+    if (!boardId || !live) return;
+    const supabase = await loadClient();
+    const since = new Date(live.at - 60_000).toISOString();
+    const [tasks, comments, activity, suggestions, row] = await Promise.all([
+      supabase.from("tasks").select("*").eq("board_id", boardId).gt("updated_at", since),
+      supabase.from("comments").select("*").eq("board_id", boardId).gt("created_at", since).order("created_at"),
+      supabase.from("activity").select("*").eq("board_id", boardId).gt("created_at", since).order("created_at"),
+      supabase.from("suggestions").select("*").eq("board_id", boardId).gt("created_at", since),
+      supabase.from("boards").select("id, roadmap_public, page, next_number").eq("id", boardId).maybeSingle(),
+    ]);
+    for (const r of tasks.data ?? []) receive({ table: "tasks", row: r as TaskRow });
+    for (const r of comments.data ?? []) receive({ table: "comments", row: r as CommentRow });
+    for (const r of activity.data ?? []) receive({ table: "activity", row: r as ActivityRow });
+    for (const r of suggestions.data ?? []) receive({ table: "suggestions", row: r as SuggestionRow });
+    if (row.data) receive({ table: "boards", row: row.data as BoardRow });
+  }, [boardId, live, receive]);
+
   const flush = useCallback(async () => {
     if (!boardId || !base.current || inflight.current) return;
     const target = latest.current;
@@ -97,7 +122,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     }
     inflight.current = true;
     setStatus("saving");
-    const supabase = getBrowserClient();
+    const supabase = await loadClient();
     const { data, error } = await supabase.rpc("apply_board_changes", {
       p_board: boardId,
       p_changes: toWire(d, target),
@@ -166,21 +191,26 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
 
   useEffect(() => {
     if (!boardId || !live) return;
-    const supabase = getBrowserClient();
+    let supabase: SupabaseClient | null = null;
     let channel: RealtimeChannel | null = null;
-
-    const auth = supabase.auth.onAuthStateChange((_e, session) => {
-      token.current = session?.access_token ?? null;
-    });
+    let unsubscribe = () => {};
 
     const changes = (table: "tasks" | "comments" | "activity" | "suggestions") =>
       ({ event: "*", schema: "public", table, filter: `board_id=eq.${boardId}` }) as const;
 
     let stopped = false;
+    let joined = false;
     const start = async () => {
-      await supabase.realtime.setAuth().catch(() => {});
+      const client = await loadClient();
       if (stopped) return;
-      channel = supabase
+      supabase = client;
+      const auth = client.auth.onAuthStateChange((_e, session) => {
+        token.current = session?.access_token ?? null;
+      });
+      unsubscribe = () => auth.data.subscription.unsubscribe();
+      await client.realtime.setAuth().catch(() => {});
+      if (stopped) return;
+      channel = client
         .channel(`board:${boardId}`, { config: { presence: { key: live.me.id } } })
         .on("postgres_changes", changes("tasks"), (p) => {
           if (p.new && "number" in p.new) receive({ table: "tasks", row: p.new as never });
@@ -224,7 +254,9 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
         .subscribe((s) => {
           if (s === "SUBSCRIBED") {
             channel!.track({ id: live.me.id, name: live.me.name, avatar: live.me.avatar, tone: toneFor(live.me.id) });
-            void resync();
+            // After a dropped connection the gap could be long, so that reads the board again
+            void (joined ? resync() : catchUp());
+            joined = true;
           }
         });
     };
@@ -258,15 +290,15 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     window.addEventListener("online", online);
 
     return () => {
-      auth.data.subscription.unsubscribe();
+      unsubscribe();
       window.removeEventListener("pagehide", save);
       window.removeEventListener("pageshow", shown);
       document.removeEventListener("visibilitychange", hidden);
       window.removeEventListener("online", online);
       stopped = true;
-      if (channel) void supabase.removeChannel(channel);
+      if (supabase && channel) void supabase.removeChannel(channel);
     };
-  }, [boardId, live, receive, resync, flush, router]);
+  }, [boardId, live, receive, resync, catchUp, flush, router]);
 
   return { status, here };
 }

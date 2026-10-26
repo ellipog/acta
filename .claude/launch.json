@@ -12,6 +12,18 @@
         "3100"
       ],
       "port": 3100
+    },
+    {
+      "name": "acta-prod",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "start",
+        "--",
+        "-p",
+        "3200"
+      ],
+      "port": 3200
     }
   ]
 }

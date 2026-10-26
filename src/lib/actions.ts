@@ -6,15 +6,14 @@ import type { Label, Project } from "./board-store";
 import type { Role } from "./live";
 import { boardSlugProblem, slugify, slugProblem } from "./slugs";
 import { createClient } from "./supabase/server";
-import { readBoardState } from "./workspace";
+import { getAuth, readBoard } from "./workspace";
 
 export type ActionResult = { ok: boolean; message: string } | null;
 
 async function signedIn(next = "/home") {
-  const supabase = await createClient();
-  const { data } = await supabase.auth.getUser();
-  if (!data.user) redirect(`/login?next=${encodeURIComponent(next)}`);
-  return { supabase, user: data.user };
+  const auth = await getAuth();
+  if (!auth) redirect(`/login?next=${encodeURIComponent(next)}`);
+  return { supabase: auth.supabase, user: auth };
 }
 
 const text = (form: FormData, key: string, max = 60) =>
@@ -222,21 +221,5 @@ export async function joinWorkspace(_: ActionResult, form: FormData): Promise<Ac
 
 export async function fetchBoardState(boardId: string) {
   const { supabase, user } = await signedIn();
-  const { data: board } = await supabase
-    .from("boards")
-    .select("id, slug, name, prefix, next_number, roadmap_public, page, workspace_id")
-    .eq("id", boardId)
-    .maybeSingle();
-  if (!board) return null;
-  const { data: members } = await supabase
-    .from("members")
-    .select("user_id, profiles (name)")
-    .eq("workspace_id", board.workspace_id);
-  const names = new Map(
-    (members ?? []).map((m) => [
-      m.user_id,
-      (m.profiles as unknown as { name: string | null } | null)?.name || "Member",
-    ]),
-  );
-  return readBoardState(supabase, board, user.id, (id) => (id && names.get(id)) || "Former member");
+  return readBoard(supabase, boardId, user.id);
 }

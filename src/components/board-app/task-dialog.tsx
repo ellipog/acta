@@ -12,7 +12,7 @@ import { Switch } from "@/components/ui/controls";
 import { DitherFill } from "@/components/ui/dither";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Markdown, MarkdownEditor } from "@/components/ui/markdown";
-import { Tooltip } from "@/components/ui/overlays";
+import { Tooltip } from "@/components/ui/tooltip";
 import { Select } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import {

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Command } from "cmdk";
 import { cn } from "@/lib/utils";
 import { Icon } from "./icons";
-import { Popover, PopoverContent, PopoverTrigger } from "./overlays";
+import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 import { PixelCaret, PixelCheck } from "./pixel";
 import type { SelectOption } from "./select";
 

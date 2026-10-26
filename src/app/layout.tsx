@@ -3,7 +3,6 @@ import { Suspense } from "react";
 import { EB_Garamond, Geist, Geist_Mono, Marcellus } from "next/font/google";
 import { Analytics } from "@/components/analytics";
 import { ThemeProvider } from "@/components/theme-provider";
-import { TooltipProvider } from "@/components/ui/overlays";
 import { Toaster } from "@/components/ui/toast";
 import "./globals.css";
 
@@ -43,13 +42,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col">
         <ThemeProvider>
-          <TooltipProvider delayDuration={300}>
-            {children}
-            <Toaster />
-            <Suspense fallback={null}>
-              <Analytics />
-            </Suspense>
-          </TooltipProvider>
+          {children}
+          <Toaster />
+          <Suspense fallback={null}>
+            <Analytics />
+          </Suspense>
         </ThemeProvider>
       </body>
     </html>

@@ -16,6 +16,8 @@ export type LiveBoard = {
   members: Member[];
   board: { id: string; slug: string; name: string; prefix: string; labels: Label[]; projects: Project[] };
   state: BoardState;
+  // When the server read the board, so the browser only asks for what changed after it
+  at: number;
 };
 
 const tones: Tone[] = ["lapis", "pyrite", "malachite", "hematite"];

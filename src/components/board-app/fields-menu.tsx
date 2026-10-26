@@ -20,7 +20,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { Checkbox } from "@/components/ui/controls";
 import { Icon } from "@/components/ui/icons";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/overlays";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { columnMeta, defaultColumns, type ColumnPref, type Prefs } from "./fields";
 

@@ -8,18 +8,15 @@ import { Avatar, Eyebrow, Spinner } from "@/components/ui/display";
 import { DitherFill } from "@/components/ui/dither";
 import { Icon } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
+import { Dialog, DialogClose, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogTrigger,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
-} from "@/components/ui/overlays";
+} from "@/components/ui/dropdown-menu";
 import { PixelCaret } from "@/components/ui/pixel";
 import { toast } from "@/components/ui/toast";
 import {

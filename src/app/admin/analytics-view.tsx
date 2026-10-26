@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/controls";
 import { DitherFill } from "@/components/ui/dither";
 import { Eyebrow } from "@/components/ui/display";
 import { Icon } from "@/components/ui/icons";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/overlays";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MONTHS } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import { ranges, type RangeId, type Report, type Row, type Slot, type Totals } from "./report";

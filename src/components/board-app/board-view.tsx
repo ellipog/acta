@@ -32,8 +32,8 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  Tooltip,
-} from "@/components/ui/overlays";
+} from "@/components/ui/dropdown-menu";
+import { Tooltip } from "@/components/ui/tooltip";
 import { sizePoints, statuses, type BoardState, type StatusCategory, type Task } from "@/lib/board-store";
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";

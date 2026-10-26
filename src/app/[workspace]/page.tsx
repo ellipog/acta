@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { AppSkeleton, AppTopBar } from "@/components/app-chrome";
-import { getSession, getWorkspace } from "@/lib/workspace";
+import { getAuth, getWorkspace } from "@/lib/workspace";
 import { FirstBoard } from "./first-board";
 
 export const metadata: Metadata = {
@@ -23,7 +23,7 @@ async function Workspace({ params }: { params: PageProps<"/[workspace]">["params
   const { workspace: slug } = await params;
   const ws = await getWorkspace(slug);
   if (!ws) {
-    if (!(await getSession())) redirect(`/login?next=${encodeURIComponent(`/${slug}`)}`);
+    if (!(await getAuth())) redirect(`/login?next=${encodeURIComponent(`/${slug}`)}`);
     notFound();
   }
   if (ws.boards.length) {

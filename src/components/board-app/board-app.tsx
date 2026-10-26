@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useActionState, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Dialog as D } from "radix-ui";
 import { Icon, type IconName } from "@/components/ui/icons";
@@ -25,8 +26,8 @@ import { Avatar, AvatarStack, Spinner } from "@/components/ui/display";
 import { Button } from "@/components/ui/button";
 import { Badge, Kbd } from "@/components/ui/badge";
 import { DitherFill } from "@/components/ui/dither";
+import { DialogContent, SheetContent } from "@/components/ui/dialog";
 import {
-  DialogContent,
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
@@ -39,20 +40,16 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  SheetContent,
-  Tooltip,
-} from "@/components/ui/overlays";
+} from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { PixelCaret } from "@/components/ui/pixel";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Wordmark } from "@/components/site-chrome";
+import { Wordmark } from "@/components/wordmark";
 import { toast } from "@/components/ui/toast";
 import { useNow } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import type { DitherName } from "@/lib/dither-assets";
-import { BoardView } from "./board-view";
 import { demoReducer, initDemo, type DemoAction } from "./demo-state";
 import {
   columnMeta,
@@ -69,11 +66,28 @@ import {
   type View,
 } from "./fields";
 import { FieldsMenu } from "./fields-menu";
-import { PublicRoadmap } from "./roadmap-view";
-import { TableView } from "./table-view";
-import { TimelineView } from "./timeline-view";
-import { TaskDialog } from "./task-dialog";
 import { useBoardSync, type SaveStatus, type Visitor } from "./use-board-sync";
+
+// Each view is its own download. The one on screen comes with the page, the rest and the task dialog arrive once
+// the browser is idle, or straight away if someone opens one first
+const ViewLoading = () => (
+  <div className="grid h-full place-items-center">
+    <Spinner />
+  </div>
+);
+const BoardView = dynamic(() => import("./board-view").then((m) => m.BoardView), { loading: ViewLoading });
+const TableView = dynamic(() => import("./table-view").then((m) => m.TableView), { loading: ViewLoading });
+const TimelineView = dynamic(() => import("./timeline-view").then((m) => m.TimelineView), { loading: ViewLoading });
+const PublicRoadmap = dynamic(() => import("./roadmap-view").then((m) => m.PublicRoadmap), { loading: ViewLoading });
+const TaskDialog = dynamic(() => import("./task-dialog").then((m) => m.TaskDialog));
+
+function preloadViews() {
+  void import("./board-view");
+  void import("./table-view");
+  void import("./timeline-view");
+  void import("./roadmap-view");
+  void import("./task-dialog");
+}
 
 const BOARD_KEY = "acta-demo-board-v5";
 const PREFS_KEY = "acta-demo-prefs-v1";
@@ -210,6 +224,17 @@ export function BoardApp({
     if (state.tasks[id]) setOpenId(id);
   }
 
+  // The dialog mounts the first time a task opens and then stays, so it can animate closed
+  const [dialogUsed, setDialogUsed] = useState(false);
+  if (openId && !dialogUsed) setDialogUsed(true);
+
+  useEffect(() => {
+    const idle = window.requestIdleCallback ?? ((run: () => void) => setTimeout(run, 1500));
+    const stop = window.cancelIdleCallback ?? clearTimeout;
+    const id = idle(preloadViews);
+    return () => stop(id);
+  }, []);
+
   const lastPath = live ? `${live.workspace.slug}/${live.board.slug}` : null;
   useEffect(() => {
     if (lastPath) document.cookie = `acta-last=${lastPath}; path=/; max-age=31536000; samesite=lax`;
@@ -298,301 +323,305 @@ export function BoardApp({
   const showChips = filterCount > 0 || (prefs.view === "table" && prefs.sort);
 
   return (
-    <div
-      className={cn(
-        "flex overflow-hidden bg-page text-left text-ink",
-        full ? "h-dvh" : "h-[36rem] border border-line-strong",
-        className,
-      )}
-    >
-      <aside
-        className={cn("hidden w-60 shrink-0 flex-col border-r border-line bg-surface", full ? "md:flex" : "lg:flex")}
+    <TooltipProvider>
+      <div
+        className={cn(
+          "flex overflow-hidden bg-page text-left text-ink",
+          full ? "h-dvh" : "h-[36rem] border border-line-strong",
+          className,
+        )}
       >
-        {sidebar}
-      </aside>
+        <aside
+          className={cn("hidden w-60 shrink-0 flex-col border-r border-line bg-surface", full ? "md:flex" : "lg:flex")}
+        >
+          {sidebar}
+        </aside>
 
-      <div className="@container flex min-w-0 flex-1 flex-col">
-        <header className="flex h-12 shrink-0 items-center gap-1.5 border-b border-line bg-surface px-2 sm:px-4">
-          {full ? (
-            <D.Root open={navOpen} onOpenChange={setNavOpen}>
-              <D.Trigger aria-label="Open navigation" className={cn(iconButton, "md:hidden")}>
-                <Icon name="menu" />
-              </D.Trigger>
-              <SheetContent title="Navigation">{sidebar}</SheetContent>
-            </D.Root>
-          ) : null}
-          <div className="flex min-w-0 items-center gap-2.5">
-            <h2 className="truncate font-display text-lg leading-none">{live ? live.board.name : demoBoard}</h2>
-            {live ? <SaveState status={status} /> : null}
-            {state.roadmap.public ? (
-              <Tooltip content="The roadmap is public">
-                <button
-                  onClick={() => setPrefs({ view: "public" })}
-                  className="hidden h-6 shrink-0 items-center gap-1.5 border border-lapis/30 bg-lapis-soft px-1.5 text-[11px] text-lapis-ink hover:border-lapis sm:flex"
-                >
-                  <Icon name="globe" size="sm" /> Public
-                </button>
-              </Tooltip>
-            ) : null}
-          </div>
-
-          <div className="ml-auto flex items-center gap-1">
-            <Presence visitors={live ? here : undefined} />
-            <Tooltip
-              content={
-                <span>
-                  Undo <Kbd className="ml-1 border-ink-3 bg-transparent text-page">⌘Z</Kbd>
-                </span>
-              }
-            >
-              <button
-                aria-label="Undo"
-                onClick={undo}
-                disabled={!demo.past.length}
-                className={cn(iconButton, "hidden sm:grid")}
-              >
-                <Icon name="undo" />
-              </button>
-            </Tooltip>
-            <Tooltip
-              content={
-                <span>
-                  Redo <Kbd className="ml-1 border-ink-3 bg-transparent text-page">⇧⌘Z</Kbd>
-                </span>
-              }
-            >
-              <button
-                aria-label="Redo"
-                onClick={redo}
-                disabled={!demo.future.length}
-                className={cn(iconButton, "hidden sm:grid")}
-              >
-                <Icon name="undo" className="-scale-x-100" />
-              </button>
-            </Tooltip>
+        <div className="@container flex min-w-0 flex-1 flex-col">
+          <header className="flex h-12 shrink-0 items-center gap-1.5 border-b border-line bg-surface px-2 sm:px-4">
             {full ? (
+              <D.Root open={navOpen} onOpenChange={setNavOpen}>
+                <D.Trigger aria-label="Open navigation" className={cn(iconButton, "md:hidden")}>
+                  <Icon name="menu" />
+                </D.Trigger>
+                <SheetContent title="Navigation">{sidebar}</SheetContent>
+              </D.Root>
+            ) : null}
+            <div className="flex min-w-0 items-center gap-2.5">
+              <h2 className="truncate font-display text-lg leading-none">{live ? live.board.name : demoBoard}</h2>
+              {live ? <SaveState status={status} /> : null}
+              {state.roadmap.public ? (
+                <Tooltip content="The roadmap is public">
+                  <button
+                    onClick={() => setPrefs({ view: "public" })}
+                    className="hidden h-6 shrink-0 items-center gap-1.5 border border-lapis/30 bg-lapis-soft px-1.5 text-[11px] text-lapis-ink hover:border-lapis sm:flex"
+                  >
+                    <Icon name="globe" size="sm" /> Public
+                  </button>
+                </Tooltip>
+              ) : null}
+            </div>
+
+            <div className="ml-auto flex items-center gap-1">
+              <Presence visitors={live ? here : undefined} />
               <Tooltip
                 content={
                   <span>
-                    Shortcuts <Kbd className="ml-1 border-ink-3 bg-transparent text-page">?</Kbd>
+                    Undo <Kbd className="ml-1 border-ink-3 bg-transparent text-page">⌘Z</Kbd>
                   </span>
                 }
               >
                 <button
-                  aria-label="Keyboard shortcuts"
-                  onClick={() => setHelp(true)}
-                  className={cn(iconButton, "hidden md:grid")}
+                  aria-label="Undo"
+                  onClick={undo}
+                  disabled={!demo.past.length}
+                  className={cn(iconButton, "hidden sm:grid")}
                 >
-                  <Icon name="keyboard" />
+                  <Icon name="undo" />
                 </button>
               </Tooltip>
-            ) : null}
-            <Button variant="primary" size="sm" onClick={createTask} className="ml-1">
-              <Icon name="plus" /> <span className="hidden sm:inline">New task</span>
-              {full ? (
-                <Kbd className="ml-1 hidden border-on-accent/40 bg-transparent text-on-accent sm:inline-flex">C</Kbd>
-              ) : null}
-            </Button>
-          </div>
-        </header>
-
-        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-surface pr-2 sm:pr-4">
-          <div role="tablist" aria-label="Views" className="flex h-full shrink-0 items-center pl-1 sm:pl-2">
-            {views.map((v, i) => (
-              <button
-                key={v.id}
-                role="tab"
-                aria-selected={prefs.view === v.id}
-                aria-label={v.label}
-                onClick={() => setPrefs({ view: v.id })}
-                className={cn(
-                  "group/tab -mb-px flex h-full items-center gap-1.5 border-b-2 px-2.5 text-sm outline-none focus-visible:bg-sunken",
-                  prefs.view === v.id ? "border-lapis text-ink" : "border-transparent text-ink-2 hover:text-ink",
-                )}
+              <Tooltip
+                content={
+                  <span>
+                    Redo <Kbd className="ml-1 border-ink-3 bg-transparent text-page">⇧⌘Z</Kbd>
+                  </span>
+                }
               >
-                <Icon name={v.icon} size="sm" />
-                <span className="hidden @3xl:inline">{v.label}</span>
-                {full ? (
-                  <span className="hidden font-mono text-[10px] text-ink-3 opacity-0 group-hover/tab:opacity-100 @5xl:inline">
-                    {i + 1}
-                  </span>
-                ) : null}
-              </button>
-            ))}
-          </div>
-
-          <div className="-mr-2 ml-auto flex min-w-0 items-center gap-1.5 overflow-x-auto py-1 pr-2 sm:-mr-4 sm:pr-4">
-            <label className="flex h-8 shrink-0 items-center gap-2 border border-line bg-raised px-2 focus-within:border-lapis">
-              <Icon name="search" size="sm" className="text-ink-3" />
-              <input
-                ref={searchRef}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    setQuery("");
-                    e.currentTarget.blur();
-                  }
-                }}
-                placeholder="Search"
-                aria-label="Search tasks"
-                className="w-20 bg-transparent text-sm outline-none placeholder:text-ink-3 @xl:w-28 @5xl:w-40"
-              />
-              {query ? (
-                <button aria-label="Clear search" onClick={() => setQuery("")} className="text-ink-3 hover:text-ink">
-                  <Icon name="x" size="sm" />
+                <button
+                  aria-label="Redo"
+                  onClick={redo}
+                  disabled={!demo.future.length}
+                  className={cn(iconButton, "hidden sm:grid")}
+                >
+                  <Icon name="undo" className="-scale-x-100" />
                 </button>
-              ) : full ? (
-                <Kbd className="hidden @xl:inline-flex">/</Kbd>
-              ) : null}
-            </label>
-            <FilterMenu
-              state={state}
-              filters={filters}
-              setFilter={setFilter}
-              count={filterCount}
-              onClear={() => setPrefs({ filters: {} })}
-            />
-            {prefs.view === "table" || prefs.view === "roadmap" ? (
-              <>
-                <DropdownMenu>
-                  <DropdownMenuTrigger className={tool(prefs.grouping !== "none")}>
-                    <Icon name="group" size="sm" />
-                    <span className="hidden @2xl:inline">
-                      {prefs.grouping === "none" ? "Group" : fieldLabel[prefs.grouping]}
+              </Tooltip>
+              {full ? (
+                <Tooltip
+                  content={
+                    <span>
+                      Shortcuts <Kbd className="ml-1 border-ink-3 bg-transparent text-page">?</Kbd>
                     </span>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-48">
-                    <DropdownMenuLabel>Group rows by</DropdownMenuLabel>
-                    <DropdownMenuRadioGroup
-                      value={prefs.grouping}
-                      onValueChange={(v) => setPrefs({ grouping: v as Grouping })}
-                    >
-                      {groupings.map((g) => (
-                        <DropdownMenuRadioItem key={g} value={g}>
-                          <Icon name={fieldIcon[g as Exclude<Grouping, "none">]} />{" "}
-                          {fieldLabel[g as Exclude<Grouping, "none">]}
-                        </DropdownMenuRadioItem>
-                      ))}
-                      <DropdownMenuSeparator />
-                      <DropdownMenuRadioItem value="none">
-                        <Icon name="list" /> No grouping
-                      </DropdownMenuRadioItem>
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                {prefs.view === "table" ? (
-                  <FieldsMenu
-                    prefs={prefs}
-                    setPrefs={setPrefs}
-                    trigger={
-                      <button className={tool(prefs.columns.some((c) => c.hidden && c.id !== "updated"))}>
-                        <Icon name="columns" size="sm" />
-                        <span className="hidden @2xl:inline">Fields</span>
-                      </button>
-                    }
-                  />
-                ) : null}
-              </>
-            ) : null}
-          </div>
-        </div>
-
-        {showChips ? (
-          <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-line bg-surface px-2 py-1.5 sm:px-4">
-            {filterFields
-              .filter((f) => filters[f]?.length)
-              .map((f) => (
-                <span key={f} className="flex h-6 shrink-0 items-center border border-line-strong bg-raised text-xs">
-                  <Icon name={fieldIcon[f]} size="sm" className="ml-2 text-ink-3" />
-                  <span className="ml-1.5 text-ink-3">{fieldLabel[f]}</span>
-                  <span className="ml-1.5 max-w-48 truncate">
-                    {filters[f]!.map((v) => fieldOptions[f].find((o) => o.value === v)?.label ?? v).join(", ")}
-                  </span>
+                  }
+                >
                   <button
-                    aria-label={`Remove the ${fieldLabel[f].toLowerCase()} filter`}
-                    onClick={() => setFilter(f, [])}
-                    className="ml-1 grid h-full w-6 place-items-center border-l border-line text-ink-3 hover:bg-sunken hover:text-ink"
+                    aria-label="Keyboard shortcuts"
+                    onClick={() => setHelp(true)}
+                    className={cn(iconButton, "hidden md:grid")}
+                  >
+                    <Icon name="keyboard" />
+                  </button>
+                </Tooltip>
+              ) : null}
+              <Button variant="primary" size="sm" onClick={createTask} className="ml-1">
+                <Icon name="plus" /> <span className="hidden sm:inline">New task</span>
+                {full ? (
+                  <Kbd className="ml-1 hidden border-on-accent/40 bg-transparent text-on-accent sm:inline-flex">C</Kbd>
+                ) : null}
+              </Button>
+            </div>
+          </header>
+
+          <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-surface pr-2 sm:pr-4">
+            <div role="tablist" aria-label="Views" className="flex h-full shrink-0 items-center pl-1 sm:pl-2">
+              {views.map((v, i) => (
+                <button
+                  key={v.id}
+                  role="tab"
+                  aria-selected={prefs.view === v.id}
+                  aria-label={v.label}
+                  onClick={() => setPrefs({ view: v.id })}
+                  className={cn(
+                    "group/tab -mb-px flex h-full items-center gap-1.5 border-b-2 px-2.5 text-sm outline-none focus-visible:bg-sunken",
+                    prefs.view === v.id ? "border-lapis text-ink" : "border-transparent text-ink-2 hover:text-ink",
+                  )}
+                >
+                  <Icon name={v.icon} size="sm" />
+                  <span className="hidden @3xl:inline">{v.label}</span>
+                  {full ? (
+                    <span className="hidden font-mono text-[10px] text-ink-3 opacity-0 group-hover/tab:opacity-100 @5xl:inline">
+                      {i + 1}
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+
+            <div className="-mr-2 ml-auto flex min-w-0 items-center gap-1.5 overflow-x-auto py-1 pr-2 sm:-mr-4 sm:pr-4">
+              <label className="flex h-8 shrink-0 items-center gap-2 border border-line bg-raised px-2 focus-within:border-lapis">
+                <Icon name="search" size="sm" className="text-ink-3" />
+                <input
+                  ref={searchRef}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      setQuery("");
+                      e.currentTarget.blur();
+                    }
+                  }}
+                  placeholder="Search"
+                  aria-label="Search tasks"
+                  className="w-20 bg-transparent text-sm outline-none placeholder:text-ink-3 @xl:w-28 @5xl:w-40"
+                />
+                {query ? (
+                  <button aria-label="Clear search" onClick={() => setQuery("")} className="text-ink-3 hover:text-ink">
+                    <Icon name="x" size="sm" />
+                  </button>
+                ) : full ? (
+                  <Kbd className="hidden @xl:inline-flex">/</Kbd>
+                ) : null}
+              </label>
+              <FilterMenu
+                state={state}
+                filters={filters}
+                setFilter={setFilter}
+                count={filterCount}
+                onClear={() => setPrefs({ filters: {} })}
+              />
+              {prefs.view === "table" || prefs.view === "roadmap" ? (
+                <>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger className={tool(prefs.grouping !== "none")}>
+                      <Icon name="group" size="sm" />
+                      <span className="hidden @2xl:inline">
+                        {prefs.grouping === "none" ? "Group" : fieldLabel[prefs.grouping]}
+                      </span>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuLabel>Group rows by</DropdownMenuLabel>
+                      <DropdownMenuRadioGroup
+                        value={prefs.grouping}
+                        onValueChange={(v) => setPrefs({ grouping: v as Grouping })}
+                      >
+                        {groupings.map((g) => (
+                          <DropdownMenuRadioItem key={g} value={g}>
+                            <Icon name={fieldIcon[g as Exclude<Grouping, "none">]} />{" "}
+                            {fieldLabel[g as Exclude<Grouping, "none">]}
+                          </DropdownMenuRadioItem>
+                        ))}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuRadioItem value="none">
+                          <Icon name="list" /> No grouping
+                        </DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  {prefs.view === "table" ? (
+                    <FieldsMenu
+                      prefs={prefs}
+                      setPrefs={setPrefs}
+                      trigger={
+                        <button className={tool(prefs.columns.some((c) => c.hidden && c.id !== "updated"))}>
+                          <Icon name="columns" size="sm" />
+                          <span className="hidden @2xl:inline">Fields</span>
+                        </button>
+                      }
+                    />
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          </div>
+
+          {showChips ? (
+            <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-line bg-surface px-2 py-1.5 sm:px-4">
+              {filterFields
+                .filter((f) => filters[f]?.length)
+                .map((f) => (
+                  <span key={f} className="flex h-6 shrink-0 items-center border border-line-strong bg-raised text-xs">
+                    <Icon name={fieldIcon[f]} size="sm" className="ml-2 text-ink-3" />
+                    <span className="ml-1.5 text-ink-3">{fieldLabel[f]}</span>
+                    <span className="ml-1.5 max-w-48 truncate">
+                      {filters[f]!.map((v) => fieldOptions[f].find((o) => o.value === v)?.label ?? v).join(", ")}
+                    </span>
+                    <button
+                      aria-label={`Remove the ${fieldLabel[f].toLowerCase()} filter`}
+                      onClick={() => setFilter(f, [])}
+                      className="ml-1 grid h-full w-6 place-items-center border-l border-line text-ink-3 hover:bg-sunken hover:text-ink"
+                    >
+                      <Icon name="x" size="sm" />
+                    </button>
+                  </span>
+                ))}
+              {prefs.view === "table" && prefs.sort ? (
+                <span className="flex h-6 shrink-0 items-center border border-line-strong bg-raised text-xs">
+                  <Icon name="sort" size="sm" className="ml-2 text-ink-3" />
+                  <span className="ml-1.5 text-ink-3">Sorted by</span>
+                  <span className="ml-1.5">{prefs.sort.key === "id" ? "ID" : columnMeta[prefs.sort.key].label}</span>
+                  <Icon name={prefs.sort.dir === 1 ? "arrow-up" : "arrow-down"} size="sm" className="ml-1 text-lapis" />
+                  <button
+                    aria-label="Clear sort"
+                    onClick={() => setPrefs({ sort: null })}
+                    className="ml-1.5 grid h-full w-6 place-items-center border-l border-line text-ink-3 hover:bg-sunken hover:text-ink"
                   >
                     <Icon name="x" size="sm" />
                   </button>
                 </span>
-              ))}
-            {prefs.view === "table" && prefs.sort ? (
-              <span className="flex h-6 shrink-0 items-center border border-line-strong bg-raised text-xs">
-                <Icon name="sort" size="sm" className="ml-2 text-ink-3" />
-                <span className="ml-1.5 text-ink-3">Sorted by</span>
-                <span className="ml-1.5">{prefs.sort.key === "id" ? "ID" : columnMeta[prefs.sort.key].label}</span>
-                <Icon name={prefs.sort.dir === 1 ? "arrow-up" : "arrow-down"} size="sm" className="ml-1 text-lapis" />
+              ) : null}
+              {filterCount ? (
                 <button
-                  aria-label="Clear sort"
-                  onClick={() => setPrefs({ sort: null })}
-                  className="ml-1.5 grid h-full w-6 place-items-center border-l border-line text-ink-3 hover:bg-sunken hover:text-ink"
+                  onClick={() => setPrefs({ filters: {} })}
+                  className="ml-1 shrink-0 text-xs text-ink-3 hover:text-ink"
                 >
-                  <Icon name="x" size="sm" />
+                  Clear filters
                 </button>
-              </span>
-            ) : null}
-            {filterCount ? (
-              <button
-                onClick={() => setPrefs({ filters: {} })}
-                className="ml-1 shrink-0 text-xs text-ink-3 hover:text-ink"
-              >
-                Clear filters
-              </button>
-            ) : null}
-          </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <main className="min-h-0 flex-1">
+            {prefs.view === "table" ? (
+              <TableView
+                state={state}
+                dispatch={dispatch}
+                visible={visible}
+                onOpen={setOpenId}
+                prefs={prefs}
+                setPrefs={setPrefs}
+                filtered={filtered}
+                onClearFilters={clearFilters}
+              />
+            ) : prefs.view === "board" ? (
+              <BoardView
+                state={state}
+                dispatch={dispatch}
+                visible={visible}
+                onOpen={setOpenId}
+                prefs={prefs}
+                setPrefs={setPrefs}
+              />
+            ) : prefs.view === "roadmap" ? (
+              <TimelineView
+                state={state}
+                dispatch={dispatch}
+                visible={visible}
+                onOpen={setOpenId}
+                prefs={prefs}
+                setPrefs={setPrefs}
+                filtered={filtered}
+                onClearFilters={clearFilters}
+              />
+            ) : (
+              <PublicRoadmap state={state} dispatch={dispatch} visible={visible} onOpen={setOpenId} />
+            )}
+          </main>
+        </div>
+
+        {dialogUsed ? (
+          <TaskDialog
+            task={openId ? (state.tasks[openId] ?? null) : null}
+            dispatch={dispatch}
+            onClose={() => setOpenId(null)}
+            order={Object.values(state.columns)
+              .flat()
+              .filter((id) => state.tasks[id] && visible(state.tasks[id]))}
+            onOpen={setOpenId}
+          />
         ) : null}
-
-        <main className="min-h-0 flex-1">
-          {prefs.view === "table" ? (
-            <TableView
-              state={state}
-              dispatch={dispatch}
-              visible={visible}
-              onOpen={setOpenId}
-              prefs={prefs}
-              setPrefs={setPrefs}
-              filtered={filtered}
-              onClearFilters={clearFilters}
-            />
-          ) : prefs.view === "board" ? (
-            <BoardView
-              state={state}
-              dispatch={dispatch}
-              visible={visible}
-              onOpen={setOpenId}
-              prefs={prefs}
-              setPrefs={setPrefs}
-            />
-          ) : prefs.view === "roadmap" ? (
-            <TimelineView
-              state={state}
-              dispatch={dispatch}
-              visible={visible}
-              onOpen={setOpenId}
-              prefs={prefs}
-              setPrefs={setPrefs}
-              filtered={filtered}
-              onClearFilters={clearFilters}
-            />
-          ) : (
-            <PublicRoadmap state={state} dispatch={dispatch} visible={visible} onOpen={setOpenId} />
-          )}
-        </main>
+        {full ? <Shortcuts open={help} onOpenChange={setHelp} /> : null}
       </div>
-
-      <TaskDialog
-        task={openId ? (state.tasks[openId] ?? null) : null}
-        dispatch={dispatch}
-        onClose={() => setOpenId(null)}
-        order={Object.values(state.columns)
-          .flat()
-          .filter((id) => state.tasks[id] && visible(state.tasks[id]))}
-        onOpen={setOpenId}
-      />
-      {full ? <Shortcuts open={help} onOpenChange={setHelp} /> : null}
-    </div>
+    </TooltipProvider>
   );
 }
 
@@ -861,14 +890,14 @@ function Sidebar({
               <AccountButton />
               <span className="truncate text-xs text-ink-2">{live.me.name}</span>
             </span>
-            <ThemeToggle />
+            <ThemeToggle side="top" />
           </div>
         ) : full ? (
           <div className="mt-3 flex items-center justify-between">
             <button onClick={onReset} className="flex items-center gap-1.5 text-xs text-ink-3 hover:text-ink">
               <Icon name="reset" size="sm" /> Reset demo
             </button>
-            <ThemeToggle />
+            <ThemeToggle side="top" />
           </div>
         ) : null}
       </div>

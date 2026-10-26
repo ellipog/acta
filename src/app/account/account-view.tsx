@@ -8,10 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Avatar, Eyebrow, Spinner } from "@/components/ui/display";
 import { Icon, type IconName } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/overlays";
+import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import type { CurrentUser } from "@/lib/auth";
 import { avatarSide } from "@/lib/avatars";
-import { getBrowserClient } from "@/lib/supabase/client";
+import { loadClient } from "@/lib/supabase/browser";
 import { cn } from "@/lib/utils";
 import { changePicture, deleteAccount, rename } from "./actions";
 
@@ -241,7 +241,7 @@ export function AccountView({ user }: { user: CurrentUser }) {
           disabled={leaving}
           onClick={async () => {
             setLeaving(true);
-            await getBrowserClient().auth.signOut();
+            await (await loadClient()).auth.signOut();
             router.replace("/");
             router.refresh();
           }}

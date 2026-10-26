@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Icon, type IconName } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/display";
-import { getBrowserClient } from "@/lib/supabase/client";
+import { hasSession, loadClient } from "@/lib/supabase/browser";
 import { authReady, providers, safeNext } from "@/lib/supabase/env";
 
 const errors: Record<string, string> = {
@@ -32,9 +32,9 @@ export function LoginForm() {
   const [wait, setWait] = useState(0);
 
   useEffect(() => {
-    if (!authReady) return;
-    getBrowserClient()
-      .auth.getSession()
+    if (!authReady || !hasSession()) return;
+    void loadClient()
+      .then((supabase) => supabase.auth.getSession())
       .then(({ data }) => {
         if (data.session) router.replace(next);
       });
@@ -51,7 +51,7 @@ export function LoginForm() {
   const sendLink = async (address: string) => {
     setBusy("email");
     setProblem(null);
-    const { error } = await getBrowserClient().auth.signInWithOtp({
+    const { error } = await (await loadClient()).auth.signInWithOtp({
       email: address,
       options: { emailRedirectTo: callback() },
     });
@@ -73,7 +73,7 @@ export function LoginForm() {
     setBusy(provider);
     setProblem(null);
     track("sign_in_started", { method: provider });
-    const { error } = await getBrowserClient().auth.signInWithOAuth({ provider, options: { redirectTo: callback() } });
+    const { error } = await (await loadClient()).auth.signInWithOAuth({ provider, options: { redirectTo: callback() } });
     if (error) {
       setBusy(null);
       setProblem(errors.provider);

@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AppSkeleton } from "@/components/app-chrome";
-import { getSession, getWorkspaces } from "@/lib/workspace";
+import { getAuth, getWorkspaces } from "@/lib/workspace";
 
 export const metadata: Metadata = {
   title: "Acta",
@@ -19,8 +19,7 @@ export default function HomePage() {
 }
 
 async function Home() {
-  const session = await getSession();
-  if (!session) redirect("/login?next=/home");
+  if (!(await getAuth())) redirect("/login?next=/home");
   const workspaces = await getWorkspaces();
   if (!workspaces.length) redirect("/new");
   const [slug] = ((await cookies()).get("acta-last")?.value ?? "").split("/");

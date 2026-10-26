@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
-import { Wordmark } from "@/components/site-chrome";
+import { Wordmark } from "@/components/wordmark";
 import { Dither } from "@/components/ui/dither";
 
 export default function Error({ error, retry }: { error: unknown; retry: () => void }) {

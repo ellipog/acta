@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { DitherFill } from "./dither";
-import { Popover, PopoverContent, PopoverTrigger } from "./overlays";
+import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 import { PixelCaret, PixelCheck } from "./pixel";
 
 export type ColorValue = string;

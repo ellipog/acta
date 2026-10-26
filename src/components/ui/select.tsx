@@ -2,7 +2,7 @@
 
 import { Select as S } from "radix-ui";
 import { cn } from "@/lib/utils";
-import { Surface } from "./overlays";
+import { Surface } from "./surface";
 import { PixelCaret, PixelCheck } from "./pixel";
 
 export type SelectOption<V extends string = string> = {

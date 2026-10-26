@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { DemoAction } from "@/components/board-app/demo-state";
-import { Visitor } from "@/components/board-app/roadmap-view";
+import { Visitor } from "@/components/board-app/roadmap-page";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Avatar } from "@/components/ui/display";
 import { toast } from "@/components/ui/toast";
@@ -14,7 +14,7 @@ import {
   type PublicResult,
   type PublicRoadmapData,
 } from "@/lib/public-roadmap";
-import { getBrowserClient } from "@/lib/supabase/client";
+import { loadClient } from "@/lib/supabase/browser";
 
 function visitorId() {
   const found = document.cookie.match(new RegExp(`(?:^|; )${visitorCookie}=([^;]+)`));
@@ -56,7 +56,7 @@ export function PublicView({ data }: { data: PublicRoadmapData }) {
         return;
       }
       if (!left || Date.now() - left < 30_000 || busy.current) return;
-      const { data: fresh } = await getBrowserClient().rpc("public_roadmap", {
+      const { data: fresh } = await (await loadClient()).rpc("public_roadmap", {
         p_workspace: data.workspace.slug,
         p_board: data.board.slug,
         p_visitor: visitorId(),
@@ -87,7 +87,7 @@ export function PublicView({ data }: { data: PublicRoadmapData }) {
       const before = task.votes ?? 0;
       setState((s) => patchTask(s, action.id, Math.max(0, before + (on ? 1 : -1)), on));
       queue(action.id, async () => {
-        const { data: votes, error } = await getBrowserClient().rpc("public_vote", {
+        const { data: votes, error } = await (await loadClient()).rpc("public_vote", {
           p_board: board,
           p_number: number(action.id),
           p_visitor: visitorId(),
@@ -108,7 +108,7 @@ export function PublicView({ data }: { data: PublicRoadmapData }) {
         patchSuggestions(s, (list) => list.map((x) => (x.id === action.id ? { ...x, votes, voted } : x)));
       setState(set(Math.max(0, idea.votes + (on ? 1 : -1)), on));
       queue(action.id, async () => {
-        const { data: votes, error } = await getBrowserClient().rpc("public_vote_suggestion", {
+        const { data: votes, error } = await (await loadClient()).rpc("public_vote_suggestion", {
           p_suggestion: action.id,
           p_visitor: visitorId(),
           p_on: on,
@@ -136,7 +136,7 @@ export function PublicView({ data }: { data: PublicRoadmapData }) {
       };
       setState((s) => patchSuggestions(s, (list) => [idea, ...list]));
       queue(id, async () => {
-        const { data: saved, error } = await getBrowserClient().rpc("public_suggest", {
+        const { data: saved, error } = await (await loadClient()).rpc("public_suggest", {
           p_board: board,
           p_id: id,
           p_title: action.title,

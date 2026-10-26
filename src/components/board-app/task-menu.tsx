@@ -15,7 +15,7 @@ import {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
   ContextMenuTrigger,
-} from "@/components/ui/overlays";
+} from "@/components/ui/context-menu";
 import {
   people,
   personById,

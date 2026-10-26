@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
-import { Wordmark } from "@/components/site-chrome";
+import { Wordmark } from "@/components/wordmark";
 import { Dither } from "@/components/ui/dither";
 import { LoginForm } from "./login-form";
 
@@ -18,7 +18,7 @@ export default function LoginPage() {
         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-sunken via-sunken/80 to-transparent px-10 pt-24 pb-10">
           <p className="font-display text-4xl leading-tight">Things done, laid down in layers.</p>
           <p className="mt-3 max-w-sm text-sm text-ink-2">
-            Boards, tables and a public roadmap for small teams. Free for the work, always.
+            Boards, tables and a public roadmap. Free for the work, always.
           </p>
         </div>
       </aside>
