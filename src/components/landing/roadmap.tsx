@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Icon } from "@/components/ui/icons";
 import { StatusMarker } from "@/components/board";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/controls";
 import { Input } from "@/components/ui/input";
 import { DitherFill, DitherShadow, type DitherTone } from "@/components/ui/dither";
+import { actaRoadmapHref } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
 import { SectionMark } from "./parts";
 
@@ -25,7 +27,7 @@ const seed: Item[] = [
   { id: "r3", stage: "todo", votes: 128, title: "Recurring tasks", note: "Daily, weekly or on a weekday" },
   { id: "r4", stage: "todo", votes: 94, title: "Calendar view", note: "Tasks laid out by due date" },
   { id: "r5", stage: "todo", votes: 61, title: "GitHub sync", note: "Link issues and pull requests" },
-  { id: "r6", stage: "done", votes: 143, title: "Command palette", note: "Jump anywhere with ⌘K" },
+  { id: "r6", stage: "done", votes: 143, title: "Keyboard shortcuts", note: "Press ? on any board" },
   { id: "r7", stage: "done", votes: 119, title: "Realtime boards", note: "Every change, live for everyone" },
 ];
 
@@ -57,10 +59,18 @@ export function RoadmapSection() {
             <SectionMark n="V" rock="Quartz" base="depth-4" tone="lapis" level={50} />
             <h2 className="mt-4 font-display text-4xl sm:text-5xl">Build in the open.</h2>
           </div>
-          <p className="max-w-md text-ink-2 md:justify-self-end">
-            Give any board a public roadmap. Visitors vote and suggest, you decide what gets built, and shipped
-            work stays on the record. It’s off until you turn it on.
-          </p>
+          <div className="max-w-md md:justify-self-end">
+            <p className="text-ink-2">
+              Give any board a public roadmap. Visitors vote and suggest, you decide what gets built, and shipped
+              work stays on the record. It’s off until you turn it on.
+            </p>
+            <Link
+              href={actaRoadmapHref}
+              className="mt-3 inline-flex items-center gap-1.5 text-sm text-lapis underline underline-offset-4 hover:text-ink"
+            >
+              See Acta’s own roadmap <Icon name="arrow-right" size="sm" />
+            </Link>
+          </div>
         </div>
 
         <DitherShadow offset={8} className="mt-12">

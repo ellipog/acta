@@ -112,6 +112,7 @@ export function publicMeta(data: PublicRoadmapData): BoardMeta {
     meId: "visitor",
     workspace: data.workspace.slug,
     team: data.workspace.name,
+    prefix: data.board.prefix,
     live: false,
     labels: [],
     projects: data.board.projects ?? [],

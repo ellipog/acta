@@ -129,23 +129,3 @@ function PaletteItem({
     </Command.Item>
   );
 }
-
-export function HeaderSearch() {
-  return (
-    <CommandPalette
-      trigger={(open) => (
-        <button
-          onClick={open}
-          className="hidden h-8 items-center gap-2 border border-line bg-raised px-2.5 text-sm text-ink-3 hover:border-line-strong hover:text-ink-2 sm:flex"
-        >
-          <Icon name="search" size="sm" />
-          Search
-          <span className="ml-3 flex gap-0.5">
-            <Kbd>⌘</Kbd>
-            <Kbd>K</Kbd>
-          </span>
-        </button>
-      )}
-    />
-  );
-}

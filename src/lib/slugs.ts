@@ -71,11 +71,19 @@ export function slugify(input: string) {
     .slice(0, SLUG_MAX);
 }
 
-export function slugProblem(slug: string): string | null {
+function shapeProblem(slug: string): string | null {
   if (slug.length < SLUG_MIN) return `At least ${SLUG_MIN} characters.`;
   if (slug.endsWith("-")) return "It can’t end with a hyphen.";
-  if (reserved.has(slug)) return "That name is reserved.";
   return null;
+}
+
+export function slugProblem(slug: string): string | null {
+  return shapeProblem(slug) ?? (reserved.has(slug) ? "That name is reserved." : null);
+}
+
+// Boards sit under a workspace, so only the workspace's own routes are off limits
+export function boardSlugProblem(slug: string): string | null {
+  return shapeProblem(slug) ?? (slug === "settings" ? "That name is reserved." : null);
 }
 
 export const publicPath = (workspace: string, board?: string) =>
@@ -85,3 +93,5 @@ const publicOrigin = process.env.NEXT_PUBLIC_PUBLIC_ORIGIN?.replace(/\/+$/, "");
 
 export const publicHref = (workspace: string, board: string) =>
   publicOrigin ? `${publicOrigin}/${workspace}/${board}` : `/p/${workspace}/${board}`;
+
+export const actaRoadmapHref = publicHref("aaen-studios", "acta");

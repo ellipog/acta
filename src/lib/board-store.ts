@@ -150,6 +150,7 @@ export type BoardMeta = {
   projects: Project[];
   workspace: string;
   team: string;
+  prefix: string;
   live: boolean;
 };
 
@@ -158,6 +159,7 @@ export const demoMeta: BoardMeta = {
   meId: "elliot",
   workspace: "ellipog",
   team: "Ellipog Team",
+  prefix: "ACT",
   live: false,
   people: [
     { id: "elliot", name: "Elliot Saaen", tone: "lapis" },
@@ -191,6 +193,7 @@ export const me = {
   id: demoMeta.meId,
   workspace: demoMeta.workspace,
   team: demoMeta.team,
+  prefix: demoMeta.prefix,
   live: demoMeta.live,
 };
 
@@ -199,6 +202,7 @@ export function setBoardMeta(meta: BoardMeta) {
   me.id = meta.meId;
   me.workspace = meta.workspace;
   me.team = meta.team;
+  me.prefix = meta.prefix;
   me.live = meta.live;
   people.splice(0, people.length, ...meta.people);
   labels.splice(0, labels.length, ...meta.labels);
@@ -211,6 +215,8 @@ export const newId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
+
+export const nextTaskId = (state: BoardState) => `${me.prefix}-${state.next}`;
 
 export const personById = (id?: string) => people.find((p) => p.id === id);
 export const labelTone = (id: string) => labels.find((l) => l.id === id)?.tone ?? "lapis";
@@ -677,7 +683,7 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
       return action.ids.reduce((s, id) => patchTask(s, id, action.patch, action.note), state);
 
     case "add": {
-      const id = `ACT-${state.next}`;
+      const id = nextTaskId(state);
       const status = action.patch?.status ?? action.status;
       const task: Task = {
         id,

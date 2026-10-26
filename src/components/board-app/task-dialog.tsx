@@ -18,6 +18,7 @@ import { toast } from "@/components/ui/toast";
 import {
   formatDue,
   labelTone,
+  me,
   people,
   stageOf,
   timeAgo,
@@ -163,7 +164,8 @@ function TaskBody({
               <button
                 aria-label="Copy link"
                 onClick={() => {
-                  navigator.clipboard?.writeText(`${location.origin}/demo#${task.id}`).catch(() => {});
+                  const path = me.live ? location.pathname : "/demo";
+                  navigator.clipboard?.writeText(`${location.origin}${path}#${task.id}`).catch(() => {});
                   toast({ icon: "link", title: "Link copied", description: task.id, duration: 1800 });
                 }}
                 className={nav}

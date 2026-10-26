@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { HeaderSearch } from "@/components/command-palette";
 import { AccountButton, HeaderCta } from "@/components/account-button";
 import { LogoMark } from "@/components/ui/logo-mark";
 import { ditherAssets } from "@/lib/dither-assets";
+import { actaRoadmapHref } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
 
 export { LogoMark };
@@ -24,12 +24,10 @@ export function SiteHeader() {
         <Wordmark />
         <nav className="hidden items-center gap-5 text-sm text-ink-2 md:flex">
           <Link href="/#board" className="hover:text-ink">Product</Link>
-          <Link href="/#roadmap" className="hover:text-ink">Roadmap</Link>
           <Link href="/demo" className="hover:text-ink">Demo</Link>
-          <Link href="/library" className="hover:text-ink">Library</Link>
+          <Link href={actaRoadmapHref} className="hover:text-ink">Roadmap</Link>
         </nav>
         <div className="ml-auto flex items-center gap-1.5">
-          <HeaderSearch />
           <ThemeToggle />
           <AccountButton />
           <HeaderCta />

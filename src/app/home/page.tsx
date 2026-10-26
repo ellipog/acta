@@ -23,8 +23,8 @@ async function Home() {
   if (!session) redirect("/login?next=/home");
   const workspaces = await getWorkspaces();
   if (!workspaces.length) redirect("/new");
-  const last = (await cookies()).get("acta-last")?.value ?? "";
-  const [slug, board] = last.split("/");
+  const [slug] = ((await cookies()).get("acta-last")?.value ?? "").split("/");
   const known = workspaces.find((w) => w.slug === slug);
-  return redirect(known ? `/${known.slug}${board ? `/${board}` : ""}` : `/${workspaces[0].slug}`);
+  // The workspace page picks the last board, and checks it still exists
+  return redirect(`/${known ? known.slug : workspaces[0].slug}`);
 }

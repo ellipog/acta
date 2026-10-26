@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { Icon } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
-import { Kbd } from "@/components/ui/badge";
 import { Dither } from "@/components/ui/dither";
 import { ditherAssets } from "@/lib/dither-assets";
+import { authReady } from "@/lib/supabase/env";
 
 const notes = [
   { x: 63, y: 21, side: "right", rock: "Kaibab Fm.", status: "Todo", note: "youngest layer" },
@@ -26,7 +26,7 @@ export function Hero() {
               in layers.
             </h1>
             <p className="mt-7 max-w-md text-lg leading-relaxed text-ink-2">
-              A calm project manager for small teams. Boards, tables, custom fields and a public roadmap, and
+              A calm project manager for small teams. Boards, tables, a timeline and a public roadmap, and
               nothing you’ll have to dig through.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
@@ -35,13 +35,11 @@ export function Hero() {
                   Open the demo <Icon name="arrow-right" />
                 </Link>
               </Button>
-              <Button size="lg" asChild>
-                <Link href="/library">Design library</Link>
-              </Button>
-              <span className="ml-1 hidden items-center gap-1.5 text-sm text-ink-3 sm:flex">
-                or press <Kbd>⌘</Kbd>
-                <Kbd>K</Kbd>
-              </span>
+              {authReady ? (
+                <Button size="lg" asChild>
+                  <Link href="/new">Start a board</Link>
+                </Button>
+              ) : null}
             </div>
           </div>
 

@@ -119,12 +119,14 @@ const specimens: { no: string; art: DitherName; name: string; habit: string; fac
   {
     no: "06",
     art: "crystal-shard",
-    name: "Your own",
-    habit: "Text, number, date or select",
-    facets: "Cut a new field for any board.",
+    name: "Labels",
+    habit: "Multi select",
+    facets: "As many as a task needs, each in its own ink.",
     sample: (
-      <span className="flex h-6 items-center gap-1 border border-dashed border-line-strong px-2 text-[11px] text-ink-3">
-        <Icon name="plus" size="sm" /> Add field
+      <span className="flex gap-1">
+        <Badge tone="lapis">Feature</Badge>
+        <Badge tone="hematite">Bug</Badge>
+        <Badge tone="pyrite">Design</Badge>
       </span>
     ),
   },
@@ -140,8 +142,8 @@ export function FieldsSection() {
             <h2 className="mt-4 font-display text-4xl sm:text-5xl">A cabinet of fields.</h2>
           </div>
           <p className="max-w-md text-ink-2 md:justify-self-end">
-            Every board starts with a set of fields, and you can cut your own. Each has a habit, the way a crystal
-            does: the shape its values take.
+            Every board comes with the same set of fields, and each board keeps its own labels and projects. Each
+            field has a habit, the way a crystal does: the shape its values take.
           </p>
         </div>
 

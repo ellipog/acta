@@ -4,7 +4,7 @@ import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
 import type { Label, Project } from "./board-store";
 import type { Role } from "./live";
-import { slugify, slugProblem } from "./slugs";
+import { boardSlugProblem, slugify, slugProblem } from "./slugs";
 import { createClient } from "./supabase/server";
 import { readBoardState } from "./workspace";
 
@@ -41,7 +41,7 @@ export async function createWorkspace(_: ActionResult, form: FormData): Promise<
     p_name: name,
     p_slug: slug,
     p_board_name: boardName,
-    p_board_slug: slugProblem(boardSlug) ? `${boardSlug}-board`.slice(0, 32) : boardSlug,
+    p_board_slug: boardSlugProblem(boardSlug) ? `${boardSlug}-board`.slice(0, 32) : boardSlug,
   });
   if (error) {
     if (error.code === "23505") return { ok: false, message: "That address is taken. Try another." };
@@ -56,7 +56,7 @@ export async function createWorkspace(_: ActionResult, form: FormData): Promise<
 
 async function freeBoardSlug(supabase: Awaited<ReturnType<typeof createClient>>, workspaceId: string, name: string) {
   let base = slugify(name).replace(/-+$/, "");
-  if (slugProblem(base)) base = `${base || "board"}-board`.slice(0, 28).replace(/-+$/, "");
+  if (boardSlugProblem(base)) base = `${base || "board"}-board`.slice(0, 28).replace(/-+$/, "");
   const { data } = await supabase.from("boards").select("slug").eq("workspace_id", workspaceId);
   const taken = new Set((data ?? []).map((b) => b.slug));
   if (!taken.has(base)) return base;
@@ -87,11 +87,18 @@ export async function renameBoard(_: ActionResult, form: FormData): Promise<Acti
   const { supabase } = await signedIn();
   const id = text(form, "board", 64);
   const name = text(form, "name");
+  const slug = text(form, "slug", 32);
   if (!name) return { ok: false, message: "A board needs a name." };
-  const { error } = await supabase.from("boards").update({ name }).eq("id", id);
-  if (error) return { ok: false, message: "That didn’t save." };
+  const problem = slug ? boardSlugProblem(slug) : null;
+  if (problem) return { ok: false, message: `The address: ${problem.toLowerCase()}` };
+  const { error } = await supabase
+    .from("boards")
+    .update(slug ? { name, slug } : { name })
+    .eq("id", id);
+  if (error)
+    return { ok: false, message: error.code === "23505" ? "Another board here has that address." : "That didn’t save." };
   refresh();
-  return { ok: true, message: "Renamed." };
+  return { ok: true, message: "Saved." };
 }
 
 export async function saveBoardMeta(boardId: string, labels: Label[], projects: Project[]): Promise<ActionResult> {

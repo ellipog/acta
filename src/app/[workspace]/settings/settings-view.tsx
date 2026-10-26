@@ -36,7 +36,7 @@ import {
 } from "@/lib/actions";
 import type { Label, Project, Tone } from "@/lib/board-store";
 import { roleLabel, type Me, type Member, type Role, type WorkspaceSummary } from "@/lib/live";
-import { publicHost, SLUG_MAX, slugify, slugProblem } from "@/lib/slugs";
+import { boardSlugProblem, publicHost, SLUG_MAX, slugify, slugProblem } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
 
 type BoardInfo = { id: string; slug: string; name: string; labels: Label[]; projects: Project[] };
@@ -376,7 +376,7 @@ function BoardRow({
           {board.labels.length} labels · {board.projects.length} projects
         </p>
       </div>
-      <BoardEditor board={board} />
+      <BoardEditor board={board} workspace={workspace} />
       {canDelete ? (
         <Dialog onOpenChange={() => setConfirm("")}>
           <DialogTrigger
@@ -432,21 +432,25 @@ function ToneButton<T extends string>({ tone, tones, onChange }: { tone: T; tone
   );
 }
 
-function BoardEditor({ board }: { board: BoardInfo }) {
+function BoardEditor({ board, workspace }: { board: BoardInfo; workspace: WorkspaceSummary }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(board.name);
+  const [slug, setSlug] = useState(board.slug);
   const [labels, setLabels] = useState(board.labels);
   const [projects, setProjects] = useState(board.projects);
   const [pending, start] = useTransition();
   const labelTones: Tone[] = ["lapis", "pyrite", "malachite", "hematite"];
   const projectTones: (Tone | "ink")[] = ["lapis", "pyrite", "malachite", "hematite", "ink"];
+  const cleanSlug = slug.replace(/-+$/, "");
+  const problem = cleanSlug === board.slug ? null : boardSlugProblem(cleanSlug);
 
   const save = () =>
     start(async () => {
-      if (name.trim() !== board.name) {
+      if (name.trim() !== board.name || cleanSlug !== board.slug) {
         const form = new FormData();
         form.set("board", board.id);
         form.set("name", name);
+        if (cleanSlug !== board.slug) form.set("slug", cleanSlug);
         const r = await renameBoard(null, form);
         if (r && !r.ok) return say(r);
       }
@@ -462,6 +466,7 @@ function BoardEditor({ board }: { board: BoardInfo }) {
         setOpen(o);
         if (o) {
           setName(board.name);
+          setSlug(board.slug);
           setLabels(board.labels);
           setProjects(board.projects);
         }
@@ -481,6 +486,36 @@ function BoardEditor({ board }: { board: BoardInfo }) {
               Name
             </label>
             <Input id={`name-${board.id}`} value={name} onChange={(e) => setName(e.target.value)} maxLength={60} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor={`slug-${board.id}`} className="text-xs font-medium text-ink-2">
+              Address
+            </label>
+            <div
+              className={cn(
+                "flex h-9 items-center border bg-raised text-sm focus-within:ring-2",
+                problem
+                  ? "border-hematite focus-within:ring-hematite/25"
+                  : "border-line-strong focus-within:border-lapis focus-within:ring-lapis/25",
+              )}
+            >
+              <span className="max-w-[55%] shrink-0 truncate border-r border-line bg-sunken px-2 font-mono text-[11px] leading-[2.15rem] text-ink-3">
+                {publicHost}/{workspace.slug}/
+              </span>
+              <input
+                id={`slug-${board.id}`}
+                value={slug}
+                maxLength={SLUG_MAX}
+                spellCheck={false}
+                aria-invalid={Boolean(problem)}
+                onChange={(e) => setSlug(slugify(e.target.value))}
+                onBlur={() => setSlug(cleanSlug)}
+                className="h-full min-w-0 flex-1 bg-transparent px-2 font-mono text-[13px] outline-none"
+              />
+            </div>
+            <p className={cn("text-[11px]", problem ? "text-hematite" : "text-ink-3")}>
+              {problem ?? "Changing it changes the links to this board and its public roadmap."}
+            </p>
           </div>
           <div className="flex flex-col gap-2">
             <p className="text-xs font-medium text-ink-2">Labels</p>
@@ -559,7 +594,7 @@ function BoardEditor({ board }: { board: BoardInfo }) {
           <DialogClose asChild>
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
-          <Button variant="primary" onClick={save} disabled={pending || !name.trim()}>
+          <Button variant="primary" onClick={save} disabled={pending || !name.trim() || Boolean(problem)}>
             {pending ? <Spinner className="[&>span.spin-cell]:bg-on-accent/40" /> : null} Save
           </Button>
         </div>

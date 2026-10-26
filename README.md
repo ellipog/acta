@@ -1,36 +1,63 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Acta
 
-## Getting Started
+Latin for “things done.” A calm project manager for small teams: boards, tables, a timeline, custom fields,
+workspaces with roles, live collaboration and an opt-in public roadmap with votes and suggestions.
 
-First, run the development server:
+Built with Next.js 16 (App Router, Cache Components), React 19, Tailwind CSS 4 and Supabase (auth, Postgres,
+realtime and storage).
+
+## Running it
 
 ```bash
+npm install
+cp .env.example .env.local
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The app runs at http://localhost:3000. Without Supabase keys the marketing site, `/demo` and `/library` still
+work; the demo board saves to the browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Environment
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Variable | What it does |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | The project’s publishable (anon) key |
+| `SUPABASE_SECRET_KEY` | Secret key, server only. Used for avatar uploads and account deletion |
+| `NEXT_PUBLIC_AUTH_PROVIDERS` | Comma-separated sign-in methods: `email`, `google`, `github` |
+| `NEXT_PUBLIC_PUBLIC_ORIGIN` | Optional. The origin public roadmaps are served from, e.g. `https://acta.page` |
 
-## Learn More
+### Supabase
 
-To learn more about Next.js, take a look at the following resources:
+1. Apply everything in `supabase/migrations` in order (`supabase db push`, or paste each file into the SQL
+   editor). They create the tables, row-level security, RPCs, the `avatars` storage bucket and the realtime
+   publication.
+2. Under Authentication → URL configuration, add `<your origin>/auth/callback` as a redirect URL.
+3. Enable the OAuth providers you list in `NEXT_PUBLIC_AUTH_PROVIDERS`.
+4. Admins (who can see `/admin` analytics) come from `public.admin_emails`. Insert your address there.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Public roadmaps
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Each board can publish a roadmap page. It lives at `/p/<workspace>/<board>`. If you point a second domain at
+the app (`acta.page` in `src/lib/slugs.ts`), requests to `acta.page/<workspace>/<board>` are rewritten there
+by `src/proxy.ts`.
 
-## Deploy on Vercel
+## Scripts
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Start the dev server |
+| `npm run build` | Production build |
+| `npm run lint` | ESLint |
+| `npm run dither` | Re-render the one-bit images in `public/dither` from `assets/source` |
+| `npm run logo` | Re-draw the favicon and app icons from `src/lib/logo.ts` |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Layout
+
+```
+src/app            routes: landing, /demo, /login, /new, /[workspace]/[board], /p (public roadmaps), /library (unlisted UI kit)
+src/components     board app (board, table, timeline, roadmap views), landing sections, UI kit
+src/lib            board state and reducer, sync with Supabase, server actions, slugs
+supabase           SQL migrations
+assets             source images and dither recipes
+```

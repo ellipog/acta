@@ -7,6 +7,7 @@ import { Icon, type IconName } from "@/components/ui/icons";
 import {
   demoMeta,
   me,
+  nextTaskId,
   people,
   seedBoard,
   setBoardMeta,
@@ -17,6 +18,7 @@ import {
 } from "@/lib/board-store";
 import { createBoard } from "@/lib/actions";
 import { metaFor, type LiveBoard } from "@/lib/live";
+import { authReady } from "@/lib/supabase/env";
 import { AccountButton } from "@/components/account-button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarStack, Spinner } from "@/components/ui/display";
@@ -76,13 +78,13 @@ import { useBoardSync, type SaveStatus, type Visitor } from "./use-board-sync";
 const BOARD_KEY = "acta-demo-board-v5";
 const PREFS_KEY = "acta-demo-prefs-v1";
 
-const workspaces: { name: string; sigil: DitherName; tone: "lapis" | "pyrite" | "malachite" }[] = [
-  { name: "Ellipog Team", sigil: "crystal-cluster", tone: "lapis" },
-  { name: "Personal", sigil: "crystal-prism", tone: "pyrite" },
-  { name: "Side project", sigil: "crystal-tablet", tone: "malachite" },
-];
+const demoWorkspace: { name: string; sigil: DitherName; tone: "lapis" } = {
+  name: "Ellipog Team",
+  sigil: "crystal-cluster",
+  tone: "lapis",
+};
 
-const boards = ["Portfolio site", "Mobile app", "Brand refresh"];
+const demoBoard = "Portfolio site";
 
 const views: { id: View; icon: IconName; label: string }[] = [
   { id: "table", icon: "table", label: "Table" },
@@ -169,7 +171,6 @@ export function BoardApp({
 
   const [query, setQuery] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
-  const [workspace, setWorkspace] = useState(workspaces[0]);
   const [navOpen, setNavOpen] = useState(false);
   const [help, setHelp] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -201,16 +202,24 @@ export function BoardApp({
     } catch {}
   }, [full, restored, prefs, prefsKey]);
 
+  // Restoring only happens in the browser, so the link in the address bar can be read here
+  const [linked, setLinked] = useState(false);
+  if (full && restored && !linked) {
+    setLinked(true);
+    const id = decodeURIComponent(location.hash.slice(1));
+    if (state.tasks[id]) setOpenId(id);
+  }
+
   const lastPath = live ? `${live.workspace.slug}/${live.board.slug}` : null;
   useEffect(() => {
     if (lastPath) document.cookie = `acta-last=${lastPath}; path=/; max-age=31536000; samesite=lax`;
   }, [lastPath]);
 
   const createTask = useCallback(() => {
-    const id = `ACT-${state.next}`;
+    const id = nextTaskId(state);
     rawDispatch({ type: "add", status: "todo", title: "Untitled task" });
     setOpenId(id);
-  }, [state.next]);
+  }, [state]);
 
   useEffect(() => {
     if (!full) return;
@@ -272,8 +281,6 @@ export function BoardApp({
       state={state}
       prefs={prefs}
       setPrefs={setPrefs}
-      workspace={workspace}
-      setWorkspace={setWorkspace}
       onOpenTask={(id) => {
         setNavOpen(false);
         setOpenId(id);
@@ -315,7 +322,7 @@ export function BoardApp({
             </D.Root>
           ) : null}
           <div className="flex min-w-0 items-center gap-2.5">
-            <h2 className="truncate font-display text-lg leading-none">{live ? live.board.name : "Portfolio site"}</h2>
+            <h2 className="truncate font-display text-lg leading-none">{live ? live.board.name : demoBoard}</h2>
             {live ? <SaveState status={status} /> : null}
             {state.roadmap.public ? (
               <Tooltip content="The roadmap is public">
@@ -692,8 +699,6 @@ function Sidebar({
   state,
   prefs,
   setPrefs,
-  workspace,
-  setWorkspace,
   onOpenTask,
   onNavigate,
   onReset,
@@ -703,8 +708,6 @@ function Sidebar({
   state: BoardState;
   prefs: Prefs;
   setPrefs: (patch: Partial<Prefs>) => void;
-  workspace: (typeof workspaces)[number];
-  setWorkspace: (w: (typeof workspaces)[number]) => void;
   onOpenTask: (id: string) => void;
   onNavigate: () => void;
   onReset: () => void;
@@ -718,7 +721,6 @@ function Sidebar({
       "flex h-8 w-full items-center gap-2 px-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-lapis",
       active ? "bg-lapis-soft text-lapis-ink" : "text-ink-2 hover:bg-sunken hover:text-ink",
     );
-  const current = live ? live.workspace : workspace;
 
   return (
     <>
@@ -728,52 +730,53 @@ function Sidebar({
           {live ? null : <Badge tone="pyrite">Demo</Badge>}
         </div>
       ) : null}
-      <DropdownMenu>
-        <DropdownMenuTrigger className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3 text-left outline-none hover:bg-sunken focus-visible:bg-sunken">
-          <Avatar name={current.name} sigil={current.sigil} tone={current.tone} size="sm" />
-          <span className="truncate text-sm font-medium">{current.name}</span>
-          <PixelCaret className="ml-auto text-ink-3" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-60">
-          <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
-          {live ? (
-            <>
-              {live.workspaces.map((w) => (
-                <DropdownMenuItem key={w.id} asChild>
-                  <Link href={`/${w.slug}`}>
-                    <Avatar name={w.name} sigil={w.sigil} tone={w.tone} size="xs" />
-                    <span className="truncate">{w.name}</span>
-                    {w.id === live.workspace.id ? <Icon name="check" className="ml-auto text-lapis" /> : null}
-                  </Link>
-                </DropdownMenuItem>
-              ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <Link href={`/${live.workspace.slug}/settings`}>
-                  <Icon name="settings" /> Settings and members
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link href="/new">
-                  <Icon name="plus" /> New workspace
-                </Link>
-              </DropdownMenuItem>
-            </>
-          ) : (
-            <DropdownMenuRadioGroup
-              value={workspace.name}
-              onValueChange={(name) => setWorkspace(workspaces.find((w) => w.name === name) ?? workspaces[0])}
-            >
-              {workspaces.map((w) => (
-                <DropdownMenuRadioItem key={w.name} value={w.name}>
+      {full && !live && authReady ? (
+        <Link
+          href="/new"
+          className="flex h-9 shrink-0 items-center gap-2 border-b border-line bg-lapis-soft px-3 text-xs text-lapis-ink hover:bg-lapis hover:text-on-accent"
+        >
+          <Icon name="plus" size="sm" />
+          Start your own board
+          <Icon name="arrow-right" size="sm" className="ml-auto" />
+        </Link>
+      ) : null}
+      {live ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3 text-left outline-none hover:bg-sunken focus-visible:bg-sunken">
+            <Avatar name={live.workspace.name} sigil={live.workspace.sigil} tone={live.workspace.tone} size="sm" />
+            <span className="truncate text-sm font-medium">{live.workspace.name}</span>
+            <PixelCaret className="ml-auto text-ink-3" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-60">
+            <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
+            {live.workspaces.map((w) => (
+              <DropdownMenuItem key={w.id} asChild>
+                <Link href={`/${w.slug}`}>
                   <Avatar name={w.name} sigil={w.sigil} tone={w.tone} size="xs" />
-                  {w.name}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+                  <span className="truncate">{w.name}</span>
+                  {w.id === live.workspace.id ? <Icon name="check" className="ml-auto text-lapis" /> : null}
+                </Link>
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link href={`/${live.workspace.slug}/settings`}>
+                <Icon name="settings" /> Settings and members
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href="/new">
+                <Icon name="plus" /> New workspace
+              </Link>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : (
+        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
+          <Avatar name={demoWorkspace.name} sigil={demoWorkspace.sigil} tone={demoWorkspace.tone} size="sm" />
+          <span className="truncate text-sm font-medium">{demoWorkspace.name}</span>
+        </div>
+      )}
 
       <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2 text-sm">
         <Inbox state={state} onOpenTask={onOpenTask} className={item(false)} />
@@ -813,26 +816,12 @@ function Sidebar({
                 </Link>
               ),
             )
-          : boards.map((b, i) =>
-              i === 0 ? (
-                <button key={b} className={item(!onlyMine)} onClick={onNavigate}>
-                  <Icon name="board" size="sm" />
-                  <span className="truncate">{b}</span>
-                  <span className="ml-auto font-mono text-[11px] text-ink-3">{total}</span>
-                </button>
-              ) : (
-                <Tooltip key={b} content="Only Portfolio site is in the demo" side="right">
-                  <button
-                    className={cn(item(false), "cursor-default")}
-                    onClick={() =>
-                      toast({ icon: "board", title: b, description: "Only Portfolio site is in the demo." })
-                    }
-                  >
-                    <Icon name="board" size="sm" />
-                    <span className="truncate">{b}</span>
-                  </button>
-                </Tooltip>
-              ),
+          : (
+              <button className={item(!onlyMine)} onClick={onNavigate} aria-current="page">
+                <Icon name="board" size="sm" />
+                <span className="truncate">{demoBoard}</span>
+                <span className="ml-auto font-mono text-[11px] text-ink-3">{total}</span>
+              </button>
             )}
         <p className="mt-4 mb-1 px-2 font-mono text-[11px] text-ink-3">Views</p>
         {views.map((v) => (
@@ -1073,7 +1062,7 @@ function Shortcuts({ open, onOpenChange }: { open: boolean; onOpenChange: (o: bo
     <D.Root open={open} onOpenChange={onOpenChange}>
       <DialogContent
         title="Keyboard shortcuts"
-        description="Everything in the demo works from the keyboard."
+        description="Everything on the board works from the keyboard."
         className="max-w-2xl"
       >
         <div className="grid gap-x-8 gap-y-6 sm:grid-cols-2">

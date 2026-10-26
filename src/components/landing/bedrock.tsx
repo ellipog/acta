@@ -3,6 +3,8 @@ import { Icon } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import { Dither } from "@/components/ui/dither";
 import { CreditList, Wordmark } from "@/components/site-chrome";
+import { actaRoadmapHref } from "@/lib/slugs";
+import { authReady } from "@/lib/supabase/env";
 import { SectionMark } from "./parts";
 
 const TIP = { x: 224, y: 404 };
@@ -103,18 +105,20 @@ export function BedrockSection() {
               asChild
               className="border-pyrite bg-pyrite text-bedrock hover:border-bedrock-ink hover:bg-bedrock-ink"
             >
-              <Link href="/demo">
-                Open the demo <Icon name="arrow-right" />
+              <Link href={authReady ? "/new" : "/demo"}>
+                {authReady ? "Start a board" : "Open the demo"} <Icon name="arrow-right" />
               </Link>
             </Button>
-            <Button
-              size="lg"
-              variant="ghost"
-              asChild
-              className="border-bedrock-2 text-bedrock-muted hover:bg-bedrock-2 hover:text-bedrock-ink"
-            >
-              <Link href="/library">Browse the library</Link>
-            </Button>
+            {authReady ? (
+              <Button
+                size="lg"
+                variant="ghost"
+                asChild
+                className="border-bedrock-2 text-bedrock-muted hover:bg-bedrock-2 hover:text-bedrock-ink"
+              >
+                <Link href="/demo">Open the demo</Link>
+              </Button>
+            ) : null}
           </div>
 
           <dl className="mt-14 grid max-w-xs grid-cols-[5.5rem_1fr] gap-y-1 border-t border-bedrock-2 pt-4 font-mono text-[11px]">
@@ -135,6 +139,17 @@ export function BedrockSection() {
             <p className="mt-3 max-w-xs text-sm text-bedrock-muted">
               Acta, Latin for “things done.” A project manager for small teams, built in layers.
             </p>
+            <nav aria-label="Footer" className="mt-6 flex gap-4 text-xs text-bedrock-muted">
+              <Link href={actaRoadmapHref} className="hover:text-bedrock-ink">
+                Roadmap
+              </Link>
+              <Link href="/privacy" className="hover:text-bedrock-ink">
+                Privacy
+              </Link>
+              <Link href="/terms" className="hover:text-bedrock-ink">
+                Terms
+              </Link>
+            </nav>
           </div>
           <div id="credits">
             <p className="font-mono text-[11px] tracking-[0.14em] text-bedrock-muted uppercase">Image credits</p>

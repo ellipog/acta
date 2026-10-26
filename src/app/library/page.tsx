@@ -39,6 +39,7 @@ import { labels, projects, seedBoard, sizes } from "@/lib/board-store";
 export const metadata: Metadata = {
   title: "Library · Acta",
   description: "Acta’s tokens, icons, textures and components, all in one place.",
+  robots: { index: false, follow: false },
 };
 
 const chapters = [

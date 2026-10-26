@@ -34,7 +34,7 @@ export function HeaderCta() {
           Open Acta <Icon name="arrow-right" />
         </Link>
       ) : (
-        <Link href="/demo">
+        <Link href={authReady ? "/new" : "/demo"}>
           <span className="sm:hidden">Start</span>
           <span className="hidden sm:inline">Start a board</span>
           <Icon name="arrow-right" />

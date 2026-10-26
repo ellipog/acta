@@ -38,6 +38,7 @@ export function metaFor(live: LiveBoard): BoardMeta {
     projects: live.board.projects,
     workspace: live.workspace.slug,
     team: live.workspace.name,
+    prefix: live.board.prefix,
     live: true,
   };
 }

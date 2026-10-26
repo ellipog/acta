@@ -31,6 +31,7 @@ import {
   defaultPage,
   formatDue,
   me,
+  nextTaskId,
   personById,
   stageOf,
   statusTitle,
@@ -44,7 +45,7 @@ import {
   type Task,
   type Tone,
 } from "@/lib/board-store";
-import { publicHost, publicHref, publicPath, SLUG_MAX, slugify, slugProblem } from "@/lib/slugs";
+import { boardSlugProblem, publicHost, publicHref, publicPath, SLUG_MAX, slugify } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
 import type { Zoom } from "./fields";
@@ -405,7 +406,7 @@ function Manage({
                       <button
                         aria-label={`Accept “${s.title}”`}
                         onClick={() => {
-                          const id = `ACT-${state.next}`;
+                          const id = nextTaskId(state);
                           dispatch({ type: "acceptSuggestion", id: s.id });
                           toast({
                             icon: "check",
@@ -548,7 +549,7 @@ function Toggle({
 function SlugField({ value, onCommit }: { value: string; onCommit: (slug: string) => void }) {
   const [draft, setDraft] = useState<string | null>(null);
   const trim = (s: string) => s.replace(/-+$/, "");
-  const problem = draft === null ? null : slugProblem(trim(draft));
+  const problem = draft === null ? null : boardSlugProblem(trim(draft));
   return (
     <>
       <div
@@ -575,7 +576,7 @@ function SlugField({ value, onCommit }: { value: string; onCommit: (slug: string
           onChange={(e) => {
             const next = slugify(e.target.value);
             setDraft(next);
-            if (!slugProblem(trim(next))) onCommit(trim(next));
+            if (!boardSlugProblem(trim(next))) onCommit(trim(next));
           }}
           className="h-full min-w-0 flex-1 bg-transparent px-2 font-mono text-[13px] outline-none"
         />
@@ -583,7 +584,7 @@ function SlugField({ value, onCommit }: { value: string; onCommit: (slug: string
       <p id="page-slug-hint" className={cn("text-[11px]", problem ? "text-hematite" : "text-ink-3")}>
         {problem ??
           (me.live
-            ? "The board’s address. Rename the board in workspace settings to change it."
+            ? "The board’s address. Change it under Edit in workspace settings."
             : "Letters, numbers and hyphens. Old links keep redirecting after a change.")}
       </p>
     </>
