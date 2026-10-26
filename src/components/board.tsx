@@ -136,20 +136,22 @@ export function TaskCard({
           ))}
         </div>
       ) : null}
-      <div className="mt-3 flex min-h-6 items-center gap-2.5 text-[11px] whitespace-nowrap text-ink-3">
-        <PriorityIcon priority={task.priority} />
-        <SubtaskCells subtasks={task.subtasks} />
-        {task.due ? <DueLabel due={task.due} done={done} /> : null}
-        {task.comments ? (
-          <span className="flex items-center gap-1 font-mono">
-            <Icon name="comment" size="sm" />
-            {task.comments}
-          </span>
-        ) : null}
-        {task.size ? <span className="font-mono uppercase">{task.size}</span> : null}
+      <div className="mt-3 flex min-h-6 items-center gap-2.5 text-[11px] text-ink-3">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-1.5 whitespace-nowrap">
+          <PriorityIcon priority={task.priority} />
+          <SubtaskCells subtasks={task.subtasks} />
+          {task.due ? <DueLabel due={task.due} done={done} /> : null}
+          {task.comments ? (
+            <span className="flex items-center gap-1 font-mono">
+              <Icon name="comment" size="sm" />
+              {task.comments}
+            </span>
+          ) : null}
+          {task.size ? <span className="font-mono uppercase">{task.size}</span> : null}
+        </div>
         {person ? (
           <Tooltip content={person.name}>
-            <span className="ml-auto">
+            <span className="shrink-0">
               <Avatar name={person.name} src={person.avatar} tone={person.tone} size="sm" />
             </span>
           </Tooltip>
