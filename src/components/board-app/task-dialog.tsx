@@ -16,6 +16,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { Select } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import {
+  closed,
   formatDue,
   labelTone,
   me,
@@ -309,17 +310,19 @@ function TaskBody({
               ) : null}
               <ol className="mt-3 space-y-4">
                 {thread.map((c) => {
-                  const person = people.find((p) => p.name.startsWith(c.who));
+                  // A comment brought over from elsewhere shows who wrote it there, then who added it here
+                  const person = c.from ? undefined : people.find((p) => p.name.startsWith(c.who));
                   return (
                     <li key={c.id} className="flex gap-3">
                       {person ? (
                         <Avatar name={person.name} src={person.avatar} tone={person.tone} size="sm" />
                       ) : (
-                        <Avatar name={c.who} tone="lapis" size="sm" />
+                        <Avatar name={c.from ?? c.who} tone={c.from ? "pyrite" : "lapis"} size="sm" />
                       )}
                       <div className="min-w-0 flex-1">
                         <p className="text-xs">
-                          <span className="font-medium">{c.who}</span>
+                          <span className="font-medium">{c.from ?? c.who}</span>
+                          {c.from ? <span className="text-ink-3"> · added by {c.who}</span> : null}
                           {c.via ? <span className="text-ink-3"> via {c.via}</span> : null}
                           <span className="ml-1.5 font-mono text-[11px] text-ink-3">{timeAgo(c.at, now)}</span>
                         </p>
@@ -399,7 +402,7 @@ function TaskBody({
                 <DatePicker
                   aria-label="Due date"
                   placeholder="None"
-                  due={task.status !== "done"}
+                  due={!closed(task.status)}
                   value={task.due}
                   onChange={(d) => update({ due: d }, d ? `set the due date to ${formatDue(d)}` : "removed the due date")}
                   className="px-2"

@@ -44,6 +44,12 @@ export function StatusMarker({ status, className }: { status: StatusCategory; cl
       );
     case "done":
       return <span aria-label="Done" className={cn(base, "border-malachite bg-malachite", className)} />;
+    case "canceled":
+      return (
+        <span aria-label="Canceled" className={cn(base, "border-ink-3", className)}>
+          <span className="absolute inset-x-px top-1/2 h-px -translate-y-1/2 bg-ink-3" />
+        </span>
+      );
   }
 }
 

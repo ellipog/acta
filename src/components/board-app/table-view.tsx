@@ -25,6 +25,7 @@ import { Select } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import { useNow } from "@/lib/hooks";
 import {
+  closed,
   formatDue,
   labels,
   labelTone,
@@ -76,6 +77,7 @@ const statusTone: Record<StatusCategory, DitherTone> = {
   in_progress: "pyrite",
   review: "lapis",
   done: "malachite",
+  canceled: "line",
 };
 
 const selectFields = ["status", "assignee", "priority", "size", "project"] as const satisfies readonly GroupField[];
@@ -130,7 +132,8 @@ export function TableView({
         rows: rows.filter((r) => valueOf(r, grouping)[0] === o.value),
         patch: patchFor(grouping, o.value),
       }))
-      .filter((g) => g.rows.length || (grouping === "status" && !filteringThis));
+      // Canceled only shows once something is in it
+      .filter((g) => g.rows.length || (grouping === "status" && !filteringThis && g.key !== "status:canceled"));
   }, [rows, grouping, prefs.filters, filtered]);
 
   const isCollapsed = (g: Group) => prefs.collapsed.includes(g.key);
@@ -388,7 +391,7 @@ export function TableView({
     (acc, t) => [acc[0] + t.subtasks.filter((s) => s.done).length, acc[1] + t.subtasks.length],
     [0, 0],
   );
-  const overdue = rows.filter((t) => t.status !== "done" && dueState(t.due, today) === "overdue").length;
+  const overdue = rows.filter((t) => !closed(t.status) && dueState(t.due, today) === "overdue").length;
   const assignees = [...new Set(rows.map((t) => t.assignee).filter(Boolean))].map((id) => personById(id)!);
   const projectsUsed = new Set(rows.map((t) => t.project).filter(Boolean)).size;
   const urgent = rows.filter((t) => t.priority === "urgent").length;
@@ -437,7 +440,7 @@ export function TableView({
         return (
           <DatePicker
             variant="cell"
-            due={t.status !== "done"}
+            due={!closed(t.status)}
             tabIndex={tab}
             aria-label={label}
             placeholder=""
@@ -478,14 +481,14 @@ export function TableView({
         );
       case "subtasks":
         return (
-          <span className="flex h-full items-center px-3 text-[11px] text-ink-3">
+          <span onClick={() => onOpen(t.id)} className="flex h-full cursor-pointer items-center px-3 text-[11px] text-ink-3">
             <SubtaskCells subtasks={t.subtasks} />
           </span>
         );
       case "updated": {
         const last = t.activity.at(-1);
         return (
-          <span className="flex h-full items-center px-3">
+          <span onClick={() => onOpen(t.id)} className="flex h-full cursor-pointer items-center px-3">
             {last && now ? (
               <Tooltip content={`${last.who} ${last.text}`}>
                 <span className="font-mono text-[11px] text-ink-3">{timeAgo(last.at, now)}</span>
@@ -776,7 +779,10 @@ export function TableView({
                                   </td>
                                 );
                               })}
-                              <td className={cn(cellClass(isSel), "border-r-0")} />
+                              <td
+                                onClick={() => onOpen(t.id)}
+                                className={cn(cellClass(isSel), "cursor-pointer border-r-0")}
+                              />
                             </tr>
                           </TaskMenu>
                         );
@@ -877,7 +883,7 @@ function TitleCell({
   onDone: (value: string | null, fromKeyboard: boolean) => void;
   onOpen: () => void;
 }) {
-  const done = task.status === "done";
+  const done = closed(task.status);
   // Enter and blur can both end an edit; only the first counts
   const ended = useRef(false);
   const end = (value: string | null, fromKeyboard: boolean) => {
@@ -908,11 +914,11 @@ function TitleCell({
     );
   }
   return (
-    <div className="flex h-9 min-w-0 items-center gap-2.5 pr-1.5 pl-3">
+    // The whole cell opens the task, not just the words. Double-click the title to rename it
+    <div onClick={onOpen} className="flex h-9 min-w-0 cursor-pointer items-center gap-2.5 pr-1.5 pl-3">
       <span className="w-[3.25rem] shrink-0 font-mono text-[11px] text-ink-3">{task.id}</span>
       <button
         tabIndex={tabIndex}
-        onClick={onOpen}
         onDoubleClick={(e) => {
           e.preventDefault();
           onEdit();
@@ -935,7 +941,10 @@ function TitleCell({
           <button
             tabIndex={-1}
             aria-label={`Rename ${task.id}`}
-            onClick={onEdit}
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit();
+            }}
             className="grid size-6 place-items-center text-ink-3 hover:bg-sunken hover:text-ink"
           >
             <Icon name="pencil" size="sm" />
@@ -945,7 +954,10 @@ function TitleCell({
           <button
             tabIndex={-1}
             aria-label={`Open ${task.id}`}
-            onClick={onOpen}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen();
+            }}
             className="grid size-6 place-items-center text-ink-3 hover:bg-sunken hover:text-ink"
           >
             <Icon name="panel" size="sm" />

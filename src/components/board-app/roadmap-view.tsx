@@ -174,7 +174,7 @@ function Manage({
   const now = useNow();
   const page = state.roadmap.page;
   const all = Object.values(state.tasks);
-  const items = all.filter((t) => t.public && visible(t));
+  const items = all.filter((t) => t.public && t.status !== "canceled" && visible(t));
   const max = Math.max(1, ...all.filter((t) => t.public).map((t) => t.votes ?? 0));
   const hidden = all.filter((t) => !t.public).sort((a, b) => a.title.localeCompare(b.title));
   const ideas = [...state.roadmap.suggestions].sort((a, b) => b.votes - a.votes);

@@ -41,6 +41,7 @@ export type CommentRow = {
   body: string;
   created_at: string;
   via?: string | null;
+  author_name?: string | null;
 };
 export type ActivityRow = {
   id: string;
@@ -470,6 +471,7 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
             at: Date.parse(ev.row.created_at),
             body: ev.row.body,
             via: ev.row.via ?? undefined,
+            from: ev.row.author_name ?? undefined,
           },
         };
       return ev.old ? { kind: "uncomment", id: ev.old.id } : { kind: "none" };
@@ -540,7 +542,7 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
       }
       if (c.add) {
         if (prev) return state;
-        const column = [...state.columns[c.add.status]];
+        const column = [...(state.columns[c.add.status] ?? [])];
         column.splice(Math.max(0, Math.min(Math.round(c.position), column.length)), 0, c.id);
         return {
           ...state,
@@ -558,7 +560,7 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
       const task = { ...prev, ...patch };
       let columns = state.columns;
       if (patch.status && patch.status !== prev.status) {
-        const to = [...columns[patch.status]].filter((x) => x !== c.id);
+        const to = [...(columns[patch.status] ?? [])].filter((x) => x !== c.id);
         to.splice(Math.max(0, Math.min(Math.round(c.position), to.length)), 0, c.id);
         columns = { ...columns, [prev.status]: columns[prev.status].filter((x) => x !== c.id), [patch.status]: to };
       }
@@ -586,7 +588,8 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
     case "activity": {
       const t = state.tasks[c.task];
       if (!t || t.activity.some((x) => x.id === c.entry.id)) return state;
-      return { ...state, tasks: { ...state.tasks, [c.task]: { ...t, activity: [...t.activity, c.entry] } } };
+      const activity = [...t.activity, c.entry].sort((a, b) => a.at - b.at);
+      return { ...state, tasks: { ...state.tasks, [c.task]: { ...t, activity } } };
     }
     case "unactivity": {
       const entry = Object.values(state.tasks).find((t) => t.activity.some((x) => x.id === c.id));
@@ -622,4 +625,37 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
       };
     }
   }
+}
+
+export type Gone = { comments: Set<string>; activity: Set<string>; suggestions: Set<string> };
+
+// Comments, activity and ideas are deleted outright, so the only sign one is gone is a newer copy of the board
+// without it. This lists what an older copy had that a newer one doesn't, for tasks both still have
+export function goneSince(before: BoardState, after: BoardState): Gone | null {
+  const gone: Gone = { comments: new Set(), activity: new Set(), suggestions: new Set() };
+  for (const [id, was] of Object.entries(before.tasks)) {
+    const now = after.tasks[id];
+    if (!now) continue;
+    const comments = new Set((now.thread ?? []).map((c) => c.id));
+    for (const c of was.thread ?? []) if (!comments.has(c.id)) gone.comments.add(c.id);
+    const activity = new Set(now.activity.map((a) => a.id));
+    for (const a of was.activity) if (a.id && !activity.has(a.id)) gone.activity.add(a.id);
+  }
+  const ideas = new Set(after.roadmap.suggestions.map((s) => s.id));
+  for (const s of before.roadmap.suggestions) if (!ideas.has(s.id)) gone.suggestions.add(s.id);
+  return gone.comments.size || gone.activity.size || gone.suggestions.size ? gone : null;
+}
+
+export function dropGone(state: BoardState, gone: Gone): BoardState {
+  let tasks = state.tasks;
+  for (const [id, t] of Object.entries(state.tasks)) {
+    const thread = t.thread?.filter((c) => !gone.comments.has(c.id));
+    const activity = t.activity.filter((a) => !a.id || !gone.activity.has(a.id));
+    if (thread?.length === t.thread?.length && activity.length === t.activity.length) continue;
+    if (tasks === state.tasks) tasks = { ...state.tasks };
+    tasks[id] = { ...t, thread, comments: thread?.length ?? t.comments, activity };
+  }
+  const suggestions = state.roadmap.suggestions.filter((s) => !gone.suggestions.has(s.id));
+  if (tasks === state.tasks && suggestions.length === state.roadmap.suggestions.length) return state;
+  return { ...state, tasks, roadmap: { ...state.roadmap, suggestions } };
 }

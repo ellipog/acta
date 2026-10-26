@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/display";
 import { DitherFill } from "@/components/ui/dither";
-import { labelTone, personById, type Priority, type Size, type StatusCategory, type Task } from "@/lib/board-store";
+import { closed, labelTone, personById, type Priority, type Size, type StatusCategory, type Task } from "@/lib/board-store";
 import { Tooltip } from "@/components/ui/tooltip";
 import { DueLabel } from "@/components/ui/date-picker";
 import { PriorityIcon, StatusMarker } from "@/components/markers";
@@ -38,7 +38,7 @@ export function TaskCard({
   ...props
 }: { task: Task; dragging?: boolean } & React.ComponentProps<"article">) {
   const person = personById(task.assignee);
-  const done = task.status === "done";
+  const done = closed(task.status);
   const card = (
     <article
       className={cn(

@@ -20,7 +20,8 @@ import { accessRank, agentDb, type Access, type Agent } from "./keys";
 export class Problem extends Error {}
 
 export const openStatuses: StatusCategory[] = ["todo", "in_progress", "review"];
-export const taskStatuses = ["todo", "in_progress", "review", "done"] as const;
+export const taskStatuses = ["todo", "in_progress", "review", "done", "canceled"] as const;
+export const sortKeys = ["priority", "due", "start", "created", "updated", "size", "title", "votes"] as const;
 const tones: Tone[] = ["lapis", "pyrite", "malachite", "hematite"];
 
 type Role = "owner" | "admin" | "member";
@@ -76,7 +77,18 @@ export type TaskInput = {
   public?: boolean;
 };
 
+// A comment, possibly brought over from elsewhere with who wrote it there and when
+export type CommentInput = { body: string; author?: string; at?: string };
+
+export type NewTask = TaskInput & {
+  subtasks?: string[];
+  created?: string;
+  shipped?: string;
+  comments?: CommentInput[];
+};
+
 export type TaskPatch = TaskInput & {
+  shipped?: string | null;
   add_labels?: string[];
   remove_labels?: string[];
   add_subtasks?: string[];
@@ -123,6 +135,33 @@ function day(value: string | null | undefined, field: string) {
   if (!ok) throw new Problem(`${field} must be a date like 2026-11-02.`);
   return value;
 }
+
+// A date or a time that has passed, for work brought over from elsewhere. A bare date counts as midday UTC,
+// so it lands on the same day almost everywhere
+function moment(value: string | undefined, field: string) {
+  if (!value?.trim()) return undefined;
+  const text = value.trim();
+  const bare = /^\d{4}-\d{2}-\d{2}$/.test(text);
+  const at = Date.parse(bare ? `${text}T12:00:00Z` : text);
+  if (Number.isNaN(at)) throw new Problem(`${field} must be a date like 2026-11-02 or a time like 2026-11-02T14:30:00Z.`);
+  if (!bare && at > Date.now() + 60_000) throw new Problem(`${field} can’t be in the future.`);
+  return new Date(Math.min(at, Date.now())).toISOString();
+}
+
+const priorityRank: Record<Priority, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
+const sizeRank: Record<Size, number> = { xs: 0, s: 1, m: 2, l: 3, xl: 4 };
+
+// What each sort compares, in its natural order. Tasks without a value go last
+const sortValue: Record<(typeof sortKeys)[number], (t: TaskRow) => string | number | null> = {
+  priority: (t) => (t.priority === "none" ? null : priorityRank[t.priority]),
+  due: (t) => t.due_on,
+  start: (t) => t.start_on,
+  created: (t) => Date.parse(t.created_at),
+  updated: (t) => -Date.parse(t.updated_at),
+  size: (t) => (t.size ? sizeRank[t.size] : null),
+  title: (t) => t.title.toLowerCase(),
+  votes: (t) => -t.vote_count,
+};
 
 function boardRef(ref: string) {
   let path = ref
@@ -313,6 +352,18 @@ export function actaFor(agent: Agent) {
     );
   }
 
+  function commentRow(number: number, c: CommentInput) {
+    const body = c.body?.trim();
+    if (!body) throw new Problem("A comment can’t be empty.");
+    return {
+      id: randomUUID(),
+      number,
+      body,
+      author_name: c.author?.trim().slice(0, 60) || undefined,
+      created_at: moment(c.at, "at"),
+    };
+  }
+
   async function apply(b: Board, changes: Record<string, unknown>) {
     const { data, error } = await db.rpc("agent_apply", { p_key: agent.hash, p_board: b.id, p_changes: changes });
     if (error) throw dbProblem(error);
@@ -345,7 +396,7 @@ export function actaFor(agent: Agent) {
     const [{ data: comments }, { data: activity }] = await Promise.all([
       db
         .from("comments")
-        .select("id, author, body, created_at, via, agent_key")
+        .select("*")
         .eq("board_id", b.id)
         .eq("number", t.number)
         .order("created_at"),
@@ -366,7 +417,8 @@ export function actaFor(agent: Agent) {
         ? (comments ?? []).map((c) =>
             compact({
               id: c.id,
-              by: who(c.author),
+              by: c.author_name ?? who(c.author),
+              added_by: c.author_name ? who(c.author) : undefined,
               via: c.via,
               at: c.created_at,
               body: c.body,
@@ -503,16 +555,20 @@ export function actaFor(agent: Agent) {
       return detail(b, await row(b, task));
     },
 
-    async createTasks(ref: string, list: (TaskInput & { subtasks?: string[] })[]) {
+    async createTasks(ref: string, list: NewTask[]) {
       const b = await board(ref);
       const sizes = new Map<StatusCategory, number>();
       const created: Record<string, unknown>[] = [];
       const newPublic = pageFrom(b.name, b.slug, b.page).newTasksPublic;
       const activity: Record<string, unknown>[] = [];
+      const comments: Record<string, unknown>[] = [];
       for (const [i, t] of list.entries()) {
         const title = t.title?.trim();
         if (!title) throw new Problem(`Task ${i + 1} needs a title.`);
         const status = t.status ?? "todo";
+        if (t.shipped && status !== "done")
+          throw new Problem(`Task ${i + 1} has a shipped date, so its status should be done.`);
+        const at = moment(t.created, "created");
         if (!sizes.has(status)) sizes.set(status, await columnSize(b, status));
         const position = sizes.get(status)!;
         sizes.set(status, position + 1);
@@ -531,16 +587,21 @@ export function actaFor(agent: Agent) {
           description: t.description ?? "",
           subtasks: (t.subtasks ?? []).map((s) => ({ id: `s${randomUUID().slice(0, 8)}`, title: s, done: false })),
           public: t.public ?? newPublic,
-          shipped_on: status === "done" ? today() : null,
+          shipped_on: status === "done" ? (day(t.shipped, "shipped") ?? today()) : null,
           position,
+          created_at: at,
         });
-        activity.push({ id: randomUUID(), number, text: "created the task" });
+        activity.push({ id: randomUUID(), number, text: "created the task", created_at: at });
+        for (const c of t.comments ?? []) comments.push(commentRow(number, c));
       }
-      const { moved } = await apply(b, { created, activity });
+      const { moved } = await apply(b, { created, comments, activity });
       const numbers = created.map((c) => moved[String(c.number)] ?? (c.number as number));
       return {
         board: b.ref,
-        created: numbers.map((n, i) => ({ id: taskId(b, n), title: created[i].title, url: taskUrl(b, n) })),
+        created: numbers.map((n, i) =>
+          compact({ id: taskId(b, n), title: created[i].title, url: taskUrl(b, n), public: created[i].public || undefined }),
+        ),
+        public_by_default: newPublic,
       };
     },
 
@@ -566,6 +627,15 @@ export function actaFor(agent: Agent) {
         else if (t.status === "done") fields.shipped_on = null;
         notes.push(`moved it to ${statusTitle[p.status]}`);
         order = [{ number: t.number, position: await columnSize(b, p.status) }];
+      }
+      const shipped = day(p.shipped, "shipped");
+      if (shipped !== undefined) {
+        if (shipped && ((fields.status as StatusCategory | undefined) ?? t.status) !== "done")
+          throw new Problem("Only done tasks have a shipped date. Set status to done as well.");
+        if (shipped !== ("shipped_on" in fields ? fields.shipped_on : t.shipped_on)) {
+          fields.shipped_on = shipped;
+          notes.push(shipped ? `set the shipped date to ${formatDue(shipped)}` : "removed the shipped date");
+        }
       }
       if (p.priority && p.priority !== t.priority) {
         fields.priority = p.priority;
@@ -682,16 +752,106 @@ export function actaFor(agent: Agent) {
       });
     },
 
-    async comment(ref: string, task: string, body: string) {
+    async comment(ref: string, task: string, c: CommentInput) {
       const b = await board(ref);
       const t = await row(b, task);
-      if (!body.trim()) throw new Problem("A comment can’t be empty.");
-      const id = randomUUID();
+      const made = commentRow(t.number, c);
       await apply(b, {
-        comments: [{ id, number: t.number, body: body.trim() }],
-        activity: [{ id: randomUUID(), number: t.number, text: "commented" }],
+        comments: [made],
+        activity: [{ id: randomUUID(), number: t.number, text: "commented", created_at: made.created_at }],
       });
-      return { comment: id, task: taskId(b, t.number), url: taskUrl(b, t.number) };
+      return { comment: made.id, task: taskId(b, t.number), url: taskUrl(b, t.number) };
+    },
+
+    // Changes several tasks one after another. A task that can't change is reported and the rest carry on
+    async updateTasks(ref: string, list: (TaskPatch & { task: string })[]) {
+      const updated: Record<string, unknown>[] = [];
+      const failed: { task: string; problem: string }[] = [];
+      for (const { task, ...patch } of list) {
+        try {
+          updated.push({ id: task, ...(await this.updateTask(ref, task, patch)) });
+        } catch (error) {
+          if (!(error instanceof Problem)) throw error;
+          failed.push({ task, problem: error.message });
+        }
+      }
+      return compact({ board: ref, updated, failed });
+    },
+
+    // Sorts a column by a field, or puts the given tasks at its top in that order
+    async sortColumn(
+      ref: string,
+      p: { status: StatusCategory; by?: (typeof sortKeys)[number]; reverse?: boolean; tasks?: string[] },
+    ) {
+      const b = await board(ref);
+      if (!p.by === !p.tasks?.length) throw new Problem("Pass by, to sort the column, or tasks, to set its order.");
+      const { data, error } = await db
+        .from("tasks")
+        .select(listFields)
+        .eq("board_id", b.id)
+        .eq("status", p.status)
+        .is("deleted_at", null)
+        .order("position")
+        .order("number");
+      if (error) throw dbProblem(error);
+      const rows = (data ?? []) as unknown as TaskRow[];
+      let sorted: TaskRow[];
+      if (p.by) {
+        const value = sortValue[p.by];
+        const flip = p.reverse ? -1 : 1;
+        sorted = [...rows].sort((x, y) => {
+          const a = value(x);
+          const c = value(y);
+          if (a === null || c === null) return a === c ? 0 : a === null ? 1 : -1;
+          return (typeof a === "string" ? a.localeCompare(String(c)) : a - Number(c)) * flip;
+        });
+      } else {
+        const first = [...new Set((p.tasks ?? []).map((r) => numberOf(b, r)))];
+        const missing = first.filter((n) => !rows.some((r) => r.number === n));
+        if (missing.length)
+          throw new Problem(
+            `${missing.map((n) => taskId(b, n)).join(", ")} ${missing.length === 1 ? "isn’t" : "aren’t"} in ${statusTitle[p.status]}.`,
+          );
+        sorted = [...first.map((n) => rows.find((r) => r.number === n)!), ...rows.filter((r) => !first.includes(r.number))];
+      }
+      // Positions are rewritten whole, so a column left uneven by earlier moves comes out tidy too
+      await apply(b, { order: sorted.map((r, position) => ({ number: r.number, position })) });
+      return {
+        board: b.ref,
+        status: p.status,
+        order: sorted.map((r) => `${taskId(b, r.number)} ${r.title}`),
+      };
+    },
+
+    async activity(ref: string, f: { since?: string; limit?: number }) {
+      const b = await board(ref);
+      const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
+      let q = db.from("activity").select("number, actor, text, created_at, via").eq("board_id", b.id);
+      const since = moment(f.since, "since");
+      if (since) q = q.gt("created_at", since);
+      const { data, error } = await q.order("created_at", { ascending: false }).limit(limit);
+      if (error) throw dbProblem(error);
+      const numbers = [...new Set((data ?? []).map((a) => a.number as number))];
+      const [who, { data: titles }] = await Promise.all([
+        nameOf(b.workspace_id),
+        numbers.length
+          ? db.from("tasks").select("number, title").eq("board_id", b.id).in("number", numbers)
+          : Promise.resolve({ data: [] as { number: number; title: string }[] }),
+      ]);
+      const titleOf = new Map((titles ?? []).map((t) => [t.number as number, t.title as string]));
+      return {
+        board: b.ref,
+        activity: (data ?? []).map((a) =>
+          compact({
+            task: taskId(b, a.number),
+            title: titleOf.get(a.number),
+            by: who(a.actor),
+            via: a.via,
+            at: a.created_at,
+            text: a.text,
+          }),
+        ),
+      };
     },
 
     async editComment(ref: string, id: string, body: string) {
@@ -893,8 +1053,10 @@ export function actaFor(agent: Agent) {
       p: {
         name?: string;
         add_labels?: { name: string; tone?: Tone }[];
+        update_labels?: { label: string; name?: string; tone?: Tone }[];
         remove_labels?: string[];
         add_projects?: { name: string; tone?: Tone | "ink" }[];
+        update_projects?: { project: string; name?: string; tone?: Tone | "ink" }[];
         remove_projects?: string[];
       },
     ) {
@@ -907,6 +1069,17 @@ export function actaFor(agent: Agent) {
         const id = l.name.trim().slice(0, 40);
         if (id && !labels.some((x) => same(x.id, id))) labels.push({ id, tone: l.tone ?? tones[labels.length % 4] });
       }
+      // Renaming a label renames it on every task that has it
+      const relabel = new Map<string, string>();
+      for (const u of p.update_labels ?? []) {
+        const id = pickLabels(b, [u.label])[0];
+        const i = labels.findIndex((l) => l.id === id);
+        const name = u.name?.trim().slice(0, 40) || id;
+        if (name !== id && labels.some((l, j) => j !== i && same(l.id, name)))
+          throw new Problem(`${b.ref} already has a label “${name}”.`);
+        if (name !== id) relabel.set(id, name);
+        labels[i] = { id: name, tone: u.tone ?? labels[i].tone };
+      }
       const goneLabels = (p.remove_labels ?? []).map((n) => pickLabels(b, [n])[0]);
       const nextLabels = labels.filter((l) => !goneLabels.includes(l.id)).slice(0, 30);
       if (JSON.stringify(nextLabels) !== JSON.stringify(b.labels ?? [])) fields.labels = nextLabels;
@@ -916,6 +1089,16 @@ export function actaFor(agent: Agent) {
         const name = pr.name.trim().slice(0, 40);
         if (name && !projects.some((x) => same(x.name, name)))
           projects.push({ name, tone: pr.tone ?? tones[projects.length % 4] });
+      }
+      const reproject = new Map<string, string>();
+      for (const u of p.update_projects ?? []) {
+        const was = pickProject(b, u.project)!;
+        const i = projects.findIndex((x) => x.name === was);
+        const name = u.name?.trim().slice(0, 40) || was;
+        if (name !== was && projects.some((x, j) => j !== i && same(x.name, name)))
+          throw new Problem(`${b.ref} already has a project “${name}”.`);
+        if (name !== was) reproject.set(was, name);
+        projects[i] = { name, tone: u.tone ?? projects[i].tone };
       }
       const goneProjects = (p.remove_projects ?? []).map((n) => pickProject(b, n));
       const nextProjects = projects.filter((x) => !goneProjects.includes(x.name)).slice(0, 30);
@@ -930,12 +1113,32 @@ export function actaFor(agent: Agent) {
         });
         if (error) throw dbProblem(error);
       }
-      return {
+
+      let retagged = 0;
+      if (relabel.size || reproject.size) {
+        const [{ data: tagged }, { data: planned }] = await Promise.all([
+          relabel.size
+            ? db.from("tasks").select("number, labels").eq("board_id", b.id).overlaps("labels", [...relabel.keys()])
+            : Promise.resolve({ data: [] as { number: number; labels: string[] }[] }),
+          reproject.size
+            ? db.from("tasks").select("number, project").eq("board_id", b.id).in("project", [...reproject.keys()])
+            : Promise.resolve({ data: [] as { number: number; project: string }[] }),
+        ]);
+        const changed = new Map<number, Record<string, unknown>>();
+        for (const t of tagged ?? [])
+          changed.set(t.number, { labels: (t.labels as string[]).map((l) => relabel.get(l) ?? l) });
+        for (const t of planned ?? [])
+          changed.set(t.number, { ...changed.get(t.number), project: reproject.get(t.project as string) });
+        if (changed.size) await apply(b, { updated: [...changed].map(([number, fields]) => ({ number, fields })) });
+        retagged = changed.size;
+      }
+      return compact({
         board: b.ref,
         name: (fields.name as string) ?? b.name,
-        labels: nextLabels.map((l) => l.id),
-        projects: nextProjects.map((x) => x.name),
-      };
+        labels: nextLabels.map((l) => ({ name: l.id, tone: l.tone })),
+        projects: nextProjects.map((x) => ({ name: x.name, tone: x.tone })),
+        tasks_updated: retagged || undefined,
+      });
     },
 
     async updateRoadmap(

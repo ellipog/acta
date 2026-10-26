@@ -152,7 +152,15 @@ const ring = [0, 1, 2, 5, 8, 7, 6, 3];
 
 export function Spinner({ label = "Loading", className }: { label?: string; className?: string }) {
   return (
-    <span role="status" aria-label={label} className={cn("inline-grid size-3 grid-cols-3 gap-px", className)}>
+    // Cells of three art pixels with one between them, so all nine stay the same size at any display scale
+    <span
+      role="status"
+      aria-label={label}
+      className={cn(
+        "inline-grid size-[calc(11*var(--px))] grid-cols-[repeat(3,calc(3*var(--px)))] grid-rows-[repeat(3,calc(3*var(--px)))] gap-(--px)",
+        className,
+      )}
+    >
       {Array.from({ length: 9 }, (_, i) => {
         const step = ring.indexOf(i);
         return (

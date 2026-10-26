@@ -1,3 +1,4 @@
+import { pixelBox } from "@/lib/pixel";
 import { cn } from "@/lib/utils";
 
 const art = {
@@ -737,6 +738,7 @@ export function Icon({
       aria-label={label}
       aria-hidden={label ? undefined : true}
       className={cn("pixel shrink-0 fill-current", className)}
+      style={pixelBox(9, 9, scales[size])}
     >
       <path d={paths[name]} />
     </svg>

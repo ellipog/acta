@@ -196,7 +196,9 @@ export function Visitor({
   const [collapsed, setCollapsed] = useState<string[]>([]);
 
   const q = query.trim().toLowerCase();
-  const all = Object.values(state.tasks).filter((x) => x.public && (page.showShipped || stageOf(x) !== "shipped"));
+  const all = Object.values(state.tasks).filter(
+    (x) => x.public && x.status !== "canceled" && (page.showShipped || stageOf(x) !== "shipped"),
+  );
   const items = all.filter((x) => !q || x.title.toLowerCase().includes(q) || x.description.toLowerCase().includes(q));
   const max = Math.max(1, ...all.map((x) => x.votes ?? 0));
   const order = page.sort === "date" ? byDue : byVotes;

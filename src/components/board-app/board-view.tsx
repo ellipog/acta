@@ -141,6 +141,8 @@ export function BoardView({ state, dispatch, visible, onOpen, prefs, setPrefs }:
   };
 
   const active = activeId ? state.tasks[activeId] : null;
+  // Canceled shows once something is in it, or while a card is carried there
+  const shown = statuses.filter((s) => s.id !== "canceled" || state.columns.canceled.length || activeId);
 
   return (
     <DndContext
@@ -153,7 +155,7 @@ export function BoardView({ state, dispatch, visible, onOpen, prefs, setPrefs }:
       onDragCancel={onDragCancel}
     >
       <div className="flex h-full snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain p-3 sm:snap-none">
-        {statuses.map((s) => {
+        {shown.map((s) => {
           const ids = state.columns[s.id].filter((id) => state.tasks[id] && visible(state.tasks[id]));
           const points = ids.reduce((n, id) => n + (state.tasks[id].size ? sizePoints[state.tasks[id].size!] : 0), 0);
           return (
@@ -189,6 +191,7 @@ const band: Record<StatusCategory, { tone: DitherTone; level: 12 | 25 | 50 | 75 
   in_progress: { tone: "pyrite", level: 50 },
   review: { tone: "lapis", level: 50 },
   done: { tone: "malachite", level: 75 },
+  canceled: { tone: "line", level: 25 },
 };
 
 function Column({

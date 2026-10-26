@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useActionState, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useActionState, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Dialog as D } from "radix-ui";
 import { Icon, type IconName } from "@/components/ui/icons";
 import {
+  closed,
   demoMeta,
   me,
   nextTaskId,
@@ -18,6 +19,7 @@ import {
   type Task,
 } from "@/lib/board-store";
 import { createBoard } from "@/lib/actions";
+import { setCount, useCounts } from "@/lib/board-cache";
 import { metaFor, type LiveBoard } from "@/lib/live";
 import { authReady } from "@/lib/supabase/env";
 import { AccountButton } from "@/components/account-button";
@@ -67,6 +69,7 @@ import {
 } from "./fields";
 import { FieldsMenu } from "./fields-menu";
 import { useBoardSync, type SaveStatus, type Visitor } from "./use-board-sync";
+import { useWorkspace } from "./use-workspace";
 
 // Each view is its own download. The one on screen comes with the page, the rest and the task dialog arrive once
 // the browser is idle, or straight away if someone opens one first
@@ -133,12 +136,22 @@ export function BoardApp({
   live?: LiveBoard;
 }) {
   const full = variant === "full";
-  setBoardMeta(live ? metaFor(live) : demoMeta);
+  const meta = live ? metaFor(live) : demoMeta;
+  setBoardMeta(meta);
+  // Boards you left stay mounted out of sight for a while, and one could have set its own people and labels
+  // since. Showing this one again puts its own back
+  useLayoutEffect(() => setBoardMeta(meta));
   const [demo, rawDispatch] = useReducer(demoReducer, undefined, () =>
     initDemo(live ? live.state : seedBoard(), full ? {} : { view }),
   );
   const { board: state, prefs, restored } = demo;
   const { status, here } = useBoardSync(live, state, rawDispatch);
+  useWorkspace(full ? live : undefined);
+  const liveId = live?.board.id;
+  const taskCount = Object.keys(state.tasks).length;
+  useEffect(() => {
+    if (liveId) setCount(liveId, taskCount);
+  }, [liveId, taskCount]);
   const prefsKey = live ? `acta-prefs-${live.board.id}` : PREFS_KEY;
   const setPrefs = useCallback((patch: Partial<Prefs>) => rawDispatch({ type: "prefs", patch }), []);
 
@@ -212,7 +225,7 @@ export function BoardApp({
   useEffect(() => {
     if (!full || !restored) return;
     try {
-      localStorage.setItem(prefsKey, JSON.stringify(prefs));
+      localStorage.setItem(prefsKey, JSON.stringify({ ...prefs, filters: {} }));
     } catch {}
   }, [full, restored, prefs, prefsKey]);
 
@@ -743,7 +756,10 @@ function Sidebar({
 }) {
   const total = Object.keys(state.tasks).length;
   const doneCount = state.columns.done.length;
-  const mine = Object.values(state.tasks).filter((t) => t.assignee === me.id && t.status !== "done").length;
+  // Canceled work isn't left to do, so it stays out of the progress
+  const planned = total - state.columns.canceled.length;
+  const counts = useCounts();
+  const mine = Object.values(state.tasks).filter((t) => t.assignee === me.id && !closed(t.status)).length;
   const onlyMine = prefs.filters.assignee?.length === 1 && prefs.filters.assignee[0] === me.id;
   const item = (active: boolean) =>
     cn(
@@ -755,7 +771,10 @@ function Sidebar({
     <>
       {full ? (
         <div className="flex h-12 shrink-0 items-center justify-between border-b border-line px-3">
-          <Wordmark href={live ? "/home" : "/"} className="[&>span:last-child]:text-base" />
+          <Wordmark
+            href={live ? `/${live.workspace.slug}/${live.board.slug}` : "/"}
+            className="[&>span:last-child]:text-base"
+          />
           {live ? null : <Badge tone="pyrite">Demo</Badge>}
         </div>
       ) : null}
@@ -842,6 +861,9 @@ function Sidebar({
                 >
                   <Icon name="board" size="sm" />
                   <span className="truncate">{b.name}</span>
+                  {(counts[b.id] ?? b.count) !== undefined ? (
+                    <span className="ml-auto font-mono text-[11px] text-ink-3">{counts[b.id] ?? b.count}</span>
+                  ) : null}
                 </Link>
               ),
             )
@@ -871,7 +893,7 @@ function Sidebar({
 
       <div className="shrink-0 border-t border-line p-3">
         <p className="font-mono text-[11px] text-ink-3">
-          {doneCount} of {total} done
+          {doneCount} of {planned} done
         </p>
         <div className="mt-1.5 flex h-1.5 gap-px">
           {Array.from({ length: 24 }, (_, i) => (
@@ -879,7 +901,7 @@ function Sidebar({
               key={i}
               className={cn(
                 "flex-1",
-                i < Math.round((doneCount / Math.max(1, total)) * 24) ? "bg-malachite" : "bg-line",
+                i < Math.round((doneCount / Math.max(1, planned)) * 24) ? "bg-malachite" : "bg-line",
               )}
             />
           ))}

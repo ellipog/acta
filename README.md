@@ -1,10 +1,63 @@
-# Acta
+<p align="center">
+  <img src="public/logos/banner/acta-banner-panorama.png" alt="Acta" width="100%" />
+</p>
 
-Latin for “things done.” A calm project manager: boards, tables, a timeline, custom fields,
-workspaces with roles, live collaboration and an opt-in public roadmap with votes and suggestions.
+<p align="center">
+  <strong>Latin for “things done.”</strong><br />
+  A calm project manager for small teams and the agents that work with them.
+</p>
+
+<p align="center">
+  <a href="https://acta.aaenz.no">acta.aaenz.no</a> ·
+  <a href="https://acta.aaenz.no/demo">Try the demo</a> ·
+  <a href="#agents">Agents and MCP</a> ·
+  <a href="#running-it">Run it yourself</a>
+</p>
+
+---
+
+## What it does
+
+|  |  |
+| --- | --- |
+| **Board, table and timeline** | One set of tasks, three ways to see it. Drag cards between columns, edit cells in place, and plan on a timeline. |
+| **Live** | Changes from teammates and agents appear as they happen, and you can see who else is on the board. |
+| **Fast** | Boards you've opened stay in memory. Going back to one shows it at once and fetches only what changed. |
+| **Workspaces** | Invite people as owners, admins or members. Each workspace holds as many boards as you like. |
+| **Public roadmaps** | Publish any board as a roadmap page. Visitors can vote and send ideas, and you choose which tasks show. |
+| **Agents** | An MCP server lets Claude Code, Cursor and other agents read and work on your boards with keys you control. |
 
 Built with Next.js 16 (App Router, Cache Components), React 19, Tailwind CSS 4 and Supabase (auth, Postgres,
 realtime and storage).
+
+## Agents
+
+Acta has an MCP server at `/api/mcp`. Make a key under **Account → Agents** and add the server to your agent:
+
+```bash
+claude mcp add --transport http --scope user acta https://acta.aaenz.no/api/mcp \
+  --header "Authorization: Bearer <key>"
+```
+
+Then put a line like this in your project's `AGENTS.md`, `CLAUDE.md` or README, so agents know which board to use:
+
+```
+Acta board: workspace/board
+```
+
+| Key | What it can do |
+| --- | --- |
+| **Read** | List boards, tasks, suggestions and activity, and search across every board it can reach |
+| **Write** | Also create, change, sort, comment on, delete and restore tasks, one at a time or many at once |
+| **Manage** | Also create boards, add, rename and recolour labels and projects, run the public roadmap and triage ideas |
+
+A key acts as the person who made it, and only in the workspaces they chose. The route checks the key, then
+`agent_apply` and `agent_board` check it again in the database before running the app's own write path, so a key
+never gets further than its owner. Everything an agent does is marked with the key's name, shown as
+“Elliot via Claude Code”, and a key can only edit the comments it wrote.
+
+Agents bringing work over from another tracker can keep its history: when each task was created and shipped,
+and who wrote each comment and when. Work closed as not planned goes to **Canceled**.
 
 ## Running it
 
@@ -15,7 +68,7 @@ bun run dev
 ```
 
 The app runs at http://localhost:3000. Without Supabase keys the marketing site, `/demo` and `/library` still
-work; the demo board saves to the browser.
+work, and the demo board saves to the browser.
 
 ### Environment
 
@@ -23,7 +76,7 @@ work; the demo board saves to the browser.
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | The project’s publishable (anon) key |
-| `SUPABASE_SECRET_KEY` | Secret key, server only. Used for avatar uploads and account deletion |
+| `SUPABASE_SECRET_KEY` | Secret key, server only. Used for avatar uploads, account deletion and agent keys |
 | `NEXT_PUBLIC_AUTH_PROVIDERS` | Comma-separated sign-in methods: `email`, `google`, `github` |
 | `NEXT_PUBLIC_PUBLIC_ORIGIN` | Optional. The origin public roadmaps are served from, e.g. `https://acta.page` |
 
@@ -32,33 +85,18 @@ work; the demo board saves to the browser.
 1. Apply everything in `supabase/migrations` in order (`supabase db push`, or paste each file into the SQL
    editor). They create the tables, row-level security, RPCs, the `avatars` storage bucket and the realtime
    publication.
-2. Under Authentication → URL configuration, set the site URL to your origin and add `<your origin>/**` and
+2. Under **Authentication → URL configuration**, set the site URL to your origin and add `<your origin>/**` and
    `http://localhost:*/**` as redirect URLs.
 3. Enable the OAuth providers you list in `NEXT_PUBLIC_AUTH_PROVIDERS`.
-4. Under Authentication → Emails, set up custom SMTP. The built-in sender only mails your own team and allows a
-   couple of emails an hour, so sign-in links won’t reach anyone else.
-5. Admins (who can see `/admin` analytics) come from `public.admin_emails`. Insert your address there.
+4. Under **Authentication → Emails**, set up custom SMTP. The built-in sender only mails your own team and allows
+   a couple of emails an hour, so sign-in links won’t reach anyone else.
+5. Admins, who can see `/admin` analytics, come from `public.admin_emails`. Insert your address there.
 
 ### Public roadmaps
 
-Each board can publish a roadmap page. It lives at `/p/<workspace>/<board>`. If you point a second domain at
-the app and set `NEXT_PUBLIC_PUBLIC_ORIGIN` to it, requests to `<that domain>/<workspace>/<board>` are rewritten
-there by `src/proxy.ts`.
-
-## Agents
-
-Acta has an MCP server at `/api/mcp`, so AI agents can read and work on boards. People make keys under
-Account → Agents: read only, read and write, or manage, for all their workspaces or only some. A key acts as the
-person who made it. The route checks the key, and `agent_apply` and `agent_board` in the database check it again
-before running the app's own write path, so a key never gets further than its owner. Comments and activity that
-came through a key carry its name in `via`, shown as “Elliot via Claude Code”. A comment also remembers the key that
-wrote it in `agent_key`, and `agent_edit_comment` only lets that key edit it.
-
-Read keys can list and search tasks across every board they reach. Write keys can also create, change, reorder,
-comment on, delete and restore tasks. Manage keys can also create boards, change board settings and run the public
-roadmap. A board's `newTasksPublic` page setting puts new tasks on its roadmap, for people and agents alike.
-
-A line like `Acta board: workspace/board` in a project's AGENTS.md or CLAUDE.md tells agents which board to use.
+Each board can publish a roadmap page at `/p/<workspace>/<board>`. Point a second domain at the app and set
+`NEXT_PUBLIC_PUBLIC_ORIGIN` to it, and `src/proxy.ts` serves `<that domain>/<workspace>/<board>` from there.
+A board's **new tasks are public** setting puts new tasks on its roadmap, for people and agents alike.
 
 ## Deploying
 
@@ -67,7 +105,7 @@ Frankfurt, next to the Supabase project.
 
 1. Import the repo in Vercel and add the environment variables above.
 2. Add the domain to the Vercel project and create the DNS record it asks for. On Cloudflare, leave it unproxied.
-3. Set the Supabase URLs and SMTP as described above.
+3. Set up the Supabase URLs and SMTP as described above.
 
 ## Scripts
 
@@ -84,8 +122,10 @@ Frankfurt, next to the Supabase project.
 ```
 src/app            routes: landing, /demo, /login, /new, /[workspace]/[board], /p (public roadmaps), /library (unlisted UI kit)
 src/components     board app (board, table, timeline, roadmap views), landing sections, UI kit
-src/lib            board state and reducer, sync with Supabase, server actions, slugs
+src/lib            board state and reducer, loading, caching and live sync with Supabase, server actions, slugs
 src/lib/agents     agent keys and the MCP server behind /api/mcp
 supabase           SQL migrations
 assets             source images and dither recipes
 ```
+
+Acta board: aaen-studios/acta

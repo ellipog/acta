@@ -1,4 +1,5 @@
-export type StatusCategory = "backlog" | "todo" | "in_progress" | "review" | "done";
+// canceled is closed without being done, for work that won't happen
+export type StatusCategory = "backlog" | "todo" | "in_progress" | "review" | "done" | "canceled";
 export type Priority = "urgent" | "high" | "medium" | "low" | "none";
 export type Size = "xs" | "s" | "m" | "l" | "xl";
 export type Tone = "lapis" | "pyrite" | "malachite" | "hematite";
@@ -7,7 +8,8 @@ export type Person = { id: string; name: string; tone: Tone; avatar?: string | n
 // via names the agent key a change came through, when it wasn't made in the app
 export type Activity = { id?: string; at: number; who: string; text: string; via?: string };
 export type Subtask = { id: string; title: string; done: boolean };
-export type Comment = { id: string; who: string; at: number; body: string; via?: string };
+// from names the original author of a comment an agent brought in from elsewhere, like a GitHub issue
+export type Comment = { id: string; who: string; at: number; body: string; via?: string; from?: string };
 
 export type Task = {
   id: string;
@@ -113,7 +115,11 @@ export const statuses: { id: StatusCategory; title: string; rock: string }[] = [
   { id: "in_progress", title: "In progress", rock: "Coconino" },
   { id: "review", title: "In review", rock: "Redwall" },
   { id: "done", title: "Done", rock: "Vishnu" },
+  { id: "canceled", title: "Canceled", rock: "Spoil" },
 ];
+
+/** Done or canceled: nothing left to do */
+export const closed = (status: StatusCategory) => status === "done" || status === "canceled";
 
 export const statusTitle: Record<StatusCategory, string> = {
   backlog: "Backlog",
@@ -121,6 +127,7 @@ export const statusTitle: Record<StatusCategory, string> = {
   in_progress: "In progress",
   review: "In review",
   done: "Done",
+  canceled: "Canceled",
 };
 
 export const priorities: { id: Priority; title: string }[] = [
@@ -226,6 +233,7 @@ export const labelTone = (id: string) => labels.find((l) => l.id === id)?.tone ?
 export const updatedAt = (t: Task) => t.activity.at(-1)?.at ?? 0;
 
 export type Stage = "planned" | "progress" | "shipped";
+// Canceled work never reaches the public roadmap, so it has no stage of its own
 export const stageOf = (t: Task): Stage =>
   t.status === "done" ? "shipped" : t.status === "todo" || t.status === "backlog" ? "planned" : "progress";
 
@@ -606,7 +614,7 @@ const seedSuggestions: Suggestion[] = [
 
 export function seedBoard(): BoardState {
   const tasks = Object.fromEntries(seedTasks.map((t) => [t.id, structuredClone(t)]));
-  const columns = { backlog: [], todo: [], in_progress: [], review: [], done: [] } as BoardState["columns"];
+  const columns = emptyColumns();
   for (const t of seedTasks) columns[t.status].push(t.id);
   return {
     next: 65,
@@ -616,10 +624,21 @@ export function seedBoard(): BoardState {
   };
 }
 
+export const emptyColumns = (): BoardState["columns"] => ({
+  backlog: [],
+  todo: [],
+  in_progress: [],
+  review: [],
+  done: [],
+  canceled: [],
+});
+
 export function normalizeBoard(board: BoardState): BoardState {
   const page = board.roadmap?.page;
   return {
     ...board,
+    // Boards saved before a status existed don't have its column
+    columns: { ...emptyColumns(), ...board.columns },
     roadmap: {
       public: board.roadmap?.public ?? true,
       suggestions: board.roadmap?.suggestions ?? [],

@@ -4,7 +4,8 @@ import type { DitherName } from "./dither-assets";
 export type Role = "owner" | "admin" | "member";
 
 export type WorkspaceSummary = { id: string; slug: string; name: string; sigil: DitherName; tone: Tone; role: Role };
-export type BoardSummary = { id: string; slug: string; name: string };
+// count is how many tasks the board holds, when it could be read
+export type BoardSummary = { id: string; slug: string; name: string; count?: number };
 export type Member = { id: string; name: string; avatar: string | null; role: Role; tone: Tone; joined: string };
 export type Me = { id: string; name: string; email: string; avatar: string | null };
 

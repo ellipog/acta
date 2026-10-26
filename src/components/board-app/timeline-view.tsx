@@ -11,6 +11,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { PixelCaret } from "@/components/ui/pixel";
 import { MONTHS, addDays, addMonths, diffDays, monthEnd, monthStart, parts, weekday } from "@/lib/dates";
 import {
+  closed,
   formatDue,
   personById,
   sizePoints,
@@ -38,6 +39,7 @@ const look: Record<StatusCategory, { border: string; cap: string; tone: DitherTo
   in_progress: { border: "border-pyrite", cap: "bg-pyrite", tone: "pyrite" },
   review: { border: "border-lapis", cap: "bg-lapis", tone: "lapis" },
   done: { border: "border-malachite", cap: "bg-malachite", tone: "malachite" },
+  canceled: { border: "border-line-strong", cap: "bg-line-strong", tone: "line" },
 };
 
 const accentFill = {
@@ -498,7 +500,7 @@ export function TimelineView({
                                 onClick={() => onOpen(t.id)}
                                 className={cn(
                                   "min-w-0 truncate text-left text-sm outline-none hover:text-lapis focus-visible:ring-2 focus-visible:ring-lapis",
-                                  t.status === "done" && "text-ink-2",
+                                  closed(t.status) && "text-ink-2",
                                 )}
                               >
                                 {t.title}
@@ -703,7 +705,7 @@ function Bar({
   const person = personById(task.assignee);
   const done = task.subtasks.filter((s) => s.done).length;
   const total = task.subtasks.length;
-  const overdue = task.status !== "done" && to < today;
+  const overdue = !closed(task.status) && to < today;
   const left = x(from);
   const w = Math.max(ppd, (diffDays(from, to) + 1) * ppd) - 2;
   const label = `${task.title}, ${from === to ? formatDue(to) : `${formatDue(from)} to ${formatDue(to)}`}`;
@@ -742,7 +744,7 @@ function Bar({
           ring,
           style.border,
           dragging && "cursor-grabbing shadow-[3px_3px_0_var(--line-strong)]",
-          task.status === "done" && "bg-surface",
+          closed(task.status) && "bg-surface",
         )}
       >
         <span className={cn("absolute inset-y-0 left-0 w-1", style.cap)} />
@@ -760,7 +762,7 @@ function Bar({
             <span
               className={cn(
                 "sticky left-[calc(var(--left)+12px)] min-w-0 truncate text-xs",
-                task.status === "done" && "text-ink-2",
+                closed(task.status) && "text-ink-2",
               )}
             >
               {task.title}

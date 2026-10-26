@@ -53,7 +53,7 @@ export type PublicResult = PublicRoadmapData | { private: true; workspace: { nam
 export const isPrivate = (r: PublicResult): r is { private: true; workspace: { name: string; slug: string } } =>
   Boolean(r && "private" in r);
 
-const statusKeys: StatusCategory[] = ["backlog", "todo", "in_progress", "review", "done"];
+const statusKeys: StatusCategory[] = ["backlog", "todo", "in_progress", "review", "done", "canceled"];
 
 export function publicState(data: PublicRoadmapData): BoardState {
   const tasks: Record<string, Task> = {};

@@ -42,7 +42,11 @@ export function Dither({
 }) {
   const asset = ditherAssets[name];
   const contain = fill && asset.kind === "crystal";
-  const size = contain ? "contain" : `${asset.width * scale}px ${asset.height * scale}px`;
+  // Art at its own size snaps each pixel to whole device pixels, like the icons. Larger plates keep their exact
+  // size, since captions and notes are laid out over them
+  const snap = !fill && !smooth && scale === 1;
+  const length = (n: number) => (snap ? `calc(${n} * var(--px))` : `${n * scale}px`);
+  const size = contain ? "contain" : `${length(asset.width)} ${length(asset.height)}`;
   const layer = (file: string, color: DitherTone): Record<string, string | number> => ({
     "--dither": tones[color],
     maskImage: `url(/dither/${file}.png)`,
@@ -53,7 +57,7 @@ export function Dither({
     WebkitMaskPosition: position,
     ...(contain || smooth ? { imageRendering: "auto" } : {}),
   });
-  const box = fill ? {} : { width: asset.width * scale, height: asset.height * scale };
+  const box = fill ? {} : { width: length(asset.width), height: length(asset.height) };
   const a11y = {
     role: label ? "img" : undefined,
     "aria-label": label,

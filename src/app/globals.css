@@ -165,21 +165,52 @@ textarea {
   }
 }
 
+/*
+  Pixel art. A drawing's pixels only stay even when each one covers a whole number of the screen's own pixels.
+  At 125% or 150% display scaling, or with the browser zoomed, a 1px or 1.5px cell lands on fractions and the
+  strokes come out one and two pixels wide. The script in the root layout keeps --dpr current, and each cell is
+  snapped to the nearest whole number of device pixels. --px is one art pixel at scale 1.
+*/
+:root {
+  --dpr: 1;
+  --px: 1px;
+}
+@supports (width: round(1.5px, 1px)) {
+  :root {
+    --px: calc(max(1, round(var(--dpr) + 0.001, 1)) / var(--dpr) * 1px);
+  }
+  @layer components {
+    /*
+      Drawings set --pw and --ph (their size in cells), --ps (their scale) and --pb, which breaks ties: small
+      drawings round up so they stay legible, larger ones round down so they stay inside their buttons
+    */
+    svg.pixel {
+      --cell: calc(max(1, round(var(--ps, 1) * var(--dpr) + var(--pb, 0), 1)) / var(--dpr) * 1px);
+      width: calc(var(--pw) * var(--cell));
+      height: calc(var(--ph) * var(--cell));
+    }
+    /* For drawings in a box they must not outgrow, like a checkbox's tick */
+    svg.pixel.pixel-fit {
+      --cell: calc(max(1, round(down, var(--ps, 1) * var(--dpr) + 0.001, 1)) / var(--dpr) * 1px);
+    }
+  }
+}
+
 @utility dither-12 {
   background-color: var(--dither, currentColor);
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h1v1H0zM2 2h1v1H2z'/%3E%3C/svg%3E") 0 0 / 4px 4px repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h1v1H0zM2 2h1v1H2z'/%3E%3C/svg%3E") 0 0 / calc(4 * var(--px)) calc(4 * var(--px)) repeat;
 }
 @utility dither-25 {
   background-color: var(--dither, currentColor);
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h1v1H0zM2 0h1v1H2zM0 2h1v1H0zM2 2h1v1H2z'/%3E%3C/svg%3E") 0 0 / 4px 4px repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h1v1H0zM2 0h1v1H2zM0 2h1v1H0zM2 2h1v1H2z'/%3E%3C/svg%3E") 0 0 / calc(4 * var(--px)) calc(4 * var(--px)) repeat;
 }
 @utility dither-50 {
   background-color: var(--dither, currentColor);
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h1v1H0zM2 0h1v1H2zM1 1h1v1H1zM3 1h1v1H3zM0 2h1v1H0zM2 2h1v1H2zM1 3h1v1H1zM3 3h1v1H3z'/%3E%3C/svg%3E") 0 0 / 4px 4px repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h1v1H0zM2 0h1v1H2zM1 1h1v1H1zM3 1h1v1H3zM0 2h1v1H0zM2 2h1v1H2zM1 3h1v1H1zM3 3h1v1H3z'/%3E%3C/svg%3E") 0 0 / calc(4 * var(--px)) calc(4 * var(--px)) repeat;
 }
 @utility dither-75 {
   background-color: var(--dither, currentColor);
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h4v1H0zM1 1h1v1H1zM3 1h1v1H3zM0 2h4v1H0zM1 3h1v1H1zM3 3h1v1H3z'/%3E%3C/svg%3E") 0 0 / 4px 4px repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h4v1H0zM1 1h1v1H1zM3 1h1v1H3zM0 2h4v1H0zM1 3h1v1H1zM3 3h1v1H3z'/%3E%3C/svg%3E") 0 0 / calc(4 * var(--px)) calc(4 * var(--px)) repeat;
 }
 
 @utility dither-image {
@@ -257,7 +288,7 @@ section[id] {
 }
 
 @keyframes grain {
-  to { mask-position: 4px 0; -webkit-mask-position: 4px 0; }
+  to { mask-position: calc(4 * var(--px)) 0; -webkit-mask-position: calc(4 * var(--px)) 0; }
 }
 @keyframes sweep {
   from { transform: translateX(-100%); }

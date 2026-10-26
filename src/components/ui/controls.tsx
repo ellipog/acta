@@ -10,6 +10,7 @@ import {
 } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { DitherFill } from "./dither";
+import { pixelBox } from "@/lib/pixel";
 import { PixelMinus, PixelPlus } from "./pixel";
 
 export function Checkbox({ className, ...props }: React.ComponentProps<typeof CheckboxPrimitive.Root>) {
@@ -22,10 +23,10 @@ export function Checkbox({ className, ...props }: React.ComponentProps<typeof Ch
       {...props}
     >
       <CheckboxPrimitive.Indicator className="text-on-accent">
-        <svg viewBox="0 0 7 5" className="h-[10px] w-[14px] fill-current group-data-[state=indeterminate]/check:hidden" shapeRendering="crispEdges" aria-hidden>
+        <svg viewBox="0 0 7 5" width={14} height={10} style={pixelBox(7, 5, 2)} className="pixel pixel-fit fill-current group-data-[state=indeterminate]/check:hidden" shapeRendering="crispEdges" aria-hidden>
           <path d="M6 0h1v1H6zM5 1h1v1H5zM0 2h1v1H0zM4 2h1v1H4zM1 3h1v1H1zM3 3h1v1H3zM2 4h1v1H2z" />
         </svg>
-        <svg viewBox="0 0 7 5" className="hidden h-[10px] w-[14px] fill-current group-data-[state=indeterminate]/check:block" shapeRendering="crispEdges" aria-hidden>
+        <svg viewBox="0 0 7 5" width={14} height={10} style={pixelBox(7, 5, 2)} className="pixel pixel-fit hidden fill-current group-data-[state=indeterminate]/check:block" shapeRendering="crispEdges" aria-hidden>
           <path d="M1 2h5v1H1z" />
         </svg>
       </CheckboxPrimitive.Indicator>

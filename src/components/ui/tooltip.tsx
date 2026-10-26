@@ -2,6 +2,7 @@
 
 import { createContext, useContext } from "react";
 import { Tooltip as T } from "radix-ui";
+import { pixelBox } from "@/lib/pixel";
 
 const Shared = createContext(false);
 
@@ -32,7 +33,7 @@ export function Tooltip({
         <T.Content side={side} sideOffset={5} className="z-50 bg-ink px-2 py-1 text-xs text-page">
           {content}
           <T.Arrow asChild width={7} height={4}>
-            <svg viewBox="0 0 7 4" shapeRendering="crispEdges" className="fill-ink">
+            <svg viewBox="0 0 7 4" shapeRendering="crispEdges" style={pixelBox(7, 4, 1)} className="pixel fill-ink">
               <path d="M0 0h7v1H0zM1 1h5v1H1zM2 2h3v1H2zM3 3h1v1H3z" />
             </svg>
           </T.Arrow>

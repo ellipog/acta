@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { pixelBox } from "@/lib/pixel";
 
 type GlyphProps = { className?: string };
 
@@ -11,6 +12,7 @@ function Glyph({ w, h, d, className, scale = 2 }: { w: number; h: number; d: str
       shapeRendering="crispEdges"
       aria-hidden
       className={cn("pixel shrink-0 fill-current", className)}
+      style={pixelBox(w, h, scale)}
     >
       <path d={d} />
     </svg>

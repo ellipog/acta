@@ -1,6 +1,7 @@
 "use client";
 
 import { Icon } from "@/components/ui/icons";
+import { pixelBox } from "@/lib/pixel";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -36,7 +37,8 @@ export function ThemeToggle({ side = "bottom" }: { side?: "top" | "bottom" }) {
           width={7}
           height={4}
           shapeRendering="crispEdges"
-          className={cn("mr-[14.5px] fill-ink", side === "bottom" && "rotate-180")}
+          style={pixelBox(7, 4, 1)}
+          className={cn("pixel mr-[14.5px] fill-ink", side === "bottom" && "rotate-180")}
         >
           <path d="M0 0h7v1H0zM1 1h5v1H1zM2 2h3v1H2zM3 3h1v1H3z" />
         </svg>

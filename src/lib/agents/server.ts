@@ -1,10 +1,10 @@
 import "server-only";
 import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod";
-import { actaFor, Problem, taskStatuses } from "./acta";
+import { actaFor, Problem, sortKeys, taskStatuses } from "./acta";
 import type { Agent } from "./keys";
 
-const instructions = `Acta is a project manager. Work lives on boards, named "workspace/board". Each task has an id made of the board's prefix and a number, like ACT-12. A task moves todo → in_progress → review → done.
+const instructions = `Acta is a project manager. Work lives on boards, named "workspace/board". Each task has an id made of the board's prefix and a number, like ACT-12. A task moves todo → in_progress → review → done. Work that was dropped, such as a GitHub issue closed as not planned, goes to canceled.
 
 How to work with it:
 1. Find the board for the project you're in. Look for a line like "Acta board: workspace/board" in AGENTS.md, CLAUDE.md or the README. If there isn't one, call list_boards, ask the person which board to use, and offer to add that line. search_tasks looks across every board at once, for example for what's assigned to "me".
@@ -12,6 +12,7 @@ How to work with it:
 3. When you start a task, move it to in_progress and assign it to "me". Tick subtasks as you finish them. Keep one progress comment per task and update it with edit_comment, adding a new comment only for a milestone, a blocker or a question.
 4. When the work is ready for someone to look at, such as an open pull request, move it to review and comment with the link. Move it to done once it's merged or shipped.
 5. If you delete a task by mistake, restore_task brings it back.
+6. When bringing work over from another tracker, keep its history: give create_tasks each task's created date, a shipped date for finished work, and its comments with their original author and time.
 
 Write titles as short imperatives ("Add CSV export") and descriptions in Markdown. Everything you do shows up live on the board, credited to the person who made this key and marked with the key's name. When you mention a task to the person, include its url.`;
 
@@ -21,7 +22,18 @@ const status = z.enum(taskStatuses);
 const priority = z.enum(["urgent", "high", "medium", "low", "none"]);
 const size = z.enum(["xs", "s", "m", "l", "xl"]);
 const date = z.string().describe("A date, YYYY-MM-DD");
+const moment = z.string().describe("When it happened: a date, YYYY-MM-DD, or a time like 2026-11-02T14:30:00Z");
 const tone = z.enum(["lapis", "pyrite", "malachite", "hematite"]);
+const comment = {
+  body: z.string().min(1).max(10000).describe("Markdown"),
+  author: z
+    .string()
+    .min(1)
+    .max(60)
+    .optional()
+    .describe("Who wrote it, when it comes from somewhere else such as a GitHub issue. Leave it out for your own comments"),
+  at: moment.optional().describe("When it was written, for comments from somewhere else. Defaults to now"),
+};
 
 const fields = {
   title: z.string().min(1).max(500),
@@ -35,6 +47,24 @@ const fields = {
   start: date.nullable().describe("Start date, YYYY-MM-DD. null clears it."),
   due: date.nullable().describe("Due date, YYYY-MM-DD. null clears it."),
   public: z.boolean().describe("Show it on the board's public roadmap"),
+};
+
+// Everything update_task can change, shared with update_tasks
+const changes = {
+  ...z.object(fields).partial().shape,
+  shipped: date.nullable().optional().describe("When a done task shipped, YYYY-MM-DD. Moving to done sets today"),
+  add_labels: z.array(z.string()).optional(),
+  remove_labels: z.array(z.string()).optional(),
+  add_subtasks: z.array(z.string().min(1).max(200)).max(50).optional(),
+  complete_subtasks: z.array(z.string()).optional().describe("Subtask ids or titles to tick"),
+  reopen_subtasks: z.array(z.string()).optional().describe("Subtask ids or titles to untick"),
+  rename_subtasks: z
+    .array(z.object({ subtask: z.string().describe("Its id or current title"), title: z.string().min(1).max(200) }))
+    .optional(),
+  remove_subtasks: z.array(z.string()).optional().describe("Subtask ids or titles to remove"),
+  place: z.enum(["top", "bottom"]).optional().describe("Move the card to the top or bottom of its column"),
+  before: task.optional().describe("Put the card just above this task, which must be in the same column"),
+  after: task.optional().describe("Put the card just below this task, which must be in the same column"),
 };
 
 function reply(data: unknown) {
@@ -96,7 +126,10 @@ export function actaServer(agent: Agent) {
         "Tasks on a board, in board order, as short summaries. Shows open tasks (todo, in_progress, review) unless you pass status. Use get_task for a task's description, subtasks and comments.",
       inputSchema: z.object({
         board,
-        status: z.array(status).optional().describe("Only these statuses. Pass [\"done\"] for finished work."),
+        status: z
+          .array(status)
+          .optional()
+          .describe('Only these statuses. Pass ["done"] for finished work, ["canceled"] for dropped work.'),
         assignee: z.string().optional().describe('"me", or a person\'s name'),
         label: z.string().optional(),
         project: z.string().optional(),
@@ -148,13 +181,29 @@ export function actaServer(agent: Agent) {
     run(({ board }) => acta.suggestions(board)),
   );
 
+  server.registerTool(
+    "list_activity",
+    {
+      title: "List recent activity",
+      description:
+        "What happened on a board lately, newest first: tasks created, moved, assigned, commented on and so on, with who did it and when. Use it to catch up on a board.",
+      inputSchema: z.object({
+        board,
+        since: moment.optional().describe("Only what happened after this"),
+        limit: z.number().int().min(1).max(200).optional().describe("Defaults to 50"),
+      }),
+      annotations: reads,
+    },
+    run(({ board, ...filters }) => acta.activity(board, filters)),
+  );
+
   if (acta.can("write")) {
     server.registerTool(
       "create_tasks",
       {
         title: "Create tasks",
         description:
-          "Adds one or more tasks to a board, at the bottom of their column. Labels, project and assignee must match the board (see get_board). Returns the new ids and links.",
+          "Adds one or more tasks to a board, at the bottom of their column. Labels, project and assignee must match the board (see get_board). Tasks go on the public roadmap when public is true, or when it's left out and the board's new_tasks_public setting is on. To bring work over from another tracker, pass created, shipped and comments so its history stays. Returns the new ids and links.",
         inputSchema: z.object({
           board,
           tasks: z
@@ -174,6 +223,13 @@ export function actaServer(agent: Agent) {
                   .optional()
                   .describe("Show it on the public roadmap. Defaults to the board's new_tasks_public setting"),
                 subtasks: z.array(z.string().min(1).max(200)).max(50).optional().describe("Checklist items"),
+                created: moment.optional().describe("When the task was first made, if somewhere else. Defaults to now"),
+                shipped: date.optional().describe("When a done task shipped, YYYY-MM-DD. Defaults to today for done tasks"),
+                comments: z
+                  .array(z.object(comment))
+                  .max(100)
+                  .optional()
+                  .describe("Comments to bring over with the task, oldest first"),
               }),
             )
             .min(1)
@@ -190,26 +246,51 @@ export function actaServer(agent: Agent) {
         title: "Update a task",
         description:
           "Changes a task. Only the fields you pass change. Set status to move it between columns, assignee \"me\" to take it, and use the subtask fields to work through its checklist. place, before or after moves the card within its column, so you can put the most important work at the top. Each change is logged on the task.",
-        inputSchema: z
-          .object({ board, task })
-          .extend(z.object(fields).partial().shape)
-          .extend({
-            add_labels: z.array(z.string()).optional(),
-            remove_labels: z.array(z.string()).optional(),
-            add_subtasks: z.array(z.string().min(1).max(200)).max(50).optional(),
-            complete_subtasks: z.array(z.string()).optional().describe("Subtask ids or titles to tick"),
-            reopen_subtasks: z.array(z.string()).optional().describe("Subtask ids or titles to untick"),
-            rename_subtasks: z
-              .array(z.object({ subtask: z.string().describe("Its id or current title"), title: z.string().min(1).max(200) }))
-              .optional(),
-            remove_subtasks: z.array(z.string()).optional().describe("Subtask ids or titles to remove"),
-            place: z.enum(["top", "bottom"]).optional().describe("Move the card to the top or bottom of its column"),
-            before: task.optional().describe("Put the card just above this task, which must be in the same column"),
-            after: task.optional().describe("Put the card just below this task, which must be in the same column"),
-          }),
+        inputSchema: z.object({ board, task, ...changes }),
         annotations: { ...writes, idempotentHint: true },
       },
       run(({ board, task, ...patch }) => acta.updateTask(board, task, patch)),
+    );
+
+    server.registerTool(
+      "update_tasks",
+      {
+        title: "Update several tasks",
+        description:
+          "Changes many tasks in one call, each with the same fields as update_task. Tasks are changed in order; one that can't change is reported under failed and the rest still go through.",
+        inputSchema: z.object({
+          board,
+          tasks: z
+            .array(z.object({ task, ...changes }))
+            .min(1)
+            .max(50),
+        }),
+        annotations: { ...writes, idempotentHint: true },
+      },
+      run(({ board, tasks }) => acta.updateTasks(board, tasks)),
+    );
+
+    server.registerTool(
+      "sort_column",
+      {
+        title: "Sort a column",
+        description:
+          "Reorders the cards in one status column for everyone. Pass by to sort it, for example by priority with the most urgent on top, or tasks to put those tasks at the top in that order with the rest keeping theirs below.",
+        inputSchema: z.object({
+          board,
+          status,
+          by: z
+            .enum(sortKeys)
+            .optional()
+            .describe(
+              "priority: urgent first. due and start: soonest first. created: oldest first. updated: latest first. size: smallest first. title: A to Z. votes: most first. Tasks without a value go last",
+            ),
+          reverse: z.boolean().optional().describe("Flip the order of by"),
+          tasks: z.array(task).max(200).optional().describe("Task ids, top to bottom"),
+        }),
+        annotations: { ...writes, idempotentHint: true },
+      },
+      run(({ board, ...p }) => acta.sortColumn(board, p)),
     );
 
     server.registerTool(
@@ -217,11 +298,11 @@ export function actaServer(agent: Agent) {
       {
         title: "Comment on a task",
         description:
-          "Adds a Markdown comment to a task, for progress notes, blockers, questions or links. Returns the comment's id, for edit_comment.",
-        inputSchema: z.object({ board, task, body: z.string().min(1).max(10000) }),
+          "Adds a Markdown comment to a task, for progress notes, blockers, questions or links. A comment from somewhere else, such as a GitHub issue, can keep its author and time. Returns the comment's id, for edit_comment.",
+        inputSchema: z.object({ board, task, ...comment }),
         annotations: writes,
       },
-      run(({ board, task, body }) => acta.comment(board, task, body)),
+      run(({ board, task, ...c }) => acta.comment(board, task, c)),
     );
 
     server.registerTool(
@@ -284,13 +365,32 @@ export function actaServer(agent: Agent) {
       "update_board",
       {
         title: "Update a board",
-        description: "Renames a board, or adds and removes its labels and projects.",
+        description:
+          "Renames a board, or adds, renames, recolours and removes its labels and projects. Renaming a label or project renames it on every task that has it.",
         inputSchema: z.object({
           board,
           name: z.string().min(1).max(60).optional(),
           add_labels: z.array(z.object({ name: z.string().min(1).max(40), tone: tone.optional() })).optional(),
+          update_labels: z
+            .array(
+              z.object({
+                label: z.string().describe("The label's current name"),
+                name: z.string().min(1).max(40).optional().describe("Its new name"),
+                tone: tone.optional(),
+              }),
+            )
+            .optional(),
           remove_labels: z.array(z.string()).optional(),
           add_projects: z.array(z.object({ name: z.string().min(1).max(40), tone: tone.optional() })).optional(),
+          update_projects: z
+            .array(
+              z.object({
+                project: z.string().describe("The project's current name"),
+                name: z.string().min(1).max(40).optional().describe("Its new name"),
+                tone: tone.optional(),
+              }),
+            )
+            .optional(),
           remove_projects: z.array(z.string()).optional(),
         }),
         annotations: writes,
