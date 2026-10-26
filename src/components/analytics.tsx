@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 
 export const ignoreKey = "acta-analytics-ignore";
-const untracked = /^\/(admin|auth)(\/|$)/;
+const untracked = /^\/(admin|auth|join)(\/|$)/;
 const seen = { path: "", at: 0, landed: false };
 
 function ignored() {

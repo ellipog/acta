@@ -1,13 +1,9 @@
 import { cn } from "@/lib/utils";
-import type { DitherName } from "@/lib/dither-assets";
+import { ditherAssets, type DitherName } from "@/lib/dither-assets";
 import { AvatarImage } from "./avatar-image";
 import { Dither, DitherFill } from "./dither";
 
-export function Panel({
-  className,
-  shadow,
-  ...props
-}: React.ComponentProps<"div"> & { shadow?: boolean }) {
+export function Panel({ className, shadow, ...props }: React.ComponentProps<"div"> & { shadow?: boolean }) {
   const panel = <div className={cn("border border-line bg-surface", className)} {...props} />;
   if (!shadow) return panel;
   return (
@@ -47,6 +43,7 @@ export function Avatar({
     .slice(0, 2)
     .join("")
     .toUpperCase();
+  const art = sigil && sigil in ditherAssets ? sigil : undefined;
   const toneClass = {
     lapis: "bg-lapis-soft text-lapis-ink border-lapis/30",
     pyrite: "bg-pyrite-soft text-pyrite-ink border-pyrite/40",
@@ -55,8 +52,8 @@ export function Avatar({
   }[tone];
   return (
     <span
-      role={sigil ? undefined : "img"}
-      aria-label={sigil ? undefined : name}
+      role={art ? undefined : "img"}
+      aria-label={art ? undefined : name}
       className={cn(
         "relative inline-grid shrink-0 place-items-center overflow-hidden border font-mono font-medium",
         avatarSizes[size],
@@ -64,11 +61,7 @@ export function Avatar({
         className,
       )}
     >
-      {sigil ? (
-        <Dither name={sigil} tone={tone} fill smooth className="inset-0.5" label={name} />
-      ) : (
-        initials
-      )}
+      {art ? <Dither name={art} tone={tone} fill smooth className="inset-0.5" label={name} /> : initials}
       {src ? <AvatarImage src={src} /> : null}
     </span>
   );
@@ -101,7 +94,12 @@ export function Progress({
       {pct > 0 && pct < 100 ? (
         <>
           <DitherFill level={50} tone={tone} className="absolute inset-y-0 w-2" style={{ left: `${pct}%` }} />
-          <DitherFill level={12} tone={tone} className="absolute inset-y-0 w-2" style={{ left: `calc(${pct}% + 8px)` }} />
+          <DitherFill
+            level={12}
+            tone={tone}
+            className="absolute inset-y-0 w-2"
+            style={{ left: `calc(${pct}% + 8px)` }}
+          />
         </>
       ) : null}
     </div>
@@ -123,7 +121,13 @@ export function EmptyState({
 }) {
   return (
     <div className={cn("flex flex-col items-center px-6 py-10 text-center", className)}>
-      <Dither name={art} tone="muted" />
+      {ditherAssets[art].kind === "photo" ? (
+        <div className="relative h-36 w-44">
+          <Dither name={art} tone="muted" fill smooth />
+        </div>
+      ) : (
+        <Dither name={art} tone="muted" />
+      )}
       <h3 className="mt-5 font-display text-lg">{title}</h3>
       <p className="mt-1 max-w-xs text-sm text-ink-2">{body}</p>
       {action ? <div className="mt-5">{action}</div> : null}
@@ -132,12 +136,7 @@ export function EmptyState({
 }
 
 export function Eyebrow({ className, ...props }: React.ComponentProps<"p">) {
-  return (
-    <p
-      className={cn("font-mono text-[11px] tracking-[0.14em] text-ink-3 uppercase", className)}
-      {...props}
-    />
-  );
+  return <p className={cn("font-mono text-[11px] tracking-[0.14em] text-ink-3 uppercase", className)} {...props} />;
 }
 
 export function Skeleton({ className }: { className?: string }) {

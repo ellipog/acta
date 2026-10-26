@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
 
   const kind = body.kind === "pageview" || body.kind === "event" ? body.kind : null;
   const path = clip(body.path, 300);
-  if (!kind || !path?.startsWith("/")) return bad();
+  if (!kind || !path?.startsWith("/") || /^\/(admin|auth|join)(\/|$)/.test(path)) return bad();
   const name = kind === "event" ? clip(body.name, 64) : null;
   if (kind === "event" && (!name || !/^[a-z0-9_.:-]+$/i.test(name))) return bad();
 

@@ -11,6 +11,7 @@ import { formatShort, useToday } from "@/components/ui/date-picker";
 import { Dither, DitherFill, DitherShadow, type DitherTone } from "@/components/ui/dither";
 import { Avatar, EmptyState, Eyebrow } from "@/components/ui/display";
 import { Icon } from "@/components/ui/icons";
+import { LogoMark } from "@/components/ui/logo-mark";
 import { Input, Textarea } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import {
@@ -43,7 +44,7 @@ import {
   type Task,
   type Tone,
 } from "@/lib/board-store";
-import { publicHost, publicPath, SLUG_MAX, slugify, slugProblem } from "@/lib/slugs";
+import { publicHost, publicHref, publicPath, SLUG_MAX, slugify, slugProblem } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
 import type { Zoom } from "./fields";
@@ -151,9 +152,10 @@ export function PublicRoadmap({
   const isPublic = state.roadmap.public;
   const page = state.roadmap.page;
   const url = publicPath(me.workspace, page.slug);
+  const href = publicHref(me.workspace, page.slug);
 
   const copy = () => {
-    navigator.clipboard?.writeText(`https://${url}`).catch(() => {});
+    navigator.clipboard?.writeText(me.live ? new URL(href, location.href).href : `https://${url}`).catch(() => {});
     toast({
       icon: "link",
       title: "Link copied",
@@ -191,6 +193,19 @@ export function PublicRoadmap({
               <Icon name="copy" size="sm" />
             </button>
           </Tooltip>
+          {me.live && isPublic ? (
+            <Tooltip content="Open the public page">
+              <a
+                aria-label="Open the public page"
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+                className="grid size-7 place-items-center text-ink-3 hover:bg-sunken hover:text-ink"
+              >
+                <Icon name="external" size="sm" />
+              </a>
+            </Tooltip>
+          ) : null}
         </div>
         <label className="ml-auto flex items-center gap-2.5 text-sm text-ink-2">
           {isPublic ? "Public" : "Private"}
@@ -201,7 +216,7 @@ export function PublicRoadmap({
               toast({
                 icon: v ? "globe" : "lock",
                 title: v ? "The roadmap is public" : "The roadmap is private",
-                description: v ? "Anyone with the link can see it." : "Only Ellipog Team can see it now.",
+                description: v ? "Anyone with the link can see it." : `Only ${me.team} can see it now.`,
                 duration: 2600,
               });
             }}
@@ -1052,7 +1067,15 @@ function Progress({ task, accent }: { task: Task; accent: Tone }) {
   );
 }
 
-function Visitor({ state, dispatch }: { state: BoardState; dispatch: (a: DemoAction) => void }) {
+export function Visitor({
+  state,
+  dispatch,
+  home,
+}: {
+  state: BoardState;
+  dispatch: (a: DemoAction) => void;
+  home?: string;
+}) {
   const page = state.roadmap.page;
   const today = useToday();
   const now = useNow();
@@ -1101,7 +1124,7 @@ function Visitor({ state, dispatch }: { state: BoardState; dispatch: (a: DemoAct
       <EmptyState
         art="cave-kingston-stalactite"
         title="This roadmap is private"
-        body="Ellipog Team hasn’t opened it to visitors yet."
+        body={`${me.team} hasn’t opened it to visitors yet.`}
         className="py-16"
       />
     );
@@ -1175,7 +1198,7 @@ function Visitor({ state, dispatch }: { state: BoardState; dispatch: (a: DemoAct
     <div className="px-4 py-8 @2xl:px-10 @2xl:py-10">
       <div className="grid gap-6 @2xl:grid-cols-[1fr_auto] @2xl:items-center">
         <div className="min-w-0">
-          <Eyebrow>Ellipog Team · Roadmap</Eyebrow>
+          <Eyebrow>{me.team} · Roadmap</Eyebrow>
           <h1 className="mt-3 font-display text-3xl leading-tight break-words @2xl:text-4xl">
             {page.title || "Untitled"}
           </h1>
@@ -1454,13 +1477,16 @@ function Visitor({ state, dispatch }: { state: BoardState; dispatch: (a: DemoAct
         </section>
       ) : null}
 
-      <p className="mt-12 flex items-center gap-2 border-t border-line pt-4 font-mono text-[11px] text-ink-3">
-        <span className="flex gap-px" aria-hidden>
-          <span className="h-2.5 w-1 bg-lapis" />
-          <span className="h-2.5 w-1 bg-pyrite" />
-          <span className="h-2.5 w-1 bg-current" />
-        </span>
-        Made with Acta
+      <p className="mt-12 border-t border-line pt-4 font-mono text-[11px] text-ink-3">
+        {home ? (
+          <a href={home} className="inline-flex items-center gap-2 hover:text-ink">
+            <LogoMark size={14} /> Made with Acta
+          </a>
+        ) : (
+          <span className="inline-flex items-center gap-2">
+            <LogoMark size={14} /> Made with Acta
+          </span>
+        )}
       </p>
 
       <D.Root open={Boolean(open)} onOpenChange={(o) => !o && setDetail(null)}>

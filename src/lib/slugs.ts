@@ -4,6 +4,7 @@ export const publicHost = "acta.page";
 
 const reserved = new Set([
   "about",
+  "account",
   "acta",
   "actapage",
   "admin",
@@ -19,6 +20,7 @@ const reserved = new Set([
   "changelog",
   "contact",
   "dashboard",
+  "demo",
   "docs",
   "download",
   "email",
@@ -29,6 +31,7 @@ const reserved = new Set([
   "invite",
   "join",
   "legal",
+  "library",
   "log-in",
   "login",
   "logout",
@@ -77,3 +80,8 @@ export function slugProblem(slug: string): string | null {
 
 export const publicPath = (workspace: string, board?: string) =>
   `${publicHost}/${workspace}${board ? `/${board}` : ""}`;
+
+const publicOrigin = process.env.NEXT_PUBLIC_PUBLIC_ORIGIN?.replace(/\/+$/, "");
+
+export const publicHref = (workspace: string, board: string) =>
+  publicOrigin ? `${publicOrigin}/${workspace}/${board}` : `/p/${workspace}/${board}`;

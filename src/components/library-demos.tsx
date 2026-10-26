@@ -17,7 +17,16 @@ import { CommandPalette } from "@/components/command-palette";
 import { PriorityIcon, SizeIcon, StatusMarker, TaskCard } from "@/components/board";
 import { TaskMenu } from "@/components/board-app/task-menu";
 import { fieldOptions, LabelDot } from "@/components/board-app/fields";
-import { boardReducer, people, priorities, seedBoard, sizes, statuses } from "@/lib/board-store";
+import {
+  boardReducer,
+  demoMeta,
+  people,
+  priorities,
+  seedBoard,
+  setBoardMeta,
+  sizes,
+  statuses,
+} from "@/lib/board-store";
 import { addDays } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import {
@@ -202,6 +211,7 @@ export function FormDemo() {
 }
 
 export function PickerDemo() {
+  setBoardMeta(demoMeta);
   const [status, setStatus] = useState<(typeof statuses)[number]["id"]>("in_progress");
   const [priority, setPriority] = useState<(typeof priorities)[number]["id"]>("high");
   const [size, setSize] = useState<(typeof sizes)[number]["id"]>("m");
@@ -547,6 +557,7 @@ export function OverlayDemos() {
 }
 
 export function ContextMenuDemo() {
+  setBoardMeta(demoMeta);
   const [board, dispatch] = useReducer(boardReducer, undefined, seedBoard);
   const task = board.tasks["ACT-42"];
   return (
@@ -649,6 +660,7 @@ const notifications = [
 ] as const;
 
 export function InboxDemo() {
+  setBoardMeta(demoMeta);
   const [read, setRead] = useState<string[]>([]);
   return (
     <div className="max-w-xl border border-line bg-raised">

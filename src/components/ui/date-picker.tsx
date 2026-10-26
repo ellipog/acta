@@ -50,7 +50,8 @@ export function Calendar({
   autoFocus?: boolean;
 }) {
   const today = useToday();
-  const [focus, setFocus] = useState(() => value ?? today ?? localToday());
+  const [picked, setFocus] = useState<string | null>(value ?? null);
+  const focus = picked ?? today ?? "2000-01-01";
   const [view, setView] = useState<View>("days");
   const [page, setPage] = useState(0);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -131,7 +132,7 @@ export function Calendar({
     "flex h-7 items-center gap-1.5 px-1.5 font-display text-base outline-none hover:bg-sunken focus-visible:ring-2 focus-visible:ring-lapis";
 
   return (
-    <div className="w-[17rem] select-none">
+    <div className={cn("w-[17rem] select-none", !picked && !today && "invisible")}>
       <div className="flex items-center justify-between border-b border-line px-2 py-2">
         <button
           aria-label={{ days: "Previous month", months: "Previous year", years: "Previous years" }[view]}

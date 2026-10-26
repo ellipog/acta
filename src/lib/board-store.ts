@@ -90,6 +90,14 @@ export const defaultPage: PublicPage = {
   timelineGroup: "stage",
 };
 
+export const pageFrom = (name: string, slug: string, page: object): PublicPage => ({
+  ...defaultPage,
+  title: name,
+  ...(page as Partial<PublicPage>),
+  slug,
+  stageNames: { ...defaultPage.stageNames, ...((page as Partial<PublicPage>).stageNames ?? {}) },
+});
+
 export type BoardState = {
   next: number;
   tasks: Record<string, Task>;
@@ -141,6 +149,7 @@ export type BoardMeta = {
   labels: Label[];
   projects: Project[];
   workspace: string;
+  team: string;
   live: boolean;
 };
 
@@ -148,6 +157,7 @@ export const demoMeta: BoardMeta = {
   me: "You",
   meId: "elliot",
   workspace: "ellipog",
+  team: "Ellipog Team",
   live: false,
   people: [
     { id: "elliot", name: "Elliot Saaen", tone: "lapis" },
@@ -176,12 +186,19 @@ export const projects: string[] = demoMeta.projects.map((p) => p.name);
 export const projectTone: Record<string, Tone | "ink"> = Object.fromEntries(
   demoMeta.projects.map((p) => [p.name, p.tone]),
 );
-export const me = { name: demoMeta.me, id: demoMeta.meId, workspace: demoMeta.workspace, live: demoMeta.live };
+export const me = {
+  name: demoMeta.me,
+  id: demoMeta.meId,
+  workspace: demoMeta.workspace,
+  team: demoMeta.team,
+  live: demoMeta.live,
+};
 
 export function setBoardMeta(meta: BoardMeta) {
   me.name = meta.me;
   me.id = meta.meId;
   me.workspace = meta.workspace;
+  me.team = meta.team;
   me.live = meta.live;
   people.splice(0, people.length, ...meta.people);
   labels.splice(0, labels.length, ...meta.labels);

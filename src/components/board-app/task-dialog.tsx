@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dialog as D } from "radix-ui";
 import { Icon } from "@/components/ui/icons";
 import { StatusMarker } from "@/components/board";
@@ -108,6 +108,22 @@ function TaskBody({
     dispatch({ type: "comment", id: task.id, body: comment.trim() });
     setComment("");
   };
+
+  const pending = useRef<string | null>(null);
+  const latest = useRef({ id: task.id, saved: task.description, dispatch });
+  useEffect(() => {
+    pending.current = editing ? description : null;
+    latest.current = { id: task.id, saved: task.description, dispatch };
+  });
+  useEffect(
+    () => () => {
+      const text = pending.current;
+      const { id, saved, dispatch: send } = latest.current;
+      if (text !== null && text !== saved)
+        send({ type: "update", id, patch: { description: text }, note: "edited the description" });
+    },
+    [],
+  );
 
   const saveDescription = () => {
     if (description !== task.description) update({ description }, "edited the description");

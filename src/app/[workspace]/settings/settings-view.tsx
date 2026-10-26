@@ -104,7 +104,7 @@ export function SettingsView({
           <Eyebrow>Workspace settings</Eyebrow>
           <h1 className="mt-2 truncate font-display text-4xl">{workspace.name}</h1>
           <p className="mt-1 text-sm text-ink-2">
-            You’re {workspace.role === "admin" ? "an" : "a"} {roleLabel[workspace.role].toLowerCase()} here.
+            You’re {workspace.role === "member" ? "a" : "an"} {roleLabel[workspace.role].toLowerCase()} here.
           </p>
         </div>
       </div>
@@ -147,7 +147,7 @@ export function SettingsView({
 function General({ workspace, disabled }: { workspace: WorkspaceSummary; disabled: boolean }) {
   const [result, action, pending] = useActionState(updateWorkspace, null);
   const [slug, setSlug] = useState(workspace.slug);
-  const problem = slugProblem(slug.replace(/-+$/, ""));
+  const problem = slug === workspace.slug ? null : slugProblem(slug.replace(/-+$/, ""));
   return (
     <form action={action} className="flex max-w-md flex-col gap-4">
       <input type="hidden" name="workspace" value={workspace.id} />
@@ -493,6 +493,7 @@ function BoardEditor({ board }: { board: BoardInfo }) {
                 />
                 <Input
                   value={l.id}
+                  autoFocus={!l.id && i === labels.length - 1}
                   aria-label="Label name"
                   maxLength={40}
                   onChange={(e) => setLabels(labels.map((x, j) => (j === i ? { ...x, id: e.target.value } : x)))}
@@ -527,6 +528,7 @@ function BoardEditor({ board }: { board: BoardInfo }) {
                 />
                 <Input
                   value={p.name}
+                  autoFocus={!p.name && i === projects.length - 1}
                   aria-label="Project name"
                   maxLength={40}
                   onChange={(e) => setProjects(projects.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}

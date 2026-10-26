@@ -134,9 +134,13 @@ export async function updateWorkspace(_: ActionResult, form: FormData): Promise<
   const slug = text(form, "slug", 32);
   const before = text(form, "before", 32);
   if (!name) return { ok: false, message: "A workspace needs a name." };
-  const problem = slugProblem(slug);
+  const problem = slug === before ? null : slugProblem(slug);
   if (problem) return { ok: false, message: `The address: ${problem.toLowerCase()}` };
-  const { data, error } = await supabase.from("workspaces").update({ name, slug }).eq("id", id).select("slug");
+  const { data, error } = await supabase
+    .from("workspaces")
+    .update(slug === before ? { name } : { name, slug })
+    .eq("id", id)
+    .select("slug");
   if (error) return { ok: false, message: error.code === "23505" ? "That address is taken." : "That didn’t save." };
   if (!data?.length) return { ok: false, message: "Only owners and admins can change this." };
   if (slug !== before) redirect(`/${slug}/settings`);

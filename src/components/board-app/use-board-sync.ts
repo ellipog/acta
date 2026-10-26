@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { toast } from "@/components/ui/toast";
 import { fetchBoardState } from "@/lib/actions";
@@ -36,6 +37,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
   const retry = useRef(0);
   const token = useRef<string | null>(null);
   const again = useRef<() => void>(() => {});
+  const router = useRouter();
+  const shape = useRef("");
   const boardId = live?.board.id;
   const prefix = live?.board.prefix ?? "ACT";
 
@@ -151,6 +154,10 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
   }, [flush]);
 
   useEffect(() => {
+    if (live) shape.current = JSON.stringify([live.board.name, live.board.labels, live.board.projects]);
+  }, [live]);
+
+  useEffect(() => {
     latest.current = board;
     if (!boardId) return;
     if (timer.current) clearTimeout(timer.current);
@@ -169,75 +176,97 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     const changes = (table: "tasks" | "comments" | "activity" | "suggestions") =>
       ({ event: "*", schema: "public", table, filter: `board_id=eq.${boardId}` }) as const;
 
-    channel = supabase
-      .channel(`board:${boardId}`, { config: { presence: { key: live.me.id } } })
-      .on("postgres_changes", changes("tasks"), (p) => {
-        if (p.new && "number" in p.new) receive({ table: "tasks", row: p.new as never });
-      })
-      .on("postgres_changes", changes("comments"), (p) =>
-        receive({
-          table: "comments",
-          row: p.eventType === "DELETE" ? undefined : (p.new as never),
-          old: p.old as never,
-        }),
-      )
-      .on("postgres_changes", changes("activity"), (p) =>
-        receive({
-          table: "activity",
-          row: p.eventType === "DELETE" ? undefined : (p.new as never),
-          old: p.old as never,
-        }),
-      )
-      .on("postgres_changes", changes("suggestions"), (p) =>
-        receive({
-          table: "suggestions",
-          row: p.eventType === "DELETE" ? undefined : (p.new as never),
-          old: p.old as never,
-        }),
-      )
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "boards", filter: `id=eq.${boardId}` }, (p) =>
-        receive({ table: "boards", row: p.new as never }),
-      )
-      .on("presence", { event: "sync" }, () => {
-        const state = channel!.presenceState<Visitor>();
-        const seen = new Map<string, Visitor>();
-        for (const list of Object.values(state)) for (const v of list) if (v.id !== live.me.id) seen.set(v.id, v);
-        setHere([...seen.values()]);
-      })
-      .subscribe((s) => {
-        if (s === "SUBSCRIBED") {
-          channel!.track({ id: live.me.id, name: live.me.name, avatar: live.me.avatar, tone: toneFor(live.me.id) });
-          void resync();
-        }
-      });
+    let stopped = false;
+    const start = async () => {
+      await supabase.realtime.setAuth().catch(() => {});
+      if (stopped) return;
+      channel = supabase
+        .channel(`board:${boardId}`, { config: { presence: { key: live.me.id } } })
+        .on("postgres_changes", changes("tasks"), (p) => {
+          if (p.new && "number" in p.new) receive({ table: "tasks", row: p.new as never });
+        })
+        .on("postgres_changes", changes("comments"), (p) =>
+          receive({
+            table: "comments",
+            row: p.eventType === "DELETE" ? undefined : (p.new as never),
+            old: p.old as never,
+          }),
+        )
+        .on("postgres_changes", changes("activity"), (p) =>
+          receive({
+            table: "activity",
+            row: p.eventType === "DELETE" ? undefined : (p.new as never),
+            old: p.old as never,
+          }),
+        )
+        .on("postgres_changes", changes("suggestions"), (p) =>
+          receive({
+            table: "suggestions",
+            row: p.eventType === "DELETE" ? undefined : (p.new as never),
+            old: p.old as never,
+          }),
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "boards", filter: `id=eq.${boardId}` },
+          (p) => {
+            const row = p.new as { name?: string; labels?: unknown; projects?: unknown };
+            if (JSON.stringify([row.name, row.labels, row.projects]) !== shape.current) router.refresh();
+            receive({ table: "boards", row: p.new as never });
+          },
+        )
+        .on("presence", { event: "sync" }, () => {
+          const state = channel!.presenceState<Visitor>();
+          const seen = new Map<string, Visitor>();
+          for (const list of Object.values(state)) for (const v of list) if (v.id !== live.me.id) seen.set(v.id, v);
+          setHere([...seen.values()]);
+        })
+        .subscribe((s) => {
+          if (s === "SUBSCRIBED") {
+            channel!.track({ id: live.me.id, name: live.me.name, avatar: live.me.avatar, tone: toneFor(live.me.id) });
+            void resync();
+          }
+        });
+    };
+    void start();
 
     const save = () => {
-      if (!base.current || !token.current) return;
+      if (!base.current || !token.current || inflight.current) return;
       const d = diffBoards(base.current, latest.current);
       if (emptyDiff(d)) return;
+      if (timer.current) clearTimeout(timer.current);
       void fetch(`${supabaseUrl}/rest/v1/rpc/apply_board_changes`, {
         method: "POST",
         keepalive: true,
         headers: { apikey: supabaseKey, authorization: `Bearer ${token.current}`, "content-type": "application/json" },
         body: JSON.stringify({ p_board: boardId, p_changes: toWire(d, latest.current) }),
       }).catch(() => {});
+      base.current = absorb(base.current, latest.current, d);
     };
     const hidden = () => {
-      if (document.visibilityState === "hidden") save();
+      if (document.visibilityState !== "hidden") return;
+      if (timer.current) clearTimeout(timer.current);
+      void flush();
+    };
+    const shown = (e: PageTransitionEvent) => {
+      if (e.persisted) void resync();
     };
     const online = () => void flush();
     window.addEventListener("pagehide", save);
+    window.addEventListener("pageshow", shown);
     document.addEventListener("visibilitychange", hidden);
     window.addEventListener("online", online);
 
     return () => {
       auth.data.subscription.unsubscribe();
       window.removeEventListener("pagehide", save);
+      window.removeEventListener("pageshow", shown);
       document.removeEventListener("visibilitychange", hidden);
       window.removeEventListener("online", online);
+      stopped = true;
       if (channel) void supabase.removeChannel(channel);
     };
-  }, [boardId, live, receive, resync, flush]);
+  }, [boardId, live, receive, resync, flush, router]);
 
   return { status, here };
 }

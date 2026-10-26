@@ -317,7 +317,7 @@ export function TimelineView({
               </div>
               <p className="truncate font-mono text-[11px] text-ink-3">
                 {readOnly
-                  ? `${rows.length} on the roadmap`
+                  ? `${rows.length} scheduled`
                   : `${rows.length} tasks${unscheduled ? ` · ${unscheduled} without dates` : ""}`}
               </p>
             </div>
@@ -402,7 +402,11 @@ export function TimelineView({
           </div>
 
           <div className="relative">
-            <div aria-hidden className="pointer-events-none absolute inset-y-0 left-[var(--left)]" style={{ width }}>
+            <div
+              aria-hidden
+              className={cn("pointer-events-none absolute inset-y-0 left-[var(--left)]", !rows.length && "hidden")}
+              style={{ width }}
+            >
               {zoom !== "year"
                 ? dayList
                     .filter((d) => weekday(d) === 5)
@@ -619,7 +623,7 @@ export function TimelineView({
             })}
 
             {rows.length === 0 ? (
-              <div className="sticky left-0 w-[min(100%,100vw)]">
+              <div className="sticky left-0 w-[100cqw]">
                 <EmptyState
                   art="terrain-badlands-strata"
                   title={filtered ? "Nothing matches" : readOnly ? "Nothing scheduled yet" : "Nothing to plan yet"}
@@ -761,7 +765,9 @@ function Bar({
             >
               {task.title}
             </span>
-            {person && w >= 180 ? <Avatar name={person.name} src={person.avatar} tone={person.tone} size="xs" className="ml-auto" /> : null}
+            {person && w >= 180 ? (
+              <Avatar name={person.name} src={person.avatar} tone={person.tone} size="xs" className="ml-auto" />
+            ) : null}
           </span>
         ) : null}
         {readOnly ? null : (

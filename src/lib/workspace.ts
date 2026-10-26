@@ -1,6 +1,6 @@
 import "server-only";
 import { cache } from "react";
-import { defaultPage, type BoardState, type Label, type Project, type StatusCategory, type Task } from "./board-store";
+import { pageFrom, type BoardState, type Label, type Project, type StatusCategory, type Task } from "./board-store";
 import { fromRow, taskKey, type TaskRow } from "./board-sync";
 import type { DitherName } from "./dither-assets";
 import {
@@ -167,13 +167,7 @@ export async function readBoardState(
         votes: s.vote_count,
         voted: suggestionVoted.has(s.id),
       })),
-      page: {
-        ...defaultPage,
-        title: board.name,
-        ...(board.page as object),
-        slug: board.slug,
-        stageNames: { ...defaultPage.stageNames, ...((board.page as { stageNames?: object }).stageNames ?? {}) },
-      },
+      page: pageFrom(board.name, board.slug, board.page),
     },
   };
 }
