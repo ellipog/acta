@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "bun test",
     "dither": "node scripts/dither.mjs",
     "logo": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/logo.mjs"
   },
@@ -30,6 +31,7 @@
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
+    "@types/bun": "^1.4.4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

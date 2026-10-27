@@ -16,13 +16,17 @@ import { DialogContent } from "@/components/ui/dialog";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
 import { useNow } from "@/lib/hooks";
+import { MONTHS } from "@/lib/dates";
 import type { DitherName } from "@/lib/dither-assets";
 import {
   me,
   personById,
+  safeHref,
   stageOf,
   timeAgo,
   type BoardState,
+  type PageSection,
+  type PublicPage,
   type Stage,
   type StatusCategory,
   type Suggestion,
@@ -103,6 +107,43 @@ export const arts: DitherName[] = [
 ];
 
 export const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+export const headingFonts: Record<PublicPage["headingFont"], string> = {
+  display: "font-display",
+  sans: "font-sans font-semibold tracking-tight",
+  serif: "font-caption italic",
+  mono: "font-mono tracking-tight",
+};
+
+const linear = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+
+/**
+ * A page's own colour, worn in place of lapis. The softer and deeper shades are mixed from it against the page
+ * itself, so they suit light and dark alike, and text on it turns dark when the colour is light
+ */
+export function accentVars(hex: string): React.CSSProperties | undefined {
+  if (!/^#[0-9a-f]{6}$/i.test(hex)) return undefined;
+  const [r, g, b] = [1, 3, 5].map((i) => linear(parseInt(hex.slice(i, i + 2), 16) / 255));
+  const light = 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4;
+  return {
+    "--lapis": hex,
+    "--lapis-hover": `color-mix(in oklab, ${hex} 85%, var(--ink))`,
+    "--lapis-soft": `color-mix(in oklab, ${hex} 16%, var(--raised))`,
+    "--lapis-ink": `color-mix(in oklab, ${hex} 65%, var(--ink))`,
+    "--on-accent": light ? "#11131a" : "#f7f5ef",
+  } as React.CSSProperties;
+}
+
+/** The accent the page's parts use: lapis carries a colour of the page's own */
+export const accentOf = (page: PublicPage): Tone => (page.color ? "lapis" : page.accent);
+
+const monthOf = (iso?: string) => {
+  if (!iso) return "Earlier";
+  const [y, m] = iso.split("-").map(Number);
+  return `${MONTHS[m - 1]} ${y}`;
+};
+
+const outside = { target: "_blank", rel: "noopener noreferrer nofollow" } as const;
 const article = (s: string) => (/^[aeiou]/i.test(s) ? "an" : "a");
 export const byVotes = (a: Task, b: Task) => (b.votes ?? 0) - (a.votes ?? 0);
 const byDue = (a: Task, b: Task) => (a.due ?? "9999").localeCompare(b.due ?? "9999") || byVotes(a, b);
@@ -185,7 +226,10 @@ export function Visitor({
   const page = state.roadmap.page;
   const today = useToday();
   const now = useNow();
-  const t = tint[page.accent];
+  const accent = accentOf(page);
+  const t = tint[accent];
+  const compact = page.density === "compact";
+  const heading = headingFonts[page.headingFont] ?? headingFonts.display;
   const [query, setQuery] = useState("");
   const [only, setOnly] = useState<Stage | "all">("all");
   const [ideaSort, setIdeaSort] = useState<"top" | "new">("top");
@@ -194,6 +238,7 @@ export function Visitor({
   const [detail, setDetail] = useState<string | null>(null);
   const [zoom, setZoom] = useState<Zoom | null>(null);
   const [collapsed, setCollapsed] = useState<string[]>([]);
+  const [allShipped, setAllShipped] = useState(false);
 
   const q = query.trim().toLowerCase();
   const all = Object.values(state.tasks).filter(
@@ -209,6 +254,13 @@ export function Visitor({
   const ideas = [...state.roadmap.suggestions].sort(
     ideaSort === "top" ? (a, b) => b.votes - a.votes : (a, b) => b.at - a.at,
   );
+  const ctaHref = page.cta.label.trim() ? safeHref(page.cta.url) : null;
+  const links = page.links.flatMap((l) => {
+    const href = safeHref(l.url);
+    return href && l.label.trim() ? [{ label: l.label, href }] : [];
+  });
+  const announcementHref = safeHref(page.announcementLink);
+  const art = page.hero !== "plain" && arts.includes(page.art as DitherName) ? (page.art as DitherName) : null;
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -251,7 +303,8 @@ export function Visitor({
             <Icon name="flag" size="sm" /> {formatShort(x.due, today)}
           </span>
         ) : null}
-        {page.showProgress && !shipped ? <Progress task={x} accent={page.accent} /> : null}
+        {page.showProjects && x.project ? <ProjectMark project={x.project} /> : null}
+        {page.showProgress && !shipped ? <Progress task={x} accent={accent} /> : null}
         {page.showTeam && person ? (
           <span className="flex items-center gap-1.5 text-[11px] text-ink-3">
             <Avatar name={person.name} src={person.avatar} tone={person.tone} size="xs" />
@@ -262,9 +315,11 @@ export function Visitor({
     );
   };
 
+  const voteSize = compact ? "sm" : "md";
+
   const item = (x: Task, stage: Stage) => (
-    <li key={x.id} className="flex gap-3 border-b border-line py-3 last:border-b-0">
-      {page.voting ? <VoteButton task={x} accent={page.accent} onVote={() => vote(x.id)} /> : null}
+    <li key={x.id} className={cn("flex gap-3 border-b border-line last:border-b-0", compact ? "py-2" : "py-3")}>
+      {page.voting ? <VoteButton task={x} accent={accent} onVote={() => vote(x.id)} size={voteSize} /> : null}
       <div className="min-w-0 flex-1">
         <button
           onClick={() => setDetail(x.id)}
@@ -272,15 +327,11 @@ export function Visitor({
         >
           {x.title}
         </button>
-        {note(x) ? <p className="mt-0.5 line-clamp-2 text-xs text-ink-3">{note(x)}</p> : null}
-        <div className="mt-1.5">{meta(x)}</div>
-        {page.voting ? (
+        {page.showNotes && note(x) ? <p className="mt-0.5 line-clamp-2 text-xs text-ink-3">{note(x)}</p> : null}
+        <div className={compact ? "mt-1" : "mt-1.5"}>{meta(x)}</div>
+        {page.voting && !compact ? (
           <div className="mt-2">
-            <Vein
-              votes={x.votes ?? 0}
-              max={max}
-              tone={stage === "shipped" ? "malachite" : (page.accent as DitherTone)}
-            />
+            <Vein votes={x.votes ?? 0} max={max} tone={stage === "shipped" ? "malachite" : (accent as DitherTone)} />
           </div>
         ) : null}
       </div>
@@ -302,54 +353,132 @@ export function Visitor({
           rows: items.filter((x) => (x.project ?? "Other") === p && (x.start || x.due)),
         }));
 
-  return (
-    <div className="px-4 py-8 @2xl:px-10 @2xl:py-10">
-      <div className="grid gap-6 @2xl:grid-cols-[1fr_auto] @2xl:items-center">
-        <div className="min-w-0">
-          <Eyebrow>{me.team} · Roadmap</Eyebrow>
-          <h1 className="mt-3 font-display text-3xl leading-tight break-words @2xl:text-4xl">
-            {page.title || "Untitled"}
-          </h1>
-          {page.tagline ? <p className="mt-2 max-w-lg text-sm text-ink-2">{page.tagline}</p> : null}
-          <dl className="mt-5 flex flex-wrap gap-x-6 gap-y-3 font-mono text-[11px] text-ink-3">
-            {stages.map((s) => (
-              <div key={s}>
-                <dt className="flex items-center gap-1.5">
-                  <StatusMarker status={stageMeta[s].marker} className="size-2.5" />
-                  {page.stageNames[s]}
-                </dt>
-                <dd className="mt-1 font-display text-2xl text-ink">{all.filter((x) => stageOf(x) === s).length}</dd>
-              </div>
-            ))}
-          </dl>
+  const stats = page.showStats ? (
+    <dl
+      className={cn(
+        "mt-5 flex flex-wrap gap-x-6 gap-y-3 font-mono text-[11px] text-ink-3",
+        page.hero === "centered" && "justify-center",
+      )}
+    >
+      {stages.map((s) => (
+        <div key={s}>
+          <dt className="flex items-center gap-1.5">
+            <StatusMarker status={stageMeta[s].marker} className="size-2.5" />
+            {page.stageNames[s]}
+          </dt>
+          <dd className="mt-1 font-display text-2xl text-ink">{all.filter((x) => stageOf(x) === s).length}</dd>
         </div>
-        {arts.includes(page.art as DitherName) ? (
+      ))}
+    </dl>
+  ) : null;
+
+  const actions =
+    ctaHref || links.length ? (
+      <div className={cn("mt-5 flex flex-wrap items-center gap-2", page.hero === "centered" && "justify-center")}>
+        {ctaHref ? (
+          <a
+            href={ctaHref}
+            {...outside}
+            className={cn(
+              "inline-flex h-9 items-center gap-1.5 border px-3 text-sm outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-page",
+              t.solid,
+              t.ring,
+            )}
+          >
+            {page.cta.label} <Icon name="arrow-right" size="sm" />
+          </a>
+        ) : null}
+        {links.map((l) => (
+          <a
+            key={l.href + l.label}
+            href={l.href}
+            {...outside}
+            className={cn(
+              "inline-flex h-9 items-center gap-1.5 border border-line bg-raised px-3 text-sm text-ink-2 outline-none hover:border-line-strong hover:text-ink focus-visible:ring-2",
+              t.ring,
+            )}
+          >
+            {l.label} <Icon name="external" size="sm" className="text-ink-3" />
+          </a>
+        ))}
+      </div>
+    ) : null;
+
+  const words = (
+    <>
+      <Eyebrow>{me.team} · Roadmap</Eyebrow>
+      <h1
+        className={cn(
+          "mt-3 leading-tight break-words",
+          heading,
+          page.hero === "plain" ? "text-2xl @2xl:text-3xl" : "text-3xl @2xl:text-4xl",
+        )}
+      >
+        {page.title || "Untitled"}
+      </h1>
+      {page.tagline ? (
+        <p className={cn("mt-2 max-w-lg text-sm text-ink-2", page.hero === "centered" && "mx-auto")}>{page.tagline}</p>
+      ) : null}
+      {actions}
+      {stats}
+    </>
+  );
+
+  const hero =
+    page.hero === "banner" ? (
+      <div>
+        {art ? (
+          <div
+            className={cn(
+              "relative -mx-4 h-36 overflow-hidden border-b border-line @2xl:-mx-10 @2xl:h-48",
+              compact ? "-mt-6 mb-6 @2xl:-mt-8" : "-mt-8 mb-8 @2xl:-mt-10",
+            )}
+          >
+            <Dither name={art} tone={accent} fill smooth />
+          </div>
+        ) : null}
+        <div className="min-w-0">{words}</div>
+      </div>
+    ) : page.hero === "centered" ? (
+      <div className="flex flex-col items-center text-center">
+        {art ? (
+          <div className="relative mb-2 h-24 w-28">
+            <Dither name={art} tone={accent} fill smooth />
+          </div>
+        ) : null}
+        <div className="min-w-0">{words}</div>
+      </div>
+    ) : (
+      <div className="grid gap-6 @2xl:grid-cols-[1fr_auto] @2xl:items-center">
+        <div className="min-w-0">{words}</div>
+        {art ? (
           <div className="relative hidden h-44 w-56 @2xl:block">
-            <Dither name={page.art as DitherName} tone={page.accent} fill smooth />
+            <Dither name={art} tone={accent} fill smooth />
           </div>
         ) : null}
       </div>
+    );
 
-      <div className="mt-8 flex flex-wrap items-center gap-2">
-        <label
-          className={cn(
-            "flex h-9 min-w-0 flex-1 items-center gap-2 border border-line-strong bg-raised px-2.5 focus-within:border-ink @2xl:max-w-xs",
-          )}
-        >
-          <Icon name="search" size="sm" className="text-ink-3" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search the roadmap"
-            aria-label="Search the roadmap"
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-ink-3"
-          />
-          {query ? (
-            <button aria-label="Clear search" onClick={() => setQuery("")} className="text-ink-3 hover:text-ink">
-              <Icon name="x" size="sm" />
-            </button>
-          ) : null}
-        </label>
+  const toolbar =
+    page.showSearch || page.layout === "list" ? (
+      <div className="flex flex-wrap items-center gap-2">
+        {page.showSearch ? (
+          <label className="flex h-9 min-w-0 flex-1 items-center gap-2 border border-line-strong bg-raised px-2.5 focus-within:border-ink @2xl:max-w-xs">
+            <Icon name="search" size="sm" className="text-ink-3" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search the roadmap"
+              aria-label="Search the roadmap"
+              className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-ink-3"
+            />
+            {query ? (
+              <button aria-label="Clear search" onClick={() => setQuery("")} className="text-ink-3 hover:text-ink">
+                <Icon name="x" size="sm" />
+              </button>
+            ) : null}
+          </label>
+        ) : null}
         {page.layout === "list" ? (
           <div role="radiogroup" aria-label="Show stage" className="flex flex-wrap gap-1">
             {(["all", ...stages] as (Stage | "all")[]).map((s) => (
@@ -377,9 +506,13 @@ export function Visitor({
           </div>
         ) : null}
       </div>
+    ) : null;
 
+  const roadmap = (
+    <div className="flex flex-col gap-6">
+      {toolbar}
       {page.layout === "stages" ? (
-        <div className="mt-6 grid gap-6 @2xl:grid-cols-2">
+        <div className="grid gap-6 @2xl:grid-cols-2">
           {stages
             .filter((s) => s !== "shipped")
             .map((s) => {
@@ -404,7 +537,7 @@ export function Visitor({
             })}
         </div>
       ) : page.layout === "timeline" ? (
-        <div className="mt-6 h-[30rem] border border-line-strong bg-raised">
+        <div className="h-[30rem] border border-line-strong bg-raised">
           <TimelineView
             state={state}
             dispatch={dispatch}
@@ -418,23 +551,25 @@ export function Visitor({
             filtered={Boolean(q)}
             onClearFilters={() => setQuery("")}
             readOnly
-            accent={page.accent}
+            accent={accent}
             customGroups={timelineGroups}
             lead={
               page.voting
-                ? (x) => <VoteButton task={x} accent={page.accent} onVote={() => vote(x.id)} size="sm" />
+                ? (x) => <VoteButton task={x} accent={accent} onVote={() => vote(x.id)} size="sm" />
                 : undefined
             }
           />
         </div>
       ) : (
-        <ol className="mt-6 border-t border-ink">
+        <ol className="border-t border-ink">
           {ranked.map((x, i) => {
             const s = stageOf(x);
             return (
-              <li key={x.id} className="flex items-start gap-3 border-b border-line py-3">
-                <span className="w-6 shrink-0 pt-3 text-right font-mono text-[11px] text-ink-3">{i + 1}</span>
-                {page.voting ? <VoteButton task={x} accent={page.accent} onVote={() => vote(x.id)} /> : null}
+              <li key={x.id} className={cn("flex items-start gap-3 border-b border-line", compact ? "py-2" : "py-3")}>
+                <span className={cn("w-6 shrink-0 text-right font-mono text-[11px] text-ink-3", compact ? "pt-1.5" : "pt-3")}>
+                  {i + 1}
+                </span>
+                {page.voting ? <VoteButton task={x} accent={accent} onVote={() => vote(x.id)} size={voteSize} /> : null}
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <button
@@ -448,8 +583,8 @@ export function Visitor({
                       {page.stageNames[s]}
                     </span>
                   </div>
-                  {note(x) ? <p className="mt-0.5 line-clamp-1 text-xs text-ink-3">{note(x)}</p> : null}
-                  <div className="mt-1.5">{meta(x)}</div>
+                  {page.showNotes && note(x) ? <p className="mt-0.5 line-clamp-1 text-xs text-ink-3">{note(x)}</p> : null}
+                  <div className={compact ? "mt-1" : "mt-1.5"}>{meta(x)}</div>
                 </div>
               </li>
             );
@@ -459,112 +594,124 @@ export function Visitor({
           ) : null}
         </ol>
       )}
+    </div>
+  );
 
-      {page.ideas || (page.ideasPublic && ideas.length) ? (
-        <section className="mt-12 grid gap-8 @3xl:grid-cols-[minmax(0,20rem)_1fr]">
-          {page.ideas ? (
-            <form onSubmit={submit} className="self-start border border-ink bg-raised p-4">
-              <h2 className="font-display text-xl">
-                {cap(article(page.ideaOne))} {page.ideaOne}?
-              </h2>
-              <p className="mt-1 text-xs text-ink-3">The team reads every one.</p>
-              <Input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder={page.ideaPrompt}
-                aria-label={`Your ${page.ideaOne}`}
-                className="mt-4"
+  const ideasBlock =
+    page.ideas || (page.ideasPublic && ideas.length) ? (
+      <section className="grid gap-8 @3xl:grid-cols-[minmax(0,20rem)_1fr]">
+        {page.ideas ? (
+          <form onSubmit={submit} className="self-start border border-ink bg-raised p-4">
+            <h2 className={cn("text-xl", heading)}>
+              {cap(article(page.ideaOne))} {page.ideaOne}?
+            </h2>
+            <p className="mt-1 text-xs text-ink-3">The team reads every one.</p>
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={page.ideaPrompt}
+              aria-label={`Your ${page.ideaOne}`}
+              className="mt-4"
+            />
+            {title.trim() ? (
+              <Textarea
+                value={details}
+                onChange={(e) => setDetails(e.target.value)}
+                placeholder="Any details? Optional."
+                aria-label="Details"
+                className="mt-2 min-h-20"
               />
-              {title.trim() ? (
-                <Textarea
-                  value={details}
-                  onChange={(e) => setDetails(e.target.value)}
-                  placeholder="Any details? Optional."
-                  aria-label="Details"
-                  className="mt-2 min-h-20"
-                />
-              ) : null}
-              <Button
-                type="submit"
-                variant="primary"
-                disabled={!title.trim()}
-                className={cn("mt-3 w-full", t.solid, "hover:opacity-90")}
-              >
-                <Icon name="bulb" /> Send {page.ideaOne}
-              </Button>
-            </form>
-          ) : null}
-          {page.ideasPublic ? (
-            <div className="min-w-0">
-              <header className="flex items-center gap-2 border-b border-ink pb-2">
-                <Icon name="bulb" size="sm" className={t.text} />
-                <h2 className="text-sm font-medium">{cap(page.ideaMany)} from visitors</h2>
-                <span className="font-mono text-[11px] text-ink-3">{ideas.length}</span>
-                <div role="radiogroup" aria-label="Sort" className="ml-auto flex border border-line">
-                  {(["top", "new"] as const).map((s) => (
-                    <button
-                      key={s}
-                      role="radio"
-                      aria-checked={ideaSort === s}
-                      onClick={() => setIdeaSort(s)}
-                      className={cn(
-                        "h-6 px-2 text-[11px] capitalize",
-                        ideaSort === s ? "bg-ink text-page" : "text-ink-2 hover:bg-sunken",
-                      )}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </header>
-              <ul>
-                {ideas.map((s: Suggestion) => (
-                  <li key={s.id} className="flex gap-3 border-b border-line py-3">
-                    {page.voting ? (
-                      <VoteButton
-                        task={{
-                          title: s.title,
-                          votes: s.votes,
-                          voted: s.voted,
-                        }}
-                        accent={page.accent}
-                        onVote={() => dispatch({ type: "voteSuggestion", id: s.id })}
-                      />
-                    ) : null}
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm">{s.title}</p>
-                      {s.details ? <p className="mt-0.5 line-clamp-2 text-xs text-ink-3">{s.details}</p> : null}
-                      <p className="mt-1.5 flex items-center gap-2 text-[11px] text-ink-3">
-                        <span className="border border-dashed border-line-strong px-1.5 py-px">Under review</span>
-                        {s.by}
-                        {now ? ` · ${timeAgo(s.at, now)}` : ""}
-                      </p>
-                    </div>
-                  </li>
+            ) : null}
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!title.trim()}
+              className={cn("mt-3 w-full", t.solid, "hover:opacity-90")}
+            >
+              <Icon name="bulb" /> Send {page.ideaOne}
+            </Button>
+          </form>
+        ) : null}
+        {page.ideasPublic ? (
+          <div className="min-w-0">
+            <header className="flex items-center gap-2 border-b border-ink pb-2">
+              <Icon name="bulb" size="sm" className={t.text} />
+              <h2 className="text-sm font-medium">{cap(page.ideaMany)} from visitors</h2>
+              <span className="font-mono text-[11px] text-ink-3">{ideas.length}</span>
+              <div role="radiogroup" aria-label="Sort" className="ml-auto flex border border-line">
+                {(["top", "new"] as const).map((s) => (
+                  <button
+                    key={s}
+                    role="radio"
+                    aria-checked={ideaSort === s}
+                    onClick={() => setIdeaSort(s)}
+                    className={cn(
+                      "h-6 px-2 text-[11px] capitalize",
+                      ideaSort === s ? "bg-ink text-page" : "text-ink-2 hover:bg-sunken",
+                    )}
+                  >
+                    {s}
+                  </button>
                 ))}
-                {ideas.length === 0 ? (
-                  <li className="py-8 text-center text-xs text-ink-3">No {page.ideaMany} yet. Be the first.</li>
-                ) : null}
-              </ul>
-            </div>
-          ) : null}
-        </section>
-      ) : null}
+              </div>
+            </header>
+            <ul>
+              {ideas.map((s: Suggestion) => (
+                <li key={s.id} className={cn("flex gap-3 border-b border-line", compact ? "py-2" : "py-3")}>
+                  {page.voting ? (
+                    <VoteButton
+                      task={{ title: s.title, votes: s.votes, voted: s.voted }}
+                      accent={accent}
+                      onVote={() => dispatch({ type: "voteSuggestion", id: s.id })}
+                      size={voteSize}
+                    />
+                  ) : null}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm">{s.title}</p>
+                    {s.details ? <p className="mt-0.5 line-clamp-2 text-xs text-ink-3">{s.details}</p> : null}
+                    <p className="mt-1.5 flex items-center gap-2 text-[11px] text-ink-3">
+                      <span className="border border-dashed border-line-strong px-1.5 py-px">Under review</span>
+                      {s.by}
+                      {now ? ` · ${timeAgo(s.at, now)}` : ""}
+                    </p>
+                  </div>
+                </li>
+              ))}
+              {ideas.length === 0 ? (
+                <li className="py-8 text-center text-xs text-ink-3">No {page.ideaMany} yet. Be the first.</li>
+              ) : null}
+            </ul>
+          </div>
+        ) : null}
+      </section>
+    ) : null;
 
-      {page.showShipped && page.layout === "stages" ? (
-        <section className="mt-12">
-          <header className="flex items-center gap-2 border-b border-ink pb-2">
-            <StatusMarker status="done" />
-            <h2 className="text-sm font-medium">{page.stageNames.shipped}</h2>
-          </header>
-          <ol className="relative mt-4 ml-1.5 border-l border-line-strong">
-            {items
-              .filter((x) => stageOf(x) === "shipped")
-              .sort(byShipped)
-              .map((x) => (
-                <li key={x.id} className="relative pb-5 pl-5 last:pb-0">
+  const shippedAll = items.filter((x) => stageOf(x) === "shipped").sort(byShipped);
+  const limit = page.shippedLimit > 0 && !allShipped ? page.shippedLimit : shippedAll.length;
+  const shippedShown = shippedAll.slice(0, limit);
+  const shippedGroups = page.shippedByMonth
+    ? [...new Set(shippedShown.map((x) => monthOf(x.shipped)))].map((m) => ({
+        month: m,
+        rows: shippedShown.filter((x) => monthOf(x.shipped) === m),
+      }))
+    : [{ month: "", rows: shippedShown }];
+
+  const shippedBlock =
+    page.showShipped && page.layout !== "list" && shippedAll.length ? (
+      <section>
+        <header className="flex items-center gap-2 border-b border-ink pb-2">
+          <StatusMarker status="done" />
+          <h2 className="text-sm font-medium">{page.stageNames.shipped}</h2>
+          <span className="font-mono text-[11px] text-ink-3">{shippedAll.length}</span>
+        </header>
+        {shippedGroups.map((g) => (
+          <div key={g.month || "all"}>
+            {g.month ? <p className="mt-5 font-mono text-[11px] tracking-[0.1em] text-ink-3 uppercase">{g.month}</p> : null}
+            <ol className={cn("relative ml-1.5 border-l border-line-strong", g.month ? "mt-2" : "mt-4")}>
+              {g.rows.map((x) => (
+                <li key={x.id} className={cn("relative pl-5 last:pb-0", compact ? "pb-3" : "pb-5")}>
                   <span className="absolute top-1 -left-[5px] size-[9px] border border-malachite bg-malachite" />
-                  {page.showDates && x.shipped ? (
+                  {page.showDates && x.shipped && !page.shippedByMonth ? (
                     <p className="font-mono text-[11px] text-ink-3">{formatShort(x.shipped, null)}</p>
                   ) : null}
                   <button
@@ -572,7 +719,7 @@ export function Visitor({
                     className="mt-0.5 flex items-center gap-2 text-left text-sm hover:underline"
                   >
                     {x.title}
-                    {x.project ? <ProjectMark project={x.project} /> : null}
+                    {page.showProjects && x.project ? <ProjectMark project={x.project} /> : null}
                   </button>
                   {page.voting ? (
                     <p className="mt-0.5 font-mono text-[11px] text-ink-3">
@@ -581,21 +728,62 @@ export function Visitor({
                   ) : null}
                 </li>
               ))}
-          </ol>
-        </section>
+            </ol>
+          </div>
+        ))}
+        {shippedAll.length > limit ? (
+          <button
+            onClick={() => setAllShipped(true)}
+            className={cn("mt-4 text-xs text-ink-2 underline-offset-2 hover:underline", t.text)}
+          >
+            Show all {shippedAll.length}
+          </button>
+        ) : null}
+      </section>
+    ) : null;
+
+  const blocks: Record<PageSection, React.ReactNode> = { roadmap, ideas: ideasBlock, shipped: shippedBlock };
+
+  return (
+    <div
+      data-theme={page.theme === "visitor" ? undefined : page.theme}
+      style={accentVars(page.color)}
+      className="bg-page text-ink"
+    >
+      {page.announcement.trim() ? (
+        <div className={cn("flex items-center justify-center gap-2 border-b px-4 py-2 text-center text-sm", t.soft)}>
+          <Icon name="sparkle" size="sm" className="shrink-0" />
+          {announcementHref ? (
+            <a href={announcementHref} {...outside} className="underline-offset-2 hover:underline">
+              {page.announcement} <span aria-hidden>→</span>
+            </a>
+          ) : (
+            <span>{page.announcement}</span>
+          )}
+        </div>
       ) : null}
 
-      <p className="mt-12 border-t border-line pt-4 font-mono text-[11px] text-ink-3">
-        {home ? (
-          <a href={home} className="inline-flex items-center gap-2 hover:text-ink">
-            <LogoMark size={14} /> Made with Acta
-          </a>
-        ) : (
-          <span className="inline-flex items-center gap-2">
-            <LogoMark size={14} /> Made with Acta
-          </span>
-        )}
-      </p>
+      <div className={cn("px-4 @2xl:px-10", compact ? "py-6 @2xl:py-8" : "py-8 @2xl:py-10")}>
+        {hero}
+        <div className={cn("flex flex-col", compact ? "mt-6 gap-8" : "mt-8 gap-12")}>
+          {page.sections.map((s) => (blocks[s] ? <div key={s}>{blocks[s]}</div> : null))}
+        </div>
+
+        <footer className="mt-12 border-t border-line pt-4">
+          {page.footer.trim() ? <p className="mb-3 text-sm whitespace-pre-line text-ink-2">{page.footer}</p> : null}
+          <p className="font-mono text-[11px] text-ink-3">
+            {home ? (
+              <a href={home} className="inline-flex items-center gap-2 hover:text-ink">
+                <LogoMark size={14} /> Made with Acta
+              </a>
+            ) : (
+              <span className="inline-flex items-center gap-2">
+                <LogoMark size={14} /> Made with Acta
+              </span>
+            )}
+          </p>
+        </footer>
+      </div>
 
       <D.Root open={Boolean(open)} onOpenChange={(o) => !o && setDetail(null)}>
         {open ? (
@@ -603,7 +791,7 @@ export function Visitor({
             {(() => {
               const s = stageOf(open);
               return (
-                <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-4" style={accentVars(page.color)}>
                   <div className="flex flex-wrap items-center gap-3">
                     <span className="flex items-center gap-1.5 border border-line px-2 py-0.5 text-xs text-ink-2">
                       <StatusMarker status={stageMeta[s].marker} className="size-2.5" />
@@ -621,14 +809,14 @@ export function Visitor({
                       <p className="mb-1.5 text-[11px] text-ink-3">Progress</p>
                       <div className="flex h-2 gap-px">
                         {open.subtasks.map((st) => (
-                          <span key={st.id} className={cn("flex-1", st.done ? tint[page.accent].bg : "bg-line")} />
+                          <span key={st.id} className={cn("flex-1", st.done ? tint[accent].bg : "bg-line")} />
                         ))}
                       </div>
                     </div>
                   ) : null}
                   {page.voting ? (
                     <div className="flex items-center gap-3 border-t border-line pt-4">
-                      <VoteButton task={open} accent={page.accent} onVote={() => vote(open.id)} />
+                      <VoteButton task={open} accent={accent} onVote={() => vote(open.id)} />
                       <p className="text-sm text-ink-2">
                         {open.voted ? "You voted for this." : "Want this? Give it a vote."}
                         <span className="block font-mono text-[11px] text-ink-3">

@@ -57,8 +57,13 @@ export function rememberShell(live: Shell) {
     members: live.members,
   });
   const known: Record<string, number> = {};
-  for (const b of live.boards) if (b.count !== undefined) known[b.id] = b.count;
+  const yours: Record<string, number> = {};
+  for (const b of live.boards) {
+    if (b.count !== undefined) known[b.id] = b.count;
+    if (b.mine !== undefined) yours[b.id] = b.mine;
+  }
   setCounts(known);
+  setMine(yours);
 }
 
 export const cachedShell = (slug: string) => (typeof window === "undefined" ? null : (shells.get(slug) ?? null));
@@ -87,4 +92,29 @@ export function useCounts() {
     () => counts,
     () => none,
   );
+}
+
+// How many open tasks on each board are yours, for My tasks in the sidebar. Kept the same way
+let mine: Record<string, number> = {};
+const mineListeners = new Set<() => void>();
+
+export function setMine(next: Record<string, number>) {
+  if (Object.entries(next).every(([id, n]) => mine[id] === n)) return;
+  mine = { ...mine, ...next };
+  mineListeners.forEach((l) => l());
+}
+
+const subscribeMine = (l: () => void) => {
+  mineListeners.add(l);
+  return () => void mineListeners.delete(l);
+};
+
+/** Your open tasks across the given boards, from the freshest count known for each */
+export function useMine(boards: { id: string; mine?: number }[]) {
+  const known = useSyncExternalStore(
+    subscribeMine,
+    () => mine,
+    () => none,
+  );
+  return boards.reduce((sum, b) => sum + (known[b.id] ?? b.mine ?? 0), 0);
 }

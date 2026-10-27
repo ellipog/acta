@@ -3,7 +3,7 @@
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
 import { newKey, type Access } from "@/lib/agents/keys";
-import { avatarBucket, maxAvatarBytes, providerPictures } from "@/lib/avatars";
+import { avatarBucket, imageType, maxAvatarBytes, providerPictures } from "@/lib/avatars";
 import { createAdminClient, serviceReady } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -27,14 +27,6 @@ export async function rename(_: Result, form: FormData): Promise<Result> {
   if (error) return { ok: false, message: "That didn’t save. Try again." };
   refresh();
   return { ok: true, message: "Saved." };
-}
-
-function imageType(b: Uint8Array) {
-  const text = (from: number, to: number) => String.fromCharCode(...b.subarray(from, to));
-  if (b[0] === 0x89 && text(1, 4) === "PNG") return "png";
-  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "jpeg";
-  if (text(0, 4) === "RIFF" && text(8, 12) === "WEBP") return "webp";
-  return null;
 }
 
 async function clearPictures(id: string, keep?: string) {

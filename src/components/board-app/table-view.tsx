@@ -58,6 +58,7 @@ import {
   type SortKey,
 } from "./fields";
 import { FieldsMenu } from "./fields-menu";
+import { planDrop, planStep, type DropAt } from "./table-drop";
 import { TaskMenu } from "./task-menu";
 
 type Group = {
@@ -66,7 +67,11 @@ type Group = {
   icon?: React.ReactNode;
   rows: Task[];
   patch: Partial<Task>;
+  note?: string;
 };
+
+// Where a dragged row would land: a line above or below a row, or a whole group lit up
+type Drop = DropAt & { row?: string; side?: "before" | "after" };
 
 const GUTTER = 44;
 const TRAIL = 44;
@@ -115,6 +120,9 @@ export function TableView({
   const [adding, setAdding] = useState<string | null>(null);
   const [resize, setResize] = useState<{ id: ColumnId; width: number } | null>(null);
   const [scrolledX, setScrolledX] = useState(false);
+  const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [drop, setDrop] = useState<Drop | null>(null);
+  const dropped = useRef(0);
 
   const rows = useMemo(() => {
     const all = statuses.flatMap((s) => state.columns[s.id].map((id) => state.tasks[id])).filter((t) => t && visible(t));
@@ -132,6 +140,7 @@ export function TableView({
         icon: o.icon,
         rows: rows.filter((r) => valueOf(r, grouping)[0] === o.value),
         patch: patchFor(grouping, o.value),
+        note: noteFor(grouping, o.value),
       }))
       // Canceled only shows once something is in it
       .filter(
@@ -300,6 +309,18 @@ export function TableView({
       focusCell(next, nextCol);
     };
 
+    // Alt with an arrow moves the row itself, the same as dragging it one place
+    if (e.altKey && !mod && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault();
+      e.stopPropagation();
+      // A sorted table isn't in the board's order, so there's nothing to move it within
+      if (sort) return;
+      const step = planStep(state, groups, row, e.key === "ArrowUp" ? -1 : 1);
+      if (step) dispatch(step);
+      requestAnimationFrame(() => focusCell(row, col));
+      return;
+    }
+
     let handled = true;
     switch (e.key) {
       case "ArrowDown":
@@ -392,6 +413,92 @@ export function TableView({
     el.addEventListener("pointercancel", up);
   };
 
+  // Rows are picked up by the number on the left. A press that doesn't move still ticks the row
+  const startRowDrag = (e: React.PointerEvent<HTMLElement>, id: string) => {
+    if (e.button !== 0 || e.pointerType === "touch" || sort) return;
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let started = false;
+    let target: Drop | null = null;
+    let y = y0;
+    let frame = 0;
+
+    // Looks down the row numbers, which never scroll sideways. Group headers stick and stack, so only what's on
+    // top under the pointer counts. Over the header row or the totals, the last place found holds
+    const locate = (): Drop | null => {
+      const box = scroller.getBoundingClientRect();
+      if (y < box.top || y >= box.bottom) return target;
+      const el = document.elementFromPoint(box.left + GUTTER / 2, y)?.closest<HTMLElement>("[data-drop]");
+      if (!el || !scroller.contains(el)) return target;
+      const group = el.dataset.drop!;
+      if (el.dataset.dropRow) {
+        const row = el.getBoundingClientRect();
+        const after = y >= row.top + row.height / 2;
+        const index = Number(el.dataset.dropIndex) + (after ? 1 : 0);
+        return { group, index, row: el.dataset.dropRow, side: after ? "after" : "before" };
+      }
+      return { group, index: Number(el.dataset.dropIndex ?? 0) };
+    };
+    const show = () => {
+      target = locate();
+      setDrop(target);
+    };
+    // Near the top or bottom edge the table scrolls, faster the closer the pointer gets
+    const tick = () => {
+      const box = scroller.getBoundingClientRect();
+      const top = box.top + 36;
+      const speed =
+        y < top + 40 ? -Math.ceil((top + 40 - y) / 4) : y > box.bottom - 40 ? Math.ceil((y - box.bottom + 40) / 4) : 0;
+      if (speed) {
+        scroller.scrollTop += speed;
+        show();
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    const move = (ev: PointerEvent) => {
+      y = ev.clientY;
+      if (!started) {
+        if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
+        started = true;
+        document.body.style.cursor = "grabbing";
+        window.getSelection()?.removeAllRanges();
+        frame = requestAnimationFrame(tick);
+      }
+      setDrag({ id, x: ev.clientX, y: ev.clientY });
+      show();
+    };
+    const end = (commit: boolean) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", key, true);
+      cancelAnimationFrame(frame);
+      if (!started) return;
+      document.body.style.cursor = "";
+      dropped.current = Date.now();
+      setDrag(null);
+      setDrop(null);
+      if (commit && target) {
+        const action = planDrop(state, groups, id, target);
+        if (action) dispatch(action);
+      }
+    };
+    const up = () => end(true);
+    const cancel = () => end(false);
+    const key = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape" || !started) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      end(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", key, true);
+  };
+
   const setSort = (s: Prefs["sort"]) => setPrefs({ sort: s });
 
   const points = (list: Task[]) => list.reduce((sum, t) => sum + (t.size ? sizePoints[t.size] : 0), 0);
@@ -421,6 +528,7 @@ export function TableView({
     cn(
       "h-9 border-r border-b border-line p-0 align-middle outline-none",
       "focus-within:shadow-[inset_0_0_0_2px_var(--lapis)] focus:shadow-[inset_0_0_0_2px_var(--lapis)]",
+      "group-data-[side=before]/row:shadow-[inset_0_2px_0_var(--lapis)] group-data-[side=after]/row:shadow-[inset_0_-2px_0_var(--lapis)]",
       "scroll-mt-[4.5rem] scroll-mb-9",
       selectedRow ? "bg-lapis-soft" : "bg-raised group-hover/row:bg-surface group-data-[state=open]/row:bg-surface",
     );
@@ -684,8 +792,14 @@ export function TableView({
               return (
                 <Fragment key={g.key}>
                   {g.title ? (
-                    <tr className="group/grp">
-                      <td colSpan={span} className="sticky top-9 z-[15] h-9 border-b border-line bg-sunken p-0">
+                    <tr className="group/grp" data-drop={g.key} data-drop-index={collapsed ? g.rows.length : 0}>
+                      <td
+                        colSpan={span}
+                        className={cn(
+                          "sticky top-9 z-[15] h-9 border-b border-line p-0",
+                          drop?.group === g.key && !drop.row ? "bg-lapis-soft" : "bg-sunken",
+                        )}
+                      >
                         <div className="sticky left-0 flex h-9 w-max items-center gap-2.5 pr-3 pl-3.5">
                           <button
                             aria-expanded={!collapsed}
@@ -738,14 +852,34 @@ export function TableView({
 
                   {collapsed
                     ? null
-                    : g.rows.map((t) => {
+                    : g.rows.map((t, i) => {
                         const isSel = selSet.has(t.id);
                         const n = (rowIndex.get(t.id) ?? 0) + 1;
                         return (
                           <TaskMenu key={t.id} task={t} dispatch={dispatch} onOpen={onOpen}>
-                            <tr className="group/row" aria-selected={isSel} aria-rowindex={n + 1}>
-                              <td className={cn(cellClass(isSel), stickyGutter, "z-[5] border-r-0")}>
+                            <tr
+                              className={cn("group/row", drag?.id === t.id && "opacity-40")}
+                              aria-selected={isSel}
+                              aria-rowindex={n + 1}
+                              data-drop={g.key}
+                              data-drop-row={t.id}
+                              data-drop-index={i}
+                              data-side={drop?.row === t.id ? drop.side : undefined}
+                            >
+                              <td
+                                onPointerDown={(e) => startRowDrag(e, t.id)}
+                                title={sort ? "Clear the sort to drag rows" : "Drag to move"}
+                                className={cn(cellClass(isSel), stickyGutter, "z-[5] border-r-0", !sort && "cursor-grab")}
+                              >
                                 <span className="relative grid h-full place-items-center">
+                                  {sort ? null : (
+                                    <Icon
+                                      name="grip"
+                                      size="sm"
+                                      aria-hidden
+                                      className="absolute left-0 text-ink-3 opacity-0 group-hover/row:opacity-100 pointer-coarse:hidden"
+                                    />
+                                  )}
                                   <span
                                     className={cn(
                                       "font-mono text-[11px] text-ink-3 tabular-nums group-hover/row:invisible pointer-coarse:invisible",
@@ -760,6 +894,8 @@ export function TableView({
                                     checked={isSel}
                                     onClick={(e) => {
                                       e.preventDefault();
+                                      // The end of a drag isn't a click
+                                      if (Date.now() - dropped.current < 250) return;
                                       toggleRow(t.id, e.shiftKey);
                                     }}
                                     className={cn(
@@ -815,6 +951,9 @@ export function TableView({
 
                   {collapsed ? null : (
                     <AddRow
+                      drop={g.key}
+                      dropIndex={g.rows.length}
+                      lit={drop?.group === g.key && !drop.row}
                       span={span}
                       open={adding === g.key}
                       label={g.title ? `Add to ${g.title}` : "Add a task"}
@@ -893,6 +1032,17 @@ export function TableView({
             setSelected([]);
           }}
         />
+      ) : null}
+
+      {drag && state.tasks[drag.id] ? (
+        <div
+          aria-hidden
+          className="pointer-events-none fixed z-50 flex max-w-80 items-center gap-2.5 border border-ink bg-raised px-2.5 py-1.5 text-sm shadow-[3px_3px_0_var(--line-strong)]"
+          style={{ left: drag.x + 14, top: drag.y + 10 }}
+        >
+          <span className="font-mono text-[11px] text-ink-3">{drag.id}</span>
+          <span className="truncate">{state.tasks[drag.id].title}</span>
+        </div>
       ) : null}
     </div>
   );
@@ -1004,6 +1154,9 @@ function TitleCell({
 }
 
 function AddRow({
+  drop,
+  dropIndex,
+  lit,
   span,
   open,
   label,
@@ -1012,6 +1165,9 @@ function AddRow({
   onAdd,
   stickyTitle,
 }: {
+  drop: string;
+  dropIndex: number;
+  lit: boolean;
   span: number;
   open: boolean;
   label: string;
@@ -1026,13 +1182,21 @@ function AddRow({
     setDraft("");
   };
   return (
-    <tr className="group/add">
-      <td className="sticky left-0 z-[5] h-9 border-b border-line bg-raised p-0">
+    <tr className="group/add" data-drop={drop} data-drop-index={dropIndex}>
+      <td
+        className={cn(
+          "sticky left-0 z-[5] h-9 border-b border-line bg-raised p-0",
+          lit && "shadow-[inset_0_2px_0_var(--lapis)]",
+        )}
+      >
         <span className="grid h-full place-items-center text-ink-3">
           <Icon name="plus" size="sm" />
         </span>
       </td>
-      <td style={stickyTitle} className="sticky z-[5] h-9 border-b border-line bg-raised p-0">
+      <td
+        style={stickyTitle}
+        className={cn("sticky z-[5] h-9 border-b border-line bg-raised p-0", lit && "shadow-[inset_0_2px_0_var(--lapis)]")}
+      >
         {open ? (
           <input
             autoFocus
@@ -1064,7 +1228,10 @@ function AddRow({
           </button>
         )}
       </td>
-      <td colSpan={span - 2} className="h-9 border-b border-line bg-raised" />
+      <td
+        colSpan={span - 2}
+        className={cn("h-9 border-b border-line bg-raised", lit && "shadow-[inset_0_2px_0_var(--lapis)]")}
+      />
     </tr>
   );
 }

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useOptimistic, useState, useTransition } from "react";
+import { useActionState, useOptimistic, useRef, useState, useTransition } from "react";
 import { BoardEditor, DeleteBoardDialog } from "@/components/board-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,8 @@ import { Avatar, Eyebrow, Spinner } from "@/components/ui/display";
 import { DitherFill } from "@/components/ui/dither";
 import { Icon } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/controls";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogClose, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import {
   DropdownMenu,
@@ -26,23 +28,43 @@ import {
   leaveWorkspace,
   removeMember,
   resetInviteLink,
+  setPermissions,
   setRole,
+  setWorkspaceImage,
+  setWorkspaceLook,
   updateWorkspace,
   type ActionResult,
 } from "@/lib/actions";
 import { removeBoard, saveBoard } from "@/lib/board-actions";
 import { useBoardEdits } from "@/lib/board-edits";
-import type { Label, Project } from "@/lib/board-store";
-import { roleLabel, type Me, type Member, type Role, type WorkspaceSummary } from "@/lib/live";
+import type { Label, Project, Tone } from "@/lib/board-store";
+import type { DitherName } from "@/lib/dither-assets";
+import {
+  can,
+  isManager,
+  permissionList,
+  roleAllows,
+  roleLabel,
+  sigils,
+  workspaceTones,
+  type Me,
+  type Member,
+  type Permission,
+  type Permissions,
+  type Role,
+  type WorkspaceSummary,
+} from "@/lib/live";
 import { siteHost, SLUG_MAX, slugify, slugProblem } from "@/lib/slugs";
+import { square } from "@/lib/square-image";
 import { cn } from "@/lib/utils";
 
 type BoardInfo = { id: string; slug: string; name: string; labels: Label[]; projects: Project[] };
 
 const roleHint: Record<Role, string> = {
   owner: "Everything, including deleting the workspace",
-  admin: "Manage members, boards and settings",
-  member: "Work on every board",
+  admin: "Everything else: members, boards and settings",
+  member: "Work on every board. Fine-tune with Permissions",
+  viewer: "See every board, comment and vote. Fine-tune with Permissions",
 };
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
@@ -88,9 +110,14 @@ export function SettingsView({
   boards: BoardInfo[];
   invite: string | null;
 }) {
-  const manager = workspace.role !== "member";
+  const manager = isManager(workspace.role);
   const owner = workspace.role === "owner";
   const [name, setName] = useOptimistic(workspace.name);
+  const [look, setLook] = useOptimistic<Look>({
+    sigil: workspace.sigil,
+    tone: workspace.tone,
+    image: workspace.image ?? null,
+  });
   const [members, drop] = useOptimistic(everyone, (list, id: string) => list.filter((m) => m.id !== id));
   const [, start] = useTransition();
   const edits = useBoardEdits().boards;
@@ -111,22 +138,25 @@ export function SettingsView({
   return (
     <div>
       <div className="flex items-center gap-5 pb-10">
-        <Avatar name={name} sigil={workspace.sigil} tone={workspace.tone} size="xl" />
+        <Avatar name={name} sigil={look.sigil} tone={look.tone} src={look.image} size="xl" />
         <div className="min-w-0">
           <Eyebrow>Workspace settings</Eyebrow>
           <h1 className="mt-2 truncate font-display text-4xl">{name}</h1>
           <p className="mt-1 text-sm text-ink-2">
-            You’re {workspace.role === "member" ? "a" : "an"} {roleLabel[workspace.role].toLowerCase()} here.
+            You’re {isManager(workspace.role) ? "an" : "a"} {roleLabel[workspace.role].toLowerCase()} here.
           </p>
         </div>
       </div>
 
       <Section title="General" hint={manager ? undefined : "Only owners and admins can change these."}>
-        <General workspace={workspace} disabled={!manager} onName={setName} />
+        <div className="flex flex-col gap-6">
+          <LookField workspace={workspace} name={name} look={look} setLook={setLook} disabled={!manager} />
+          <General workspace={workspace} disabled={!manager} onName={setName} />
+        </div>
       </Section>
 
       <Section title="Members" hint={`${members.length} ${members.length === 1 ? "person" : "people"}`}>
-        {invite ? <Invite workspace={workspace} url={invite} /> : null}
+        {invite ? <Invite workspace={workspace} url={invite} canReset={manager} /> : null}
         <ul className="divide-y divide-line border-y border-line">
           {members.map((m) => (
             <MemberRow
@@ -165,6 +195,176 @@ export function SettingsView({
           {owner ? <DeleteWorkspace workspace={workspace} /> : null}
         </div>
       </Section>
+    </div>
+  );
+}
+
+type Look = { sigil: DitherName; tone: Tone; image: string | null };
+
+const toneSwatch: Record<Tone, string> = {
+  lapis: "bg-lapis",
+  pyrite: "bg-pyrite",
+  malachite: "bg-malachite",
+  hematite: "bg-hematite",
+};
+
+// The workspace's picture, or the crystal and colour it wears without one. Each change shows at once and saves
+// behind it
+function LookField({
+  workspace,
+  name,
+  look,
+  setLook,
+  disabled,
+}: {
+  workspace: WorkspaceSummary;
+  name: string;
+  look: Look;
+  setLook: (look: Look) => void;
+  disabled: boolean;
+}) {
+  const [pending, start] = useTransition();
+  const [problem, setProblem] = useState<string | null>(null);
+  const [over, setOver] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+
+  const sendImage = (picture: Blob | null, shown: string | null) =>
+    start(async () => {
+      setProblem(null);
+      setLook({ ...look, image: shown });
+      const form = new FormData();
+      form.set("workspace", workspace.id);
+      form.set("source", picture ? "upload" : "none");
+      if (picture) form.set("picture", picture, "picture");
+      const r = await setWorkspaceImage(form);
+      if (r && !r.ok) setProblem(r.message);
+    });
+
+  const pick = async (file?: File) => {
+    if (!file || disabled) return;
+    if (!file.type.startsWith("image/")) return setProblem("That isn’t an image.");
+    if (file.size > 20 * 1024 * 1024) return setProblem("Pick an image under 20 MB.");
+    try {
+      const blob = await square(file);
+      sendImage(blob, URL.createObjectURL(blob));
+    } catch {
+      setProblem("We couldn’t read that image. Try a PNG or JPG.");
+    }
+  };
+
+  const choose = (patch: Partial<Pick<Look, "sigil" | "tone">>) =>
+    start(async () => {
+      setLook({ ...look, ...patch });
+      sayFailure(await setWorkspaceLook(workspace.id, patch));
+    });
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium text-ink-2">Picture</span>
+        <div className="flex items-center gap-4">
+          <button
+            type="button"
+            aria-label="Upload a picture for the workspace"
+            disabled={disabled || pending}
+            onClick={() => input.current?.click()}
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!disabled) setOver(true);
+            }}
+            onDragLeave={() => setOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setOver(false);
+              void pick(e.dataTransfer.files[0]);
+            }}
+            className={cn(
+              "group relative shrink-0 outline-none focus-visible:ring-2 focus-visible:ring-lapis focus-visible:ring-offset-2 focus-visible:ring-offset-page disabled:cursor-default",
+              over && "ring-2 ring-lapis ring-offset-2 ring-offset-page",
+            )}
+          >
+            <Avatar name={name} sigil={look.sigil} tone={look.tone} src={look.image} size="xl" />
+            {disabled ? null : (
+              <span
+                className={cn(
+                  "absolute inset-0 grid place-items-center bg-ink/60 text-page opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100",
+                  (over || pending) && "opacity-100",
+                  pending && "bg-page/60 text-ink",
+                )}
+              >
+                {pending ? <Spinner /> : <Icon name="upload" />}
+              </span>
+            )}
+          </button>
+          {disabled ? null : (
+            <div className="flex flex-wrap gap-2">
+              <Button disabled={pending} onClick={() => input.current?.click()}>
+                <Icon name="upload" /> Upload
+              </Button>
+              {look.image ? (
+                <Button variant="ghost" disabled={pending} onClick={() => sendImage(null, null)}>
+                  Remove
+                </Button>
+              ) : null}
+            </div>
+          )}
+        </div>
+        <p role="status" className={cn("text-xs", problem ? "text-hematite" : "text-ink-3")}>
+          {problem ?? "PNG, JPG or WebP, cropped to a square. It shows in the sidebar and on public roadmaps."}
+        </p>
+        <input
+          ref={input}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
+          hidden
+          onChange={(e) => {
+            void pick(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium text-ink-2">
+          Sigil {look.image ? <span className="font-normal text-ink-3">· shown when there’s no picture</span> : null}
+        </span>
+        <div role="radiogroup" aria-label="Sigil" className="flex flex-wrap gap-1.5">
+          {sigils.map((sigil) => (
+            <button
+              key={sigil}
+              role="radio"
+              aria-checked={look.sigil === sigil}
+              aria-label={sigil.replace("crystal-", "")}
+              disabled={disabled}
+              onClick={() => look.sigil !== sigil && choose({ sigil })}
+              className={cn(
+                "p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-lapis disabled:opacity-60",
+                look.sigil === sigil ? "ring-2 ring-ink" : "hover:ring-1 hover:ring-line-strong",
+              )}
+            >
+              <Avatar name={name} sigil={sigil} tone={look.tone} size="md" />
+            </button>
+          ))}
+        </div>
+        <div role="radiogroup" aria-label="Colour" className="mt-1 flex gap-1.5">
+          {workspaceTones.map((tone) => (
+            <button
+              key={tone}
+              role="radio"
+              aria-checked={look.tone === tone}
+              aria-label={tone}
+              disabled={disabled}
+              onClick={() => look.tone !== tone && choose({ tone })}
+              className={cn(
+                "grid size-7 place-items-center outline-none focus-visible:ring-2 focus-visible:ring-lapis disabled:opacity-60",
+                look.tone === tone ? "ring-2 ring-ink" : "hover:ring-1 hover:ring-line-strong",
+              )}
+            >
+              <span className={cn("size-5", toneSwatch[tone])} />
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -243,7 +443,7 @@ function General({
   );
 }
 
-function Invite({ workspace, url }: { workspace: WorkspaceSummary; url: string }) {
+function Invite({ workspace, url, canReset }: { workspace: WorkspaceSummary; url: string; canReset: boolean }) {
   const [pending, start] = useTransition();
   const copy = async () => {
     try {
@@ -280,30 +480,32 @@ function Invite({ workspace, url }: { workspace: WorkspaceSummary; url: string }
             <Icon name="copy" /> Copy
           </Button>
         </div>
-        <Dialog>
-          <DialogTrigger className="mt-3 flex items-center gap-1.5 text-xs text-ink-3 hover:text-ink">
-            <Icon name="reset" size="sm" /> Reset the link
-          </DialogTrigger>
-          <DialogContent
-            title="Reset the invite link?"
-            description="The current link stops working. People who already joined stay."
-          >
-            <div className="flex justify-end gap-2">
-              <DialogClose asChild>
-                <Button variant="ghost">Cancel</Button>
-              </DialogClose>
-              <DialogClose asChild>
-                <Button
-                  variant="primary"
-                  disabled={pending}
-                  onClick={() => start(async () => say(await resetInviteLink(workspace.id)))}
-                >
-                  Reset link
-                </Button>
-              </DialogClose>
-            </div>
-          </DialogContent>
-        </Dialog>
+        {canReset ? (
+          <Dialog>
+            <DialogTrigger className="mt-3 flex items-center gap-1.5 text-xs text-ink-3 hover:text-ink">
+              <Icon name="reset" size="sm" /> Reset the link
+            </DialogTrigger>
+            <DialogContent
+              title="Reset the invite link?"
+              description="The current link stops working. People who already joined stay."
+            >
+              <div className="flex justify-end gap-2">
+                <DialogClose asChild>
+                  <Button variant="ghost">Cancel</Button>
+                </DialogClose>
+                <DialogClose asChild>
+                  <Button
+                    variant="primary"
+                    disabled={pending}
+                    onClick={() => start(async () => say(await resetInviteLink(workspace.id)))}
+                  >
+                    Reset link
+                  </Button>
+                </DialogClose>
+              </div>
+            </DialogContent>
+          </Dialog>
+        ) : null}
       </div>
     </div>
   );
@@ -322,15 +524,20 @@ function MemberRow({
 }) {
   const [, start] = useTransition();
   const [role, setOptimisticRole] = useOptimistic(member.role);
+  const [perms, setOptimisticPerms] = useOptimistic(member.permissions ?? {});
   const self = member.id === me.id;
   const mine = workspace.role;
   const canEdit = !self && (mine === "owner" || (mine === "admin" && member.role !== "owner"));
-  const roles: Role[] = mine === "owner" ? ["owner", "admin", "member"] : ["admin", "member"];
+  const roles: Role[] = mine === "owner" ? ["owner", "admin", "member", "viewer"] : ["admin", "member", "viewer"];
   const joined = new Date(member.joined).toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
   });
+  // What this person can or can't do that differs from their role
+  const tuned = isManager(role)
+    ? []
+    : permissionList.filter((p) => can(role, perms, p.id) !== roleAllows(role, p.id));
 
   return (
     <li className="flex items-center gap-3 py-3">
@@ -340,30 +547,53 @@ function MemberRow({
           {member.name}
           {self ? <Badge tone="lapis">You</Badge> : null}
         </p>
-        <p className="text-xs text-ink-3">Joined {joined}</p>
+        <p className="truncate text-xs text-ink-3">
+          Joined {joined}
+          {tuned.map((p) => (
+            <span key={p.id}>
+              {" · "}
+              {perms[p.id] ? "Can" : "Can’t"} {p.label.toLowerCase()}
+            </span>
+          ))}
+        </p>
       </div>
+      {canEdit && !isManager(role) ? (
+        <PermissionsMenu
+          name={member.name}
+          role={role}
+          permissions={perms}
+          onChange={(next) =>
+            start(async () => {
+              setOptimisticPerms(next);
+              sayFailure(await setPermissions(workspace.id, member.id, next));
+            })
+          }
+        />
+      ) : null}
       {canEdit ? (
         <DropdownMenu>
           <DropdownMenuTrigger className="flex h-8 items-center gap-2 border border-line bg-raised px-2.5 text-xs outline-none hover:border-line-strong focus-visible:ring-2 focus-visible:ring-lapis data-[state=open]:border-line-strong">
             {roleLabel[role]}
             <PixelCaret className="text-ink-3" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-64">
+          <DropdownMenuContent align="end" className="w-72">
             <DropdownMenuLabel>Role</DropdownMenuLabel>
             <DropdownMenuRadioGroup
               value={role}
               onValueChange={(v) =>
                 start(async () => {
                   setOptimisticRole(v as Role);
+                  setOptimisticPerms({});
                   sayFailure(await setRole(workspace.id, member.id, v as Role));
                 })
               }
             >
               {roles.map((r) => (
-                <DropdownMenuRadioItem key={r} value={r} className="items-start">
-                  <span>
+                // Two lines need more than a menu row's usual height
+                <DropdownMenuRadioItem key={r} value={r} className="h-auto min-h-8 items-start py-1.5">
+                  <span className="min-w-0">
                     <span className="block">{roleLabel[r]}</span>
-                    <span className="block text-[11px] text-ink-3">{roleHint[r]}</span>
+                    <span className="block text-[11px] leading-snug text-ink-3">{roleHint[r]}</span>
                   </span>
                 </DropdownMenuRadioItem>
               ))}
@@ -401,6 +631,79 @@ function MemberRow({
         <span className="size-8" />
       )}
     </li>
+  );
+}
+
+// What a member or viewer can do, one switch each. Each starts from what the role allows, and only the
+// differences are kept, so a later change to a role's defaults still reaches them
+function PermissionsMenu({
+  name,
+  role,
+  permissions,
+  onChange,
+}: {
+  name: string;
+  role: Role;
+  permissions: Permissions;
+  onChange: (next: Permissions) => void;
+}) {
+  const set = (id: Permission, on: boolean) => {
+    const next = { ...permissions };
+    if (on === roleAllows(role, id)) delete next[id];
+    else next[id] = on;
+    onChange(next);
+  };
+  const changed = permissionList.some((p) => can(role, permissions, p.id) !== roleAllows(role, p.id));
+  return (
+    <Popover>
+      <PopoverTrigger
+        aria-label={`What ${name} can do`}
+        className={cn(
+          "flex h-8 items-center gap-1.5 border px-2.5 text-xs outline-none hover:border-line-strong focus-visible:ring-2 focus-visible:ring-lapis data-[state=open]:border-line-strong",
+          changed ? "border-lapis/40 bg-lapis-soft text-lapis-ink" : "border-line bg-raised text-ink-2",
+        )}
+      >
+        <Icon name="shield" size="sm" />
+        <span className="hidden sm:inline">Permissions</span>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80">
+        <div className="border-b border-line px-3 py-2.5">
+          <p className="text-sm font-medium">What {name} can do</p>
+          <p className="mt-0.5 text-xs text-ink-3">
+            Starts from what a {roleLabel[role].toLowerCase()} can do. Everyone here can see every board.
+          </p>
+        </div>
+        <ul className="py-1">
+          {permissionList.map((p) => {
+            const on = can(role, permissions, p.id);
+            const differs = on !== roleAllows(role, p.id);
+            return (
+              <li key={p.id}>
+                <label className="flex cursor-pointer items-start gap-3 px-3 py-2 hover:bg-sunken">
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5 text-sm">
+                      {p.label}
+                      {differs ? <span className="font-mono text-[10px] text-lapis">changed</span> : null}
+                    </span>
+                    <span className="block text-[11px] leading-snug text-ink-3">{p.hint}</span>
+                  </span>
+                  <Switch checked={on} onCheckedChange={(v) => set(p.id, v)} className="mt-0.5" />
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="flex justify-end border-t border-line px-3 py-2">
+          <button
+            disabled={!changed}
+            onClick={() => onChange({})}
+            className="flex items-center gap-1.5 text-xs text-ink-3 hover:text-ink disabled:opacity-40"
+          >
+            <Icon name="reset" size="sm" /> Back to what a {roleLabel[role].toLowerCase()} can do
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 

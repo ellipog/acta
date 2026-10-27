@@ -7,6 +7,7 @@ import { useTheme } from "next-themes";
 import { Icon, type IconName } from "@/components/ui/icons";
 import { Kbd } from "@/components/ui/badge";
 import { DitherFill } from "@/components/ui/dither";
+import { openAppearance } from "@/lib/appearance";
 
 const groupClass =
   "[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:text-ink-3";
@@ -89,6 +90,14 @@ export function CommandPalette({ trigger }: { trigger?: (open: () => void) => Re
                       label={resolvedTheme === "dark" ? "Switch to stone (light)" : "Switch to basalt (dark)"}
                       icon={resolvedTheme === "dark" ? "sun" : "moon"}
                       onSelect={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+                    />
+                    <PaletteItem
+                      label="Appearance…"
+                      icon="palette"
+                      onSelect={() => {
+                        setOpen(false);
+                        requestAnimationFrame(openAppearance);
+                      }}
                     />
                   </Command.Group>
                 </Command.List>

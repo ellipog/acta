@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { AccountButton } from "@/components/account-button";
 import { Wordmark } from "@/components/wordmark";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { ThemeControls } from "@/components/theme-toggle";
 import { Avatar, Skeleton } from "@/components/ui/display";
 import { Icon } from "@/components/ui/icons";
 import type { Shell } from "@/lib/board-cache";
@@ -32,16 +32,22 @@ export function AppSkeleton({
             <Wordmark href={`/${shell.workspace.slug}`} className="[&>span:last-child]:text-base" />
           </div>
           <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
-            <Avatar name={shell.workspace.name} sigil={shell.workspace.sigil} tone={shell.workspace.tone} size="sm" />
+            <Avatar
+              name={shell.workspace.name}
+              sigil={shell.workspace.sigil}
+              tone={shell.workspace.tone}
+              src={shell.workspace.image}
+              size="sm"
+            />
             <span className="truncate text-sm font-medium">{shell.workspace.name}</span>
           </div>
           <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2 text-sm">
             <span className={rows}>
               <Icon name="inbox" size="sm" /> Inbox
             </span>
-            <span className={rows}>
+            <Link href={`/${shell.workspace.slug}/my-tasks`} className={cn(rows, "hover:bg-sunken hover:text-ink")}>
               <Icon name="user" size="sm" /> My tasks
-            </span>
+            </Link>
             <p className="mt-4 mb-1 px-2 font-mono text-[11px] text-ink-3">Boards</p>
             {shell.boards.map((b) => {
               const n = counts?.[b.id] ?? b.count;
@@ -130,7 +136,7 @@ export function AppTopBar({
               /
             </span>
             <Link href={`/${workspace.slug}`} className="flex min-w-0 items-center gap-2 text-sm hover:text-ink">
-              <Avatar name={workspace.name} sigil={workspace.sigil} tone={workspace.tone} size="xs" />
+              <Avatar name={workspace.name} sigil={workspace.sigil} tone={workspace.tone} src={workspace.image} size="xs" />
               <span className="truncate">{workspace.name}</span>
             </Link>
           </>
@@ -144,7 +150,7 @@ export function AppTopBar({
               <Icon name="arrow-left" size="sm" /> {back.label}
             </Link>
           ) : null}
-          <ThemeToggle />
+          <ThemeControls />
           <AccountButton />
         </div>
       </div>

@@ -47,6 +47,8 @@ export type Suggestion = {
 };
 
 export type PageLayout = "stages" | "timeline" | "list";
+export type PageSection = "roadmap" | "ideas" | "shipped";
+export type PageLink = { label: string; url: string };
 
 export type PublicPage = {
   title: string;
@@ -70,6 +72,30 @@ export type PublicPage = {
   zoom: "month" | "quarter" | "year";
   timelineGroup: "stage" | "project";
   newTasksPublic: boolean;
+  // The page's own look. "visitor" leaves light or dark to whoever reads it
+  theme: "visitor" | "light" | "dark";
+  // A colour of the page's own in place of the accent, as #rrggbb, or empty
+  color: string;
+  hero: "plate" | "banner" | "centered" | "plain";
+  headingFont: "display" | "sans" | "serif" | "mono";
+  width: "normal" | "wide";
+  density: "comfortable" | "compact";
+  // A line across the top, for news. Empty hides it
+  announcement: string;
+  announcementLink: string;
+  // A button beside the title, and a few links under it
+  cta: PageLink;
+  links: PageLink[];
+  // Which parts come first. The roadmap, ideas and shipped work can go in any order
+  sections: PageSection[];
+  showStats: boolean;
+  showSearch: boolean;
+  showNotes: boolean;
+  showProjects: boolean;
+  // How many shipped items the changelog lists, 0 for all of them
+  shippedLimit: number;
+  shippedByMonth: boolean;
+  footer: string;
 };
 
 export const defaultPage: PublicPage = {
@@ -95,15 +121,78 @@ export const defaultPage: PublicPage = {
   zoom: "quarter",
   timelineGroup: "stage",
   newTasksPublic: false,
+  theme: "visitor",
+  color: "",
+  hero: "plate",
+  headingFont: "display",
+  width: "normal",
+  density: "comfortable",
+  announcement: "",
+  announcementLink: "",
+  cta: { label: "", url: "" },
+  links: [],
+  sections: ["roadmap", "ideas", "shipped"],
+  showStats: true,
+  showSearch: true,
+  showNotes: true,
+  showProjects: true,
+  shippedLimit: 0,
+  shippedByMonth: false,
+  footer: "",
 };
 
-export const pageFrom = (name: string, slug: string, page: object): PublicPage => ({
-  ...defaultPage,
-  title: name,
-  ...(page as Partial<PublicPage>),
-  slug,
-  stageNames: { ...defaultPage.stageNames, ...((page as Partial<PublicPage>).stageNames ?? {}) },
-});
+export const pageLimits = { text: 120, long: 600, url: 300, links: 4 };
+
+/** Keeps what a page says to what fits, and its links to ones that open somewhere */
+export function fitPage(patch: Partial<PublicPage>): Partial<PublicPage> {
+  const out = { ...patch };
+  const text = (v: unknown, max = pageLimits.text) => (typeof v === "string" ? v : "").slice(0, max);
+  const link = (l: PageLink): PageLink => ({ label: text(l.label, 40), url: text(l.url, pageLimits.url) });
+  for (const k of ["title", "ideaOne", "ideaMany", "ideaPrompt", "announcement"] as const)
+    if (typeof out[k] === "string") out[k] = text(out[k]);
+  for (const k of ["tagline", "footer"] as const) if (typeof out[k] === "string") out[k] = text(out[k], pageLimits.long);
+  if (typeof out.announcementLink === "string") out.announcementLink = text(out.announcementLink, pageLimits.url);
+  if (out.cta) out.cta = link(typeof out.cta === "object" ? out.cta : { label: "", url: "" });
+  if (out.links)
+    out.links = (Array.isArray(out.links) ? out.links : [])
+      .filter((l) => l && typeof l === "object")
+      .slice(0, pageLimits.links)
+      .map(link);
+  if (out.color !== undefined && !(typeof out.color === "string" && /^#[0-9a-f]{6}$/i.test(out.color))) out.color = "";
+  if (out.sections) {
+    const known: PageSection[] = ["roadmap", "ideas", "shipped"];
+    const kept = [...new Set((Array.isArray(out.sections) ? out.sections : []).filter((s) => known.includes(s)))];
+    out.sections = [...kept, ...known.filter((s) => !kept.includes(s))];
+  }
+  if (out.shippedLimit !== undefined) out.shippedLimit = Math.max(0, Math.min(200, Math.round(out.shippedLimit) || 0));
+  return out;
+}
+
+/** A link someone typed, made safe to open: web and mail addresses only */
+export function safeHref(url: string) {
+  const u = url.trim();
+  if (!u) return null;
+  if (/^mailto:[^\s]+@[^\s]+$/i.test(u)) return u;
+  const withScheme = /^https?:\/\//i.test(u) ? u : `https://${u}`;
+  try {
+    const parsed = new URL(withScheme);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+export const pageFrom = (name: string, slug: string, page: object): PublicPage => {
+  const stored = page as Partial<PublicPage>;
+  return {
+    ...defaultPage,
+    title: name,
+    ...fitPage({ ...stored, sections: stored.sections ?? defaultPage.sections }),
+    slug,
+    stageNames: { ...defaultPage.stageNames, ...(stored.stageNames ?? {}) },
+    cta: { ...defaultPage.cta, ...fitPage({ cta: { ...defaultPage.cta, ...(stored.cta ?? {}) } }).cta },
+  };
+};
 
 export type BoardState = {
   next: number;
@@ -657,8 +746,52 @@ export function normalizeBoard(board: BoardState): BoardState {
   };
 }
 
+// What the database accepts. Edits are held to these as they're made, so a long paste can't stop a save
+export const limits = {
+  title: 500,
+  project: 60,
+  labels: 20,
+  description: 20_000,
+  subtask: 200,
+  // The subtasks of one task, as JSON. The database allows 20,000 bytes and writes JSON a little longer
+  subtaskBytes: 16_000,
+  comment: 10_000,
+  idea: 200,
+  ideaDetails: 2_000,
+};
+
+const bytes = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
+
+/** Holds a change to a task to what the database accepts */
+export function fitTask<T extends Partial<Task>>(patch: T): T {
+  const out = { ...patch };
+  if (typeof out.title === "string" && out.title.length > limits.title) out.title = out.title.slice(0, limits.title);
+  if (out.project && out.project.length > limits.project) out.project = out.project.slice(0, limits.project);
+  if (out.labels && (out.labels.length > limits.labels || new Set(out.labels).size < out.labels.length))
+    out.labels = [...new Set(out.labels)].slice(0, limits.labels);
+  if (typeof out.description === "string" && out.description.length > limits.description)
+    out.description = out.description.slice(0, limits.description);
+  if (out.subtasks) {
+    let list = out.subtasks.map((s) =>
+      s.title.length > limits.subtask ? { ...s, title: s.title.slice(0, limits.subtask) } : s,
+    );
+    while (list.length && bytes(list) > limits.subtaskBytes) list = list.slice(0, -1);
+    if (list.length !== out.subtasks.length || list.some((s, i) => s !== out.subtasks![i])) out.subtasks = list;
+  }
+  return out;
+}
+
 export type BoardAction =
   | { type: "columns"; columns: BoardState["columns"] }
+  // Puts a task in a column, before another task or at the end, changing whatever else the patch says on the way
+  | {
+      type: "move";
+      id: string;
+      to: StatusCategory;
+      before: string | null;
+      patch?: Partial<Task>;
+      note?: string;
+    }
   | { type: "update"; id: string; patch: Partial<Task>; note?: string }
   | { type: "bulk"; ids: string[]; patch: Partial<Task>; note: string }
   | { type: "add"; status: StatusCategory; title: string; patch?: Partial<Task>; note?: string }
@@ -681,9 +814,10 @@ const log = (task: Task, text: string): Task => ({
   activity: [...task.activity, { id: newId(), at: Date.now(), who: me.name, text }],
 });
 
-function patchTask(state: BoardState, id: string, patch: Partial<Task>, note?: string): BoardState {
+function patchTask(state: BoardState, id: string, change: Partial<Task>, note?: string): BoardState {
   const prev = state.tasks[id];
   if (!prev) return state;
+  const patch = fitTask(change);
   let task = { ...prev, ...patch };
   const to = patch.status;
   if (to && to !== prev.status) {
@@ -711,6 +845,27 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
     case "update":
       return patchTask(state, action.id, action.patch, action.note);
 
+    case "move": {
+      const prev = state.tasks[action.id];
+      if (!prev) return state;
+      const patch: Partial<Task> = { ...action.patch };
+      if (action.to !== prev.status) patch.status = action.to;
+      const changed = (Object.keys(patch) as (keyof Task)[]).some(
+        (k) => JSON.stringify(prev[k] ?? null) !== JSON.stringify(patch[k] ?? null),
+      );
+      const next = changed ? patchTask(state, action.id, patch, action.note) : state;
+      const columns = { ...next.columns };
+      for (const s of Object.keys(columns) as StatusCategory[])
+        if (columns[s].includes(action.id)) columns[s] = columns[s].filter((x) => x !== action.id);
+      const column = [...columns[action.to]];
+      const at = action.before ? column.indexOf(action.before) : -1;
+      column.splice(at < 0 ? column.length : at, 0, action.id);
+      columns[action.to] = column;
+      const before = state.columns[action.to];
+      if (!changed && column.length === before.length && column.every((x, i) => x === before[i])) return state;
+      return { ...next, columns };
+    }
+
     case "bulk":
       return action.ids.reduce((s, id) => patchTask(s, id, action.patch, action.note), state);
 
@@ -719,7 +874,7 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
       const status = action.patch?.status ?? action.status;
       const task: Task = {
         id,
-        title: action.title,
+        title: action.title.slice(0, limits.title),
         priority: "none",
         labels: [],
         description: "",
@@ -727,7 +882,7 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
         comments: 0,
         activity: [{ id: newId(), at: Date.now(), who: me.name, text: action.note ?? "created the task" }],
         ...(state.roadmap.page.newTasksPublic ? { public: true } : {}),
-        ...action.patch,
+        ...fitTask(action.patch ?? {}),
         status,
       };
       return {
@@ -780,7 +935,7 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
       const task = state.tasks[action.id];
       if (!task) return state;
       const next = log(
-        { ...task, subtasks: [...task.subtasks, { id: `s${Date.now()}`, title: action.title, done: false }] },
+        fitTask({ ...task, subtasks: [...task.subtasks, { id: `s${Date.now()}`, title: action.title, done: false }] }),
         `added subtask “${action.title}”`,
       );
       return { ...state, tasks: { ...state.tasks, [task.id]: next } };
@@ -788,8 +943,9 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
 
     case "comment": {
       const task = state.tasks[action.id];
-      if (!task) return state;
-      const comment: Comment = { id: newId(), who: me.name, at: Date.now(), body: action.body };
+      const body = action.body.trim().slice(0, limits.comment);
+      if (!task || !body) return state;
+      const comment: Comment = { id: newId(), who: me.name, at: Date.now(), body };
       const next = log(
         { ...task, comments: task.comments + 1, thread: [...(task.thread ?? []), comment] },
         "commented",
@@ -814,10 +970,12 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
       return { ...state, roadmap: { ...state.roadmap, public: action.public } };
 
     case "suggest": {
+      const title = action.title.trim().slice(0, limits.idea);
+      if (!title) return state;
       const suggestion: Suggestion = {
         id: newId(),
-        title: action.title,
-        details: action.details,
+        title,
+        details: action.details?.trim().slice(0, limits.ideaDetails) || undefined,
         by: me.name,
         at: Date.now(),
         votes: 1,
@@ -827,7 +985,7 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
     }
 
     case "page":
-      return { ...state, roadmap: { ...state.roadmap, page: { ...state.roadmap.page, ...action.patch } } };
+      return { ...state, roadmap: { ...state.roadmap, page: { ...state.roadmap.page, ...fitPage(action.patch) } } };
 
     case "voteSuggestion":
       return {

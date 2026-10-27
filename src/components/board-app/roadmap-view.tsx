@@ -4,11 +4,12 @@ import { useState } from "react";
 import { StatusMarker } from "@/components/markers";
 import { Combobox } from "@/components/ui/combobox";
 import { Segmented, Switch } from "@/components/ui/controls";
-import { Swatch } from "@/components/ui/color-picker";
+import { CustomColor, Swatch } from "@/components/ui/color-picker";
 import { Dither, DitherFill, DitherShadow } from "@/components/ui/dither";
 import { EmptyState } from "@/components/ui/display";
 import { Icon } from "@/components/ui/icons";
 import { Input, Textarea } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,11 +26,15 @@ import {
   formatDue,
   me,
   nextTaskId,
+  pageLimits,
+  safeHref,
   stageOf,
   statusTitle,
   timeAgo,
   type BoardState,
   type PageLayout,
+  type PageLink,
+  type PageSection,
   type PublicPage,
   type Task,
   type Tone,
@@ -37,7 +42,19 @@ import {
 import { boardSlugProblem, publicHref, publicPath, SLUG_MAX, slugify } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
-import { arts, byShipped, byVotes, cap, stageIds, stageMeta, Vein, Visitor } from "./roadmap-page";
+import {
+  accentOf,
+  accentVars,
+  arts,
+  byShipped,
+  byVotes,
+  cap,
+  headingFonts,
+  stageIds,
+  stageMeta,
+  Vein,
+  Visitor,
+} from "./roadmap-page";
 
 const nouns: [string, string][] = [
   ["idea", "ideas"],
@@ -545,6 +562,89 @@ function LayoutSketch({ layout }: { layout: PageLayout }) {
   );
 }
 
+function HeroSketch({ hero }: { hero: PublicPage["hero"] }) {
+  const lines = (center?: boolean) => (
+    <span className={cn("flex flex-1 flex-col gap-0.5", center && "items-center")}>
+      <span className="h-1.5 w-3/4 bg-ink-3" />
+      <span className="h-1 w-1/2 bg-ink-3/50" />
+      <span className="h-1 w-2/5 bg-ink-3/50" />
+    </span>
+  );
+  return (
+    <span className="flex h-10 w-full flex-col justify-center gap-1 border border-line-strong p-1">
+      {hero === "banner" ? (
+        <>
+          <span className="dither-12 h-3 w-full shrink-0 text-ink-3" />
+          {lines()}
+        </>
+      ) : hero === "centered" ? (
+        <>
+          <span className="dither-12 mx-auto size-2.5 shrink-0 text-ink-3" />
+          {lines(true)}
+        </>
+      ) : hero === "plate" ? (
+        <span className="flex items-center gap-1">
+          {lines()}
+          <span className="dither-12 h-6 w-5 shrink-0 text-ink-3" />
+        </span>
+      ) : (
+        lines()
+      )}
+    </span>
+  );
+}
+
+const sectionIcon = { roadmap: "timeline", ideas: "bulb", shipped: "check" } as const;
+
+// A button and a few links under the page's title. A link only shows once it has a label and an address that opens
+function LinkRow({
+  link,
+  onChange,
+  onRemove,
+  name,
+}: {
+  link: PageLink;
+  onChange: (link: PageLink) => void;
+  onRemove?: () => void;
+  name: string;
+}) {
+  const broken = Boolean(link.url.trim()) && !safeHref(link.url);
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex gap-1.5">
+        <Input
+          aria-label={`${name} label`}
+          placeholder="Label"
+          maxLength={40}
+          value={link.label}
+          onChange={(e) => onChange({ ...link, label: e.target.value })}
+          className="h-8 w-[38%] shrink-0"
+        />
+        <Input
+          aria-label={`${name} address`}
+          aria-invalid={broken}
+          placeholder="yourco.com/docs"
+          maxLength={pageLimits.url}
+          spellCheck={false}
+          value={link.url}
+          onChange={(e) => onChange({ ...link, url: e.target.value })}
+          className={cn("h-8 min-w-0 flex-1 font-mono text-[12px]", broken && "border-hematite")}
+        />
+        {onRemove ? (
+          <button
+            aria-label={`Remove ${name.toLowerCase()}`}
+            onClick={onRemove}
+            className="grid size-8 shrink-0 place-items-center text-ink-3 outline-none hover:text-hematite focus-visible:ring-2 focus-visible:ring-lapis"
+          >
+            <Icon name="x" size="sm" />
+          </button>
+        ) : null}
+      </div>
+      {broken ? <p className="text-[11px] text-hematite">Use a web address or a mailto: link.</p> : null}
+    </div>
+  );
+}
+
 function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoAction) => void }) {
   const page = state.roadmap.page;
   const [device, setDevice] = useState<"desktop" | "phone">("desktop");
@@ -552,6 +652,29 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
   const customNoun = !nouns.some(([one, many]) => one === page.ideaOne && many === page.ideaMany);
   const [custom, setCustom] = useState(customNoun);
   const url = publicPath(me.workspace, page.slug);
+  const accent = accentOf(page);
+  const sectionName: Record<PageSection, string> = {
+    roadmap: "Roadmap",
+    ideas: cap(page.ideaMany),
+    shipped: page.stageNames.shipped || defaultPage.stageNames.shipped,
+  };
+  const sectionOff: Record<PageSection, string | null> = {
+    roadmap: null,
+    ideas: page.ideas || page.ideasPublic ? null : `Turned off under ${cap(page.ideaMany)}`,
+    shipped: !page.showShipped
+      ? "Turned off under Show"
+      : page.layout === "list"
+        ? "Part of the ranked list"
+        : null,
+  };
+  const moveSection = (i: number, by: number) => {
+    const next = [...page.sections];
+    [next[i], next[i + by]] = [next[i + by], next[i]];
+    set({ sections: next });
+  };
+  const setLink = (i: number, link: PageLink | null) =>
+    set({ links: link ? page.links.map((l, j) => (j === i ? link : l)) : page.links.filter((_, j) => j !== i) });
+  const announcementBroken = Boolean(page.announcementLink.trim()) && !safeHref(page.announcementLink);
 
   return (
     <div className="flex h-full flex-col @4xl:flex-row">
@@ -642,60 +765,280 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
         </Group>
 
         <Group title="Look">
+          <Setting
+            label="Theme"
+            hint={
+              page.theme === "visitor"
+                ? "Visitors pick light or dark for themselves."
+                : "Everyone sees it this way, and the theme switch is hidden."
+            }
+          >
+            <Segmented
+              aria-label="Theme"
+              value={page.theme}
+              onValueChange={(theme) => set({ theme })}
+              options={[
+                { value: "visitor", label: "Theirs" },
+                { value: "light", label: "Stone" },
+                { value: "dark", label: "Basalt" },
+              ]}
+            />
+          </Setting>
           <Setting label="Accent">
             <div role="radiogroup" aria-label="Accent" className="flex gap-2">
               {(["lapis", "pyrite", "malachite", "hematite"] as Tone[]).map((tone) => (
                 <Tooltip key={tone} content={cap(tone)}>
                   <button
                     role="radio"
-                    aria-checked={page.accent === tone}
+                    aria-checked={!page.color && page.accent === tone}
                     aria-label={cap(tone)}
-                    onClick={() => set({ accent: tone })}
+                    onClick={() => set({ accent: tone, color: "" })}
                     className={cn(
                       "grid size-9 place-items-center border outline-none focus-visible:ring-2 focus-visible:ring-lapis",
-                      page.accent === tone ? "border-ink" : "border-line hover:border-line-strong",
+                      !page.color && page.accent === tone ? "border-ink" : "border-line hover:border-line-strong",
                     )}
                   >
                     <Swatch value={tone} className="size-6" />
                   </button>
                 </Tooltip>
               ))}
-            </div>
-          </Setting>
-          <Setting label="Cover plate">
-            <div role="radiogroup" aria-label="Cover plate" className="grid grid-cols-6 gap-1.5">
-              <Tooltip content="No plate">
-                <button
+              <Popover>
+                <PopoverTrigger
                   role="radio"
-                  aria-checked={page.art === "none"}
-                  aria-label="No plate"
-                  onClick={() => set({ art: "none" })}
+                  aria-checked={Boolean(page.color)}
+                  aria-label="Your own colour"
                   className={cn(
-                    "grid aspect-square place-items-center border text-ink-3 outline-none focus-visible:ring-2 focus-visible:ring-lapis",
-                    page.art === "none" ? "border-ink bg-raised" : "border-line bg-raised hover:border-line-strong",
+                    "grid size-9 place-items-center border outline-none focus-visible:ring-2 focus-visible:ring-lapis",
+                    page.color ? "border-ink" : "border-dashed border-line-strong text-ink-3 hover:text-ink",
                   )}
                 >
-                  <Icon name="x" size="sm" />
+                  {page.color ? <Swatch value={page.color} className="size-6" /> : <Icon name="plus" size="sm" />}
+                </PopoverTrigger>
+                <PopoverContent className="w-60">
+                  <p className="px-3 pt-3 text-xs font-medium text-ink-2">Your own colour</p>
+                  <CustomColor value={page.color || "#2c4a8c"} onChange={(color) => set({ color })} />
+                </PopoverContent>
+              </Popover>
+            </div>
+            {page.color ? (
+              <p className="flex items-center gap-2 text-[11px] text-ink-3">
+                <span className="font-mono uppercase">{page.color}</span>
+                <button onClick={() => set({ color: "" })} className="hover:text-ink">
+                  Use {cap(page.accent)} again
                 </button>
-              </Tooltip>
-              {arts.map((a) => (
-                <Tooltip key={a} content={a.replace(/-/g, " ")}>
-                  <button
-                    role="radio"
-                    aria-checked={page.art === a}
-                    aria-label={a.replace(/-/g, " ")}
-                    onClick={() => set({ art: a })}
-                    className={cn(
-                      "relative aspect-square overflow-hidden border bg-raised outline-none focus-visible:ring-2 focus-visible:ring-lapis",
-                      page.art === a ? "border-ink" : "border-line hover:border-line-strong",
-                    )}
-                  >
-                    <Dither name={a} tone={page.art === a ? page.accent : "muted"} fill smooth className="m-0.5" />
-                  </button>
-                </Tooltip>
+              </p>
+            ) : null}
+          </Setting>
+          <div className="grid grid-cols-2 gap-3">
+            <Setting label="Width">
+              <Segmented
+                aria-label="Page width"
+                value={page.width}
+                onValueChange={(width) => set({ width })}
+                options={[
+                  { value: "normal", label: "Normal" },
+                  { value: "wide", label: "Wide" },
+                ]}
+              />
+            </Setting>
+            <Setting label="Spacing">
+              <Segmented
+                aria-label="Spacing"
+                value={page.density}
+                onValueChange={(density) => set({ density })}
+                options={[
+                  { value: "comfortable", label: "Roomy" },
+                  { value: "compact", label: "Tight" },
+                ]}
+              />
+            </Setting>
+          </div>
+        </Group>
+
+        <Group title="Header">
+          <div role="radiogroup" aria-label="Header style" className="grid grid-cols-4 gap-2">
+            {(
+              [
+                ["plate", "Plate"],
+                ["banner", "Banner"],
+                ["centered", "Centred"],
+                ["plain", "Plain"],
+              ] as [PublicPage["hero"], string][]
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                role="radio"
+                aria-checked={page.hero === id}
+                onClick={() => set({ hero: id })}
+                className={cn(
+                  "flex flex-col gap-1.5 border p-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-lapis",
+                  page.hero === id ? "border-lapis bg-lapis-soft" : "border-line bg-raised hover:border-line-strong",
+                )}
+              >
+                <HeroSketch hero={id} />
+                <span className="text-[11px] font-medium">{label}</span>
+              </button>
+            ))}
+          </div>
+          <Setting label="Title font">
+            <div role="radiogroup" aria-label="Title font" className="grid grid-cols-4 gap-2">
+              {(
+                [
+                  ["display", "Display"],
+                  ["sans", "Sans"],
+                  ["serif", "Serif"],
+                  ["mono", "Mono"],
+                ] as [PublicPage["headingFont"], string][]
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  role="radio"
+                  aria-checked={page.headingFont === id}
+                  onClick={() => set({ headingFont: id })}
+                  className={cn(
+                    "flex flex-col items-center gap-0.5 border py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-lapis",
+                    page.headingFont === id
+                      ? "border-lapis bg-lapis-soft"
+                      : "border-line bg-raised hover:border-line-strong",
+                  )}
+                >
+                  <span className={cn("text-lg leading-tight", headingFonts[id])}>Aa</span>
+                  <span className="text-[10px] text-ink-3">{label}</span>
+                </button>
               ))}
             </div>
           </Setting>
+          {page.hero === "plain" ? null : (
+            <Setting label="Cover plate">
+              <div
+                role="radiogroup"
+                aria-label="Cover plate"
+                style={accentVars(page.color)}
+                className="grid grid-cols-6 gap-1.5"
+              >
+                <Tooltip content="No plate">
+                  <button
+                    role="radio"
+                    aria-checked={page.art === "none"}
+                    aria-label="No plate"
+                    onClick={() => set({ art: "none" })}
+                    className={cn(
+                      "grid aspect-square place-items-center border text-ink-3 outline-none focus-visible:ring-2 focus-visible:ring-lapis",
+                      page.art === "none" ? "border-ink bg-raised" : "border-line bg-raised hover:border-line-strong",
+                    )}
+                  >
+                    <Icon name="x" size="sm" />
+                  </button>
+                </Tooltip>
+                {arts.map((a) => (
+                  <Tooltip key={a} content={a.replace(/-/g, " ")}>
+                    <button
+                      role="radio"
+                      aria-checked={page.art === a}
+                      aria-label={a.replace(/-/g, " ")}
+                      onClick={() => set({ art: a })}
+                      className={cn(
+                        "relative aspect-square overflow-hidden border bg-raised outline-none focus-visible:ring-2 focus-visible:ring-lapis",
+                        page.art === a ? "border-ink" : "border-line hover:border-line-strong",
+                      )}
+                    >
+                      <Dither name={a} tone={page.art === a ? accent : "muted"} fill smooth className="m-0.5" />
+                    </button>
+                  </Tooltip>
+                ))}
+              </div>
+            </Setting>
+          )}
+          <Setting label="Button" hint="A call to action beside the title, like a sign-up or your docs.">
+            <LinkRow link={page.cta} name="Button" onChange={(cta) => set({ cta })} />
+          </Setting>
+          <Setting label="Links">
+            <div className="flex flex-col gap-1.5">
+              {page.links.map((l, i) => (
+                <LinkRow
+                  key={i}
+                  link={l}
+                  name={`Link ${i + 1}`}
+                  onChange={(link) => setLink(i, link)}
+                  onRemove={() => setLink(i, null)}
+                />
+              ))}
+              {page.links.length < pageLimits.links ? (
+                <button
+                  onClick={() => set({ links: [...page.links, { label: "", url: "" }] })}
+                  className="flex h-8 items-center gap-1.5 border border-dashed border-line-strong px-2 text-xs text-ink-3 outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-lapis"
+                >
+                  <Icon name="plus" size="sm" /> Add a link
+                </button>
+              ) : null}
+            </div>
+          </Setting>
+          <Toggle
+            label="Stage counts"
+            hint="How much sits in each stage, under the title."
+            checked={page.showStats}
+            onChange={(showStats) => set({ showStats })}
+          />
+        </Group>
+
+        <Group title="Announcement">
+          <Setting label="Message" htmlFor="page-announcement" hint="A strip across the top for news. Empty hides it.">
+            <Input
+              id="page-announcement"
+              value={page.announcement}
+              maxLength={pageLimits.text}
+              placeholder="Dark mode is here"
+              onChange={(e) => set({ announcement: e.target.value })}
+            />
+          </Setting>
+          <Setting label="Link" htmlFor="page-announcement-link">
+            <Input
+              id="page-announcement-link"
+              value={page.announcementLink}
+              maxLength={pageLimits.url}
+              spellCheck={false}
+              aria-invalid={announcementBroken}
+              placeholder="Optional"
+              onChange={(e) => set({ announcementLink: e.target.value })}
+              className={cn("font-mono text-[13px]", announcementBroken && "border-hematite")}
+            />
+            {announcementBroken ? (
+              <p className="text-[11px] text-hematite">Use a web address or a mailto: link.</p>
+            ) : null}
+          </Setting>
+        </Group>
+
+        <Group title="Order">
+          <ol className="flex flex-col border border-line">
+            {page.sections.map((s, i) => (
+              <li
+                key={s}
+                className="flex items-center gap-2 border-b border-line bg-raised py-1.5 pr-1 pl-2.5 last:border-b-0"
+              >
+                <Icon name={sectionIcon[s]} size="sm" className="text-ink-3" />
+                <span className="min-w-0 flex-1">
+                  <span className={cn("block truncate text-sm", sectionOff[s] && "text-ink-3")}>{sectionName[s]}</span>
+                  {sectionOff[s] ? <span className="block text-[11px] text-ink-3">{sectionOff[s]}</span> : null}
+                </span>
+                <button
+                  aria-label={`Move ${sectionName[s]} up`}
+                  disabled={i === 0}
+                  onClick={() => moveSection(i, -1)}
+                  className="grid size-7 place-items-center text-ink-3 outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-lapis disabled:opacity-30 disabled:hover:text-ink-3"
+                >
+                  <Icon name="chevron-up" size="sm" />
+                </button>
+                <button
+                  aria-label={`Move ${sectionName[s]} down`}
+                  disabled={i === page.sections.length - 1}
+                  onClick={() => moveSection(i, 1)}
+                  className="grid size-7 place-items-center text-ink-3 outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-lapis disabled:opacity-30 disabled:hover:text-ink-3"
+                >
+                  <Icon name="chevron-down" size="sm" />
+                </button>
+              </li>
+            ))}
+          </ol>
         </Group>
 
         <Group
@@ -833,6 +1176,61 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
             checked={page.showTeam}
             onChange={(showTeam) => set({ showTeam })}
           />
+          <Toggle
+            label="Notes"
+            hint="The first line of each description."
+            checked={page.showNotes}
+            onChange={(showNotes) => set({ showNotes })}
+          />
+          <Toggle
+            label="Projects"
+            hint="Which project each item is part of."
+            checked={page.showProjects}
+            onChange={(showProjects) => set({ showProjects })}
+          />
+          <Toggle
+            label="Search"
+            hint="A search box above the roadmap."
+            checked={page.showSearch}
+            onChange={(showSearch) => set({ showSearch })}
+          />
+        </Group>
+
+        {page.showShipped && page.layout !== "list" ? (
+          <Group title={page.stageNames.shipped || defaultPage.stageNames.shipped}>
+            <Setting label="List">
+              <Segmented
+                aria-label="How many shipped items to list"
+                value={String(page.shippedLimit)}
+                onValueChange={(v) => set({ shippedLimit: Number(v) })}
+                options={[
+                  { value: "0", label: "All" },
+                  { value: "5", label: "5" },
+                  { value: "10", label: "10" },
+                  { value: "25", label: "25" },
+                ]}
+              />
+              <p className="text-[11px] text-ink-3">The newest first. Visitors can open the rest.</p>
+            </Setting>
+            <Toggle
+              label="By month"
+              hint="Under a heading for each month."
+              checked={page.shippedByMonth}
+              onChange={(shippedByMonth) => set({ shippedByMonth })}
+            />
+          </Group>
+        ) : null}
+
+        <Group title="Footer">
+          <Setting label="Text" htmlFor="page-footer" hint="Contact details, a thank-you, anything.">
+            <Textarea
+              id="page-footer"
+              value={page.footer}
+              maxLength={pageLimits.long}
+              onChange={(e) => set({ footer: e.target.value })}
+              className="min-h-16"
+            />
+          </Setting>
         </Group>
 
         <Group
@@ -887,7 +1285,7 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
           <div
             className={cn(
               "mx-auto transition-[max-width] duration-300",
-              device === "phone" ? "max-w-[390px]" : "max-w-5xl",
+              device === "phone" ? "max-w-[390px]" : page.width === "wide" ? "max-w-7xl" : "max-w-5xl",
             )}
           >
             <Frame url={url} phone={device === "phone"}>
@@ -902,7 +1300,7 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
 
 function Frame({ url, phone, children }: { url: string; phone?: boolean; children: React.ReactNode }) {
   return (
-    <DitherShadow offset={6} className="mx-auto max-w-5xl">
+    <DitherShadow offset={6} className="mx-auto">
       <div className="@container border border-ink bg-page">
         <div className="flex items-center gap-3 border-b border-line bg-surface px-3 py-2">
           {phone ? null : (

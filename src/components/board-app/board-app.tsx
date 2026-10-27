@@ -18,9 +18,9 @@ import {
   type Person,
   type Task,
 } from "@/lib/board-store";
-import { rememberBoard, setCount } from "@/lib/board-cache";
+import { rememberBoard, setCount, setMine } from "@/lib/board-cache";
 import { settleEdits, useBoardEdits, withEdits } from "@/lib/board-edits";
-import { metaFor, type LiveBoard } from "@/lib/live";
+import { can, metaFor, type LiveBoard, type Permission } from "@/lib/live";
 import { authReady } from "@/lib/supabase/env";
 import { AccountButton } from "@/components/account-button";
 import { Avatar, AvatarStack, Spinner } from "@/components/ui/display";
@@ -44,9 +44,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
-import { PixelCaret } from "@/components/ui/pixel";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { ThemeControls } from "@/components/theme-toggle";
 import { Wordmark } from "@/components/wordmark";
+import { MyTasksLink, navItem, WorkspaceMenu } from "@/components/workspace-nav";
 import { toast } from "@/components/ui/toast";
 import { useNow } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
@@ -71,6 +71,7 @@ import {
   type View,
 } from "./fields";
 import { FieldsMenu } from "./fields-menu";
+import { needs, refusal } from "./permissions";
 import { BoardLinks, NewBoard } from "./board-nav";
 import { useBoardSync, type SaveStatus, type Visitor } from "./use-board-sync";
 import { useWorkspace } from "./use-workspace";
@@ -158,14 +159,34 @@ export function BoardApp({
   useWorkspace(full ? live : undefined);
   const liveId = live?.board.id;
   const taskCount = Object.values(state.tasks).filter((t) => !t.archived).length;
+  const mineCount = Object.values(state.tasks).filter(
+    (t) => !t.archived && t.assignee === me.id && !closed(t.status),
+  ).length;
   useEffect(() => {
     if (liveId) setCount(liveId, taskCount);
   }, [liveId, taskCount]);
+  useEffect(() => {
+    if (liveId) setMine({ [liveId]: mineCount });
+  }, [liveId, mineCount]);
   const prefsKey = live ? `acta-prefs-${live.board.id}` : PREFS_KEY;
   const setPrefs = useCallback((patch: Partial<Prefs>) => rawDispatch({ type: "prefs", patch }), []);
 
+  // What this person may change here. The demo is anyone's to change
+  const role = live?.workspace.role;
+  const permissions = live?.workspace.permissions;
+  const allowed = useCallback((p: Permission) => !role || can(role, permissions, p), [role, permissions]);
+  const refused = useRef(0);
+
   const dispatch = useCallback(
     (action: DemoAction) => {
+      const missing = needs(action, state).find((p) => !allowed(p));
+      if (missing) {
+        // Typing in a field sends a change with each key, so the reason shows once rather than with every one
+        if (Date.now() - refused.current > 4000)
+          toast({ icon: "lock", title: refusal[missing], description: "A workspace admin can change that." });
+        refused.current = Date.now();
+        return;
+      }
       if (action.type === "bulk" && "archived" in action.patch) {
         const depth = demo.past.length;
         const one = action.ids.length === 1;
@@ -198,7 +219,7 @@ export function BoardApp({
       }
       rawDispatch(action);
     },
-    [demo.past.length, state],
+    [demo.past.length, state, allowed],
   );
 
   const undo = useCallback(() => {
@@ -250,13 +271,25 @@ export function BoardApp({
     } catch {}
   }, [full, restored, prefs, prefsKey]);
 
-  // Restoring only happens in the browser, so the link in the address bar can be read here
-  const [linked, setLinked] = useState(false);
-  if (full && restored && !linked) {
-    setLinked(true);
-    const id = decodeURIComponent(location.hash.slice(1));
-    if (state.tasks[id]) setOpenId(id);
-  }
+  // A link to one of its tasks, like those on My tasks, opens it. The board may have been out of sight and is
+  // only being shown again, so this runs each time it shows. The address loses the task once it's open, so
+  // coming back later doesn't open it again
+  const stateNow = useRef(state);
+  useLayoutEffect(() => {
+    stateNow.current = state;
+  });
+  useEffect(() => {
+    if (!full || !restored) return;
+    const fromLink = () => {
+      const id = decodeURIComponent(location.hash.slice(1));
+      if (!id || !stateNow.current.tasks[id]) return;
+      setOpenId(id);
+      history.replaceState(history.state, "", location.pathname + location.search);
+    };
+    fromLink();
+    window.addEventListener("hashchange", fromLink);
+    return () => window.removeEventListener("hashchange", fromLink);
+  }, [full, restored]);
 
   // The dialog mounts the first time a task opens and then stays, so it can animate closed
   const [dialogUsed, setDialogUsed] = useState(false);
@@ -274,11 +307,14 @@ export function BoardApp({
     if (lastPath) document.cookie = `acta-last=${lastPath}; path=/; max-age=31536000; samesite=lax`;
   }, [lastPath]);
 
+  const canEdit = allowed("edit");
   const createTask = useCallback(() => {
+    if (!canEdit)
+      return void toast({ icon: "lock", title: refusal.edit, description: "A workspace admin can change that." });
     const id = nextTaskId(state);
     rawDispatch({ type: "add", status: "todo", title: "Untitled task" });
     setOpenId(id);
-  }, [state]);
+  }, [state, canEdit]);
 
   useEffect(() => {
     if (!full) return;
@@ -438,7 +474,14 @@ export function BoardApp({
             ) : null}
             <div className="flex min-w-0 items-center gap-2.5">
               <h2 className="truncate font-display text-lg leading-none">{live ? live.board.name : demoBoard}</h2>
-              {live ? <SaveState status={status} /> : null}
+              {live && canEdit ? <SaveState status={status} /> : null}
+              {canEdit ? null : (
+                <Tooltip content="You can comment and vote. A workspace admin can let you change tasks">
+                  <span className="flex h-6 shrink-0 items-center gap-1.5 border border-line px-1.5 text-[11px] text-ink-3">
+                    <Icon name="eye" size="sm" /> View only
+                  </span>
+                </Tooltip>
+              )}
               {state.roadmap.public ? (
                 <Tooltip content="The roadmap is public">
                   <button
@@ -502,12 +545,14 @@ export function BoardApp({
                   </button>
                 </Tooltip>
               ) : null}
-              <Button variant="primary" size="sm" onClick={createTask} className="ml-1">
-                <Icon name="plus" /> <span className="hidden sm:inline">New task</span>
-                {full ? (
-                  <Kbd className="ml-1 hidden border-on-accent/40 bg-transparent text-on-accent sm:inline-flex">C</Kbd>
-                ) : null}
-              </Button>
+              {canEdit ? (
+                <Button variant="primary" size="sm" onClick={createTask} className="ml-1">
+                  <Icon name="plus" /> <span className="hidden sm:inline">New task</span>
+                  {full ? (
+                    <Kbd className="ml-1 hidden border-on-accent/40 bg-transparent text-on-accent sm:inline-flex">C</Kbd>
+                  ) : null}
+                </Button>
+              ) : null}
             </div>
           </header>
 
@@ -924,12 +969,9 @@ function Sidebar({
   // Canceled work isn't left to do, so it stays out of the progress
   const planned = total - current.filter((t) => t.status === "canceled").length;
   const mine = current.filter((t) => t.assignee === me.id && !closed(t.status)).length;
-  const onlyMine = prefs.filters.assignee?.length === 1 && prefs.filters.assignee[0] === me.id;
-  const item = (active: boolean) =>
-    cn(
-      "flex h-8 w-full items-center gap-2 px-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-lapis",
-      active ? "bg-lapis-soft text-lapis-ink" : "text-ink-2 hover:bg-sunken hover:text-ink",
-    );
+  // On a real workspace My tasks is its own page. The demo has one board, so there it filters
+  const onlyMine = !live && prefs.filters.assignee?.length === 1 && prefs.filters.assignee[0] === me.id;
+  const item = navItem;
 
   return (
     <>
@@ -953,36 +995,7 @@ function Sidebar({
         </Link>
       ) : null}
       {live ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3 text-left outline-none hover:bg-sunken focus-visible:bg-sunken">
-            <Avatar name={live.workspace.name} sigil={live.workspace.sigil} tone={live.workspace.tone} size="sm" />
-            <span className="truncate text-sm font-medium">{live.workspace.name}</span>
-            <PixelCaret className="ml-auto text-ink-3" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-60">
-            <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
-            {live.workspaces.map((w) => (
-              <DropdownMenuItem key={w.id} asChild>
-                <Link href={`/${w.slug}`}>
-                  <Avatar name={w.name} sigil={w.sigil} tone={w.tone} size="xs" />
-                  <span className="truncate">{w.name}</span>
-                  {w.id === live.workspace.id ? <Icon name="check" className="ml-auto text-lapis" /> : null}
-                </Link>
-              </DropdownMenuItem>
-            ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <Link href={`/${live.workspace.slug}/settings`}>
-                <Icon name="settings" /> Settings and members
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="/new">
-                <Icon name="plus" /> New workspace
-              </Link>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <WorkspaceMenu workspace={live.workspace} workspaces={live.workspaces} />
       ) : (
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
           <Avatar name={demoWorkspace.name} sigil={demoWorkspace.sigil} tone={demoWorkspace.tone} size="sm" />
@@ -992,27 +1005,31 @@ function Sidebar({
 
       <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2 text-sm">
         <Inbox state={state} onOpenTask={onOpenTask} className={item(false)} />
-        <button
-          className={item(onlyMine)}
-          aria-pressed={onlyMine}
-          onClick={() => {
-            setPrefs({ filters: onlyMine ? {} : { assignee: [me.id] } });
-            onNavigate();
-          }}
-        >
-          <Icon name="user" size="sm" />
-          My tasks
-          {mine ? <span className="ml-auto font-mono text-[11px] text-ink-3">{mine}</span> : null}
-        </button>
+        {live ? (
+          <MyTasksLink shell={live} active={false} onNavigate={onNavigate} />
+        ) : (
+          <button
+            className={item(onlyMine)}
+            aria-pressed={onlyMine}
+            onClick={() => {
+              setPrefs({ filters: onlyMine ? {} : { assignee: [me.id] } });
+              onNavigate();
+            }}
+          >
+            <Icon name="user" size="sm" />
+            My tasks
+            {mine ? <span className="ml-auto font-mono text-[11px] text-ink-3">{mine}</span> : null}
+          </button>
+        )}
         <p className="mt-4 mb-1 flex items-center justify-between px-2 font-mono text-[11px] text-ink-3">
           Boards
-          {live ? <NewBoard live={live} /> : null}
+          {live && can(live.workspace.role, live.workspace.permissions, "boards") ? <NewBoard live={live} /> : null}
         </p>
         {live ? (
           <BoardLinks
             live={live}
             total={total}
-            active={!onlyMine}
+            active
             isPublic={state.roadmap.public}
             item={item}
             onNavigate={onNavigate}
@@ -1048,14 +1065,14 @@ function Sidebar({
               <AccountButton />
               <span className="truncate text-xs text-ink-2">{live.me.name}</span>
             </span>
-            <ThemeToggle side="top" />
+            <ThemeControls side="top" />
           </div>
         ) : full ? (
           <div className="mt-3 flex items-center justify-between">
             <button onClick={onReset} className="flex items-center gap-1.5 text-xs text-ink-3 hover:text-ink">
               <Icon name="reset" size="sm" /> Reset demo
             </button>
-            <ThemeToggle side="top" />
+            <ThemeControls side="top" />
           </div>
         ) : null}
       </div>
@@ -1186,6 +1203,8 @@ const shortcutGroups: { title: string; items: [string[], string][] }[] = [
       [["Space"], "Open the task"],
       [["X"], "Select the row"],
       [["⇧", "↑ ↓"], "Extend the selection"],
+      [["⌥", "↑ ↓"], "Move the row"],
+      [["Drag"], "Move a row by its number"],
       [["⌘", "A"], "Select all rows"],
       [["Delete"], "Clear the cell"],
       [["⌘", "⌫"], "Delete the rows"],

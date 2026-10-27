@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { boardPath, cachedBoard, rememberBoard, rememberShell, setCounts } from "@/lib/board-cache";
+import { boardPath, cachedBoard, rememberBoard, rememberShell, setCounts, setMine } from "@/lib/board-cache";
 import { boardQuery, boardState, countTasks, type NestedBoard } from "@/lib/board-load";
 import type { LiveBoard } from "@/lib/live";
 import { listen } from "@/lib/realtime";
@@ -35,7 +35,16 @@ export function useWorkspace(live: LiveBoard | undefined) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = () => {
       clearTimeout(timer);
-      timer = setTimeout(async () => setCounts(await countTasks(await loadClient(), { ids: list })), 1000);
+      timer = setTimeout(async () => {
+        const client = await loadClient();
+        const me = liveRef.current?.me.id;
+        const [all, yours] = await Promise.all([
+          countTasks(client, { ids: list }),
+          me ? countTasks(client, { ids: list }, me) : {},
+        ]);
+        setCounts(all);
+        setMine(yours);
+      }, 1000);
     };
     const stop = listen(`counts:${workspaceId}:${hash(ids)}`, [{ table: "tasks", filter: `board_id=in.(${ids})` }], {
       change: (_table, p) => {

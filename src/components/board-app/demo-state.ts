@@ -29,6 +29,8 @@ export function describe(action: BoardAction, board: BoardState): string {
   switch (action.type) {
     case "update":
       return `${action.id} · ${action.note ?? "edited"}`;
+    case "move":
+      return `Moved ${action.id}`;
     case "bulk":
       return `${action.ids.length} tasks · ${action.note}`;
     case "add":

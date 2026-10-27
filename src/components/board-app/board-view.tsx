@@ -1,15 +1,17 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
   PointerSensor,
-  closestCorners,
+  closestCenter,
+  pointerWithin,
   useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
@@ -57,11 +59,29 @@ type Props = {
   setPrefs?: (patch: Partial<Prefs>) => void;
 };
 
+type Columns = BoardState["columns"];
+
+const columnOf = (cols: Columns, id: string): StatusCategory | undefined => {
+  if (id in cols) return id as StatusCategory;
+  return (Object.keys(cols) as StatusCategory[]).find((c) => cols[c].includes(id));
+};
+
 export function BoardView({ state, dispatch, visible, onOpen, prefs, setPrefs }: Props) {
   const [activeId, setActiveId] = useState<string | null>(null);
+  // Where the cards are while one is carried. Nothing is saved until it's dropped, so a drag is one change
+  // that one undo takes back, and a cancelled drag leaves no trace
+  const [preview, setPreview] = useState<Columns | null>(null);
+  // Which columns were open wide when the drag started. They stay that way until it ends, so nothing on the
+  // board changes width under the card
+  const [wide, setWide] = useState<Set<StatusCategory> | null>(null);
+  const columns = preview ?? state.columns;
+  const live = useRef(columns);
+  useLayoutEffect(() => {
+    live.current = columns;
+  });
   const dndId = useId();
-  const startStatus = useRef<StatusCategory | null>(null);
-  const marked = useRef(false);
+  // The column the card was picked up from
+  const [start, setStart] = useState<StatusCategory | null>(null);
   const lastDrop = useRef(0);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -77,71 +97,80 @@ export function BoardView({ state, dispatch, visible, onOpen, prefs, setPrefs }:
       collapsed: collapsed(s) ? prefs!.collapsed.filter((k) => k !== `board:${s}`) : [...prefs!.collapsed, `board:${s}`],
     });
 
-  const columnOf = (id: string): StatusCategory | undefined => {
-    if (id in state.columns) return id as StatusCategory;
-    return (Object.keys(state.columns) as StatusCategory[]).find((c) => state.columns[c].includes(id));
-  };
-
-  const mark = (id: string) => {
-    if (marked.current) return;
-    marked.current = true;
-    dispatch({ type: "checkpoint", label: `Moved ${id}` });
-  };
+  // First the column under the pointer, or the nearest one when it's between columns. Then the card in that
+  // column nearest the one being carried, or the column itself when it has none. Measuring every card on the
+  // board against every column's corners made empty columns hard to hit, and the target jump about
+  const collide = useCallback<CollisionDetection>((args) => {
+    const cols = live.current;
+    const lanes = args.droppableContainers.filter((c) => String(c.id) in cols);
+    const under = args.pointerCoordinates ? pointerWithin({ ...args, droppableContainers: lanes }) : [];
+    const lane = (under.length ? under : closestCenter({ ...args, droppableContainers: lanes }))[0]?.id;
+    if (lane === undefined) return [];
+    const inLane = new Set(cols[lane as StatusCategory]);
+    const cards = args.droppableContainers.filter((c) => inLane.has(String(c.id)));
+    return cards.length ? closestCenter({ ...args, droppableContainers: cards }) : [{ id: lane }];
+  }, []);
 
   const onDragStart = ({ active }: DragStartEvent) => {
-    setActiveId(String(active.id));
-    marked.current = false;
-    startStatus.current = columnOf(String(active.id)) ?? null;
+    const id = String(active.id);
+    setActiveId(id);
+    setPreview(state.columns);
+    setWide(new Set(statuses.filter((s) => !rail(s.id)).map((s) => s.id)));
+    setStart(columnOf(state.columns, id) ?? null);
   };
 
   const onDragOver = ({ active, over }: DragOverEvent) => {
     if (!over) return;
+    const cols = live.current;
     const id = String(active.id);
-    const from = columnOf(id);
-    const to = columnOf(String(over.id));
+    const overId = String(over.id);
+    const from = columnOf(cols, id);
+    const to = columnOf(cols, overId);
     if (!from || !to || from === to) return;
-    const target = state.columns[to];
+    const target = cols[to];
     let index = target.length;
-    if (!(String(over.id) in state.columns)) {
-      const overIndex = target.indexOf(String(over.id));
+    if (!(overId in cols)) {
+      const overIndex = target.indexOf(overId);
       const below =
         active.rect.current.translated && active.rect.current.translated.top > over.rect.top + over.rect.height / 2;
       index = overIndex >= 0 ? overIndex + (below ? 1 : 0) : target.length;
     }
-    mark(id);
-    dispatch({
-      type: "columns",
-      columns: {
-        ...state.columns,
-        [from]: state.columns[from].filter((x) => x !== id),
-        [to]: [...target.slice(0, index), id, ...target.slice(index)],
-      },
+    setPreview({
+      ...cols,
+      [from]: cols[from].filter((x) => x !== id),
+      [to]: [...target.slice(0, index), id, ...target.slice(index)],
     });
+  };
+
+  const finish = () => {
+    setActiveId(null);
+    setPreview(null);
+    setWide(null);
+    setStart(null);
   };
 
   const onDragEnd = ({ active, over }: DragEndEvent) => {
     const id = String(active.id);
-    setActiveId(null);
+    let cols = live.current;
+    const col = columnOf(cols, id);
+    if (over && col) {
+      const overId = String(over.id);
+      const items = cols[col];
+      if (overId !== id && !(overId in cols) && items.includes(overId))
+        cols = { ...cols, [col]: arrayMove(items, items.indexOf(id), items.indexOf(overId)) };
+    }
+    finish();
     lastDrop.current = Date.now();
-    const col = columnOf(id);
-    if (over && col && columnOf(String(over.id)) === col) {
-      const items = state.columns[col];
-      const a = items.indexOf(id);
-      const b = items.indexOf(String(over.id));
-      if (b >= 0 && a !== b) {
-        mark(id);
-        dispatch({ type: "columns", columns: { ...state.columns, [col]: arrayMove(items, a, b) } });
-      }
-    }
-    if (col && startStatus.current && col !== startStatus.current) {
-      const title = statuses.find((s) => s.id === col)?.title ?? col;
-      dispatch({ type: "silent", action: { type: "update", id, patch: { status: col }, note: `moved it to ${title}` } });
-    }
-  };
-
-  const onDragCancel = () => {
-    setActiveId(null);
-    if (marked.current) dispatch({ type: "revert" });
+    if (!col) return;
+    const list = cols[col];
+    const moved = col !== start;
+    dispatch({
+      type: "move",
+      id,
+      to: col,
+      before: list[list.indexOf(id) + 1] ?? null,
+      note: moved ? `moved it to ${statuses.find((s) => s.id === col)?.title ?? col}` : undefined,
+    });
   };
 
   const open = (id: string) => {
@@ -149,39 +178,59 @@ export function BoardView({ state, dispatch, visible, onOpen, prefs, setPrefs }:
   };
 
   const active = activeId ? state.tasks[activeId] : null;
-  // Canceled shows once something is in it, and Hide done leaves out both finished columns, except while a card
-  // is carried, so it can still be dropped there
   const hideDone = Boolean(prefs?.filters.hideDone);
-  const shown = statuses.filter((s) => {
-    if (activeId) return true;
-    if (s.id === "done") return !hideDone;
-    if (s.id === "canceled") return !hideDone && state.columns.canceled.some((id) => state.tasks[id] && visible(state.tasks[id]));
-    return true;
-  });
+  // Done hidden by the filter, and Canceled while it's empty, sit as a narrow rail at the end. A card can be
+  // dropped on either, and nothing appears or disappears when a drag starts
+  const rail = (s: StatusCategory) => {
+    if (wide) return !wide.has(s);
+    if (collapsed(s)) return true;
+    if (closed(s) && hideDone) return true;
+    if (s === "canceled") return !state.columns.canceled.some((id) => state.tasks[id] && visible(state.tasks[id]));
+    return false;
+  };
+  const target = activeId ? columnOf(columns, activeId) : undefined;
 
   return (
     <DndContext
       id={dndId}
       sensors={sensors}
-      collisionDetection={closestCorners}
+      collisionDetection={collide}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
       onDragEnd={onDragEnd}
-      onDragCancel={onDragCancel}
+      onDragCancel={finish}
     >
       <div className="flex h-full snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain p-3 sm:snap-none">
-        {shown.map((s) => {
-          const ids = state.columns[s.id].filter((id) => state.tasks[id] && visible(state.tasks[id]));
+        {statuses.map((s) => {
+          const ids = columns[s.id].filter((id) => state.tasks[id] && visible(state.tasks[id]));
           const points = ids.reduce((n, id) => n + (state.tasks[id].size ? sizePoints[state.tasks[id].size!] : 0), 0);
+          const hidden = closed(s.id) && hideDone;
           return (
             <Column
               key={s.id}
               status={s.id}
               title={s.title}
-              count={ids.length}
+              count={hidden ? 0 : ids.length}
               points={points}
-              collapsed={collapsed(s.id)}
-              onToggle={setPrefs ? () => toggleCollapsed(s.id) : undefined}
+              collapsed={rail(s.id)}
+              targeted={target === s.id && target !== start}
+              railHint={
+                hidden
+                  ? `${s.title} is hidden by the filter. Drop a card here, or click to show it`
+                  : s.id === "canceled" && !collapsed(s.id)
+                    ? "Drop a card here to cancel it"
+                    : undefined
+              }
+              onToggle={
+                !setPrefs || !prefs
+                  ? undefined
+                  : hidden
+                    ? () => setPrefs({ filters: { ...prefs.filters, hideDone: false } })
+                    : // An empty Canceled has nothing to open up
+                      s.id === "canceled" && !collapsed(s.id) && rail(s.id)
+                      ? undefined
+                      : () => toggleCollapsed(s.id)
+              }
               onArchive={
                 closed(s.id) && ids.some((id) => !state.tasks[id].archived)
                   ? () => dispatch(archiveTasks(ids.filter((id) => !state.tasks[id].archived), true))
@@ -220,6 +269,8 @@ function Column({
   count,
   points,
   collapsed,
+  targeted,
+  railHint,
   onToggle,
   onArchive,
   dispatch,
@@ -230,12 +281,16 @@ function Column({
   count: number;
   points: number;
   collapsed: boolean;
+  // A card being carried would land here
+  targeted: boolean;
+  railHint?: string;
   onToggle?: () => void;
   onArchive?: () => void;
   dispatch: (a: DemoAction) => void;
   children: React.ReactNode;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: status });
+  // The whole column takes drops, header included, so a card can be let go anywhere over it
+  const { setNodeRef } = useDroppable({ id: status });
   const [composing, setComposing] = useState<"top" | "bottom" | null>(null);
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
@@ -249,25 +304,43 @@ function Column({
   };
 
   if (collapsed) {
-    return (
+    const inner = (
+      <>
+        <StatusMarker status={status} />
+        <span className="font-mono text-[11px] text-ink-3">{count || ""}</span>
+        <span className="text-sm font-medium [writing-mode:vertical-rl]">{title}</span>
+      </>
+    );
+    const rail = (
       <section
         ref={setNodeRef}
         className={cn(
-          "flex w-11 shrink-0 flex-col items-center border border-line bg-sunken/50 transition-colors",
-          isOver && "bg-lapis-soft/50",
+          "flex w-11 shrink-0 flex-col items-center border bg-sunken/50 transition-colors",
+          targeted ? "border-lapis bg-lapis-soft" : "border-line",
         )}
       >
         <DitherFill level={band[status].level} tone={band[status].tone} className="h-1 w-full shrink-0" />
-        <button
-          onClick={onToggle}
-          aria-label={`Expand ${title}`}
-          className="flex w-full flex-1 flex-col items-center gap-3 pt-3 text-ink-2 hover:bg-sunken hover:text-ink"
-        >
-          <StatusMarker status={status} />
-          <span className="font-mono text-[11px] text-ink-3">{count}</span>
-          <span className="text-sm font-medium [writing-mode:vertical-rl]">{title}</span>
-        </button>
+        {onToggle ? (
+          <button
+            onClick={onToggle}
+            aria-label={railHint ?? `Expand ${title}`}
+            className="flex w-full flex-1 flex-col items-center gap-3 pt-3 text-ink-2 hover:bg-sunken hover:text-ink"
+          >
+            {inner}
+          </button>
+        ) : (
+          <div aria-label={railHint ?? title} className="flex w-full flex-1 flex-col items-center gap-3 pt-3 text-ink-3">
+            {inner}
+          </div>
+        )}
       </section>
+    );
+    return railHint ? (
+      <Tooltip content={railHint} side="left">
+        {rail}
+      </Tooltip>
+    ) : (
+      rail
     );
   }
 
@@ -294,7 +367,13 @@ function Column({
   );
 
   return (
-    <section className="flex w-[min(85vw,18rem)] shrink-0 snap-start flex-col border border-line bg-sunken/50 lg:w-auto lg:max-w-[26rem] lg:min-w-[16.5rem] lg:flex-1">
+    <section
+      ref={setNodeRef}
+      className={cn(
+        "flex w-[min(85vw,18rem)] shrink-0 snap-start flex-col border bg-sunken/50 transition-colors lg:w-auto lg:max-w-[26rem] lg:min-w-[16.5rem] lg:flex-1",
+        targeted ? "border-lapis/60" : "border-line",
+      )}
+    >
       <DitherFill level={band[status].level} tone={band[status].tone} className="h-1 shrink-0" />
       <header className="group/col flex h-10 shrink-0 items-center gap-2 border-b border-line bg-surface pr-1 pl-3">
         <StatusMarker status={status} />
@@ -343,11 +422,11 @@ function Column({
         </div>
       </header>
       <div
-        ref={(el) => {
-          setNodeRef(el);
-          listRef.current = el;
-        }}
-        className={cn("flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto p-2 transition-colors", isOver && "bg-lapis-soft/40")}
+        ref={listRef}
+        className={cn(
+          "flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto p-2 transition-colors",
+          targeted && "bg-lapis-soft/40",
+        )}
       >
         {composing === "top" ? composer : null}
         {children}

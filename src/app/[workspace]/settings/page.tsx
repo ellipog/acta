@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { AppTopBar } from "@/components/app-chrome";
 import type { Label, Project } from "@/lib/board-store";
+import { can } from "@/lib/live";
 import { getAuth, getWorkspace } from "@/lib/workspace";
 import { SettingsLoading } from "./settings-loading";
 import { SettingsView } from "./settings-view";
@@ -40,7 +41,7 @@ async function Settings({ params }: { params: PageProps<"/[workspace]/settings">
       .order("created_at"),
   ]);
   if (!ws) notFound();
-  const manager = ws.workspace.role !== "member";
+  const inviting = can(ws.workspace.role, ws.workspace.permissions, "invite");
   const h = await headers();
   const origin = `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host")}`;
   const back = ws.boards[0] ? { href: `/${slug}/${ws.boards[0].slug}`, label: "Back to boards" } : undefined;
@@ -60,7 +61,7 @@ async function Settings({ params }: { params: PageProps<"/[workspace]/settings">
             labels: (b.labels ?? []) as Label[],
             projects: (b.projects ?? []) as Project[],
           }))}
-          invite={manager && link?.token ? `${origin}/join/${link.token}` : null}
+          invite={inviting && link?.token ? `${origin}/join/${link.token}` : null}
         />
       </main>
     </>

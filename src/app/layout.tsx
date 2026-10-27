@@ -4,6 +4,7 @@ import { EB_Garamond, Geist, Geist_Mono, Marcellus } from "next/font/google";
 import { Analytics } from "@/components/analytics";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/toast";
+import { appearanceScript } from "@/lib/appearance";
 import { siteUrl } from "@/lib/slugs";
 import "./globals.css";
 
@@ -48,6 +49,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: pixelRatio }} />
+        <script dangerouslySetInnerHTML={{ __html: appearanceScript }} />
       </head>
       <body className="min-h-full flex flex-col">
         <ThemeProvider>

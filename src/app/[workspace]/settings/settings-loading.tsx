@@ -27,7 +27,13 @@ function Frame({ shell }: { shell?: ReturnType<typeof cachedShell> }) {
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-12 sm:px-6">
         {shell ? (
           <div className="flex items-center gap-5 pb-10">
-            <Avatar name={shell.workspace.name} sigil={shell.workspace.sigil} tone={shell.workspace.tone} size="xl" />
+            <Avatar
+              name={shell.workspace.name}
+              sigil={shell.workspace.sigil}
+              tone={shell.workspace.tone}
+              src={shell.workspace.image}
+              size="xl"
+            />
             <div className="min-w-0">
               <Eyebrow>Workspace settings</Eyebrow>
               <h1 className="mt-2 truncate font-display text-4xl">{shell.workspace.name}</h1>

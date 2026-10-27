@@ -83,9 +83,11 @@ export function slugProblem(slug: string): string | null {
   return shapeProblem(slug) ?? (reserved.has(slug) ? "That name is reserved." : null);
 }
 
-// Boards sit under a workspace, so only the workspace's own routes are off limits
+// Boards sit under a workspace, so only the workspace's own pages are off limits
+const workspacePages = new Set(["settings", "my-tasks"]);
+
 export function boardSlugProblem(slug: string): string | null {
-  return shapeProblem(slug) ?? (slug === "settings" ? "That name is reserved." : null);
+  return shapeProblem(slug) ?? (workspacePages.has(slug) ? "That name is reserved." : null);
 }
 
 /** A free address for a new board, given the ones its workspace already uses */

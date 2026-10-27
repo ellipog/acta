@@ -10,7 +10,7 @@ import { Icon, type IconName } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import type { CurrentUser } from "@/lib/auth";
-import { avatarSide } from "@/lib/avatars";
+import { square } from "@/lib/square-image";
 import { loadClient } from "@/lib/supabase/browser";
 import { cn } from "@/lib/utils";
 import { changePicture, deleteAccount, rename, type Result } from "./actions";
@@ -29,31 +29,6 @@ function Section({ title, children, className }: { title: string; children: Reac
       <div className="min-w-0">{children}</div>
     </section>
   );
-}
-
-async function square(file: File) {
-  const bitmap = await createImageBitmap(file);
-  const side = Math.min(bitmap.width, bitmap.height);
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = avatarSide;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("No canvas");
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(
-    bitmap,
-    (bitmap.width - side) / 2,
-    (bitmap.height - side) / 2,
-    side,
-    side,
-    0,
-    0,
-    avatarSide,
-    avatarSide,
-  );
-  bitmap.close();
-  const blob = await new Promise<Blob | null>((done) => canvas.toBlob(done, "image/webp", 0.9));
-  if (!blob) throw new Error("Couldn’t encode");
-  return blob;
 }
 
 function PictureField({ user }: { user: CurrentUser }) {

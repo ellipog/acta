@@ -15,6 +15,7 @@ import {
   type PublicRoadmapData,
 } from "@/lib/public-roadmap";
 import { loadClient } from "@/lib/supabase/browser";
+import { cn } from "@/lib/utils";
 
 function visitorId() {
   const found = document.cookie.match(new RegExp(`(?:^|; )${visitorCookie}=([^;]+)`));
@@ -33,10 +34,36 @@ const patchSuggestions = (s: BoardState, fn: (list: Suggestion[]) => Suggestion[
   roadmap: { ...s.roadmap, suggestions: fn(s.roadmap.suggestions) },
 });
 
+// A page that keeps to light or dark puts the whole document in it, so dialogs and toasts match. The theme
+// provider sets its own choice back on the root when it mounts, so the page holds on to it while it's open
+function useForcedTheme(theme: "light" | "dark" | null) {
+  useEffect(() => {
+    if (!theme) return;
+    const root = document.documentElement;
+    const before = root.getAttribute("data-theme");
+    const hold = () => {
+      if (root.getAttribute("data-theme") !== theme) root.setAttribute("data-theme", theme);
+      root.style.colorScheme = theme;
+    };
+    hold();
+    const watch = new MutationObserver(hold);
+    watch.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => {
+      watch.disconnect();
+      if (before) root.setAttribute("data-theme", before);
+      root.style.colorScheme = "";
+    };
+  }, [theme]);
+}
+
 export function PublicView({ data }: { data: PublicRoadmapData }) {
   const [meta, setMeta] = useState(() => publicMeta(data));
   const [state, setState] = useState(() => publicState(data));
   setBoardMeta(meta);
+  const page = state.roadmap.page;
+  const forced = page.theme === "visitor" ? null : page.theme;
+  const width = page.width === "wide" ? "max-w-7xl" : "max-w-5xl";
+  useForcedTheme(forced);
   const lines = useRef(new Map<string, Promise<unknown>>());
   const busy = useRef(0);
   const board = data.board.id;
@@ -156,17 +183,25 @@ export function PublicView({ data }: { data: PublicRoadmapData }) {
   };
 
   return (
-    <div className="min-h-dvh bg-page">
+    <div data-theme={forced ?? undefined} className="min-h-dvh bg-page text-ink">
       <header className="border-b border-line">
-        <div className="mx-auto flex h-14 max-w-5xl items-center gap-3 px-4 sm:px-6">
-          <Avatar name={data.workspace.name} sigil={data.workspace.sigil} tone={data.workspace.tone} size="sm" />
+        <div className={cn("mx-auto flex h-14 items-center gap-3 px-4 sm:px-6", width)}>
+          <Avatar
+            name={data.workspace.name}
+            sigil={data.workspace.sigil}
+            tone={data.workspace.tone}
+            src={data.workspace.image}
+            size="sm"
+          />
           <span className="truncate text-sm font-medium">{data.workspace.name}</span>
-          <div className="ml-auto">
-            <ThemeToggle />
-          </div>
+          {forced ? null : (
+            <div className="ml-auto">
+              <ThemeToggle />
+            </div>
+          )}
         </div>
       </header>
-      <main className="@container mx-auto max-w-5xl">
+      <main className={cn("@container mx-auto", width)}>
         <Visitor state={state} dispatch={dispatch} home="/" />
       </main>
     </div>

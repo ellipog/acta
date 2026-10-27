@@ -65,7 +65,7 @@ export type SuggestionRow = {
 };
 export type BoardRow = { id: string; roadmap_public: boolean; page: Partial<PublicPage>; next_number: number };
 
-type SyncedField =
+export type SyncedField =
   | "title"
   | "status"
   | "priority"
@@ -81,7 +81,9 @@ type SyncedField =
   | "shipped"
   | "archived";
 
-const fields: SyncedField[] = [
+// Every task field that's saved as a column of its own. A new field on Task belongs here unless it's kept some
+// other way, which tests/board-save.test.ts checks
+export const syncedFields: SyncedField[] = [
   "title",
   "status",
   "priority",
@@ -219,7 +221,7 @@ export function diffBoards(base: BoardState, next: BoardState): Diff {
       d.created.push(id);
       if (b.voted) d.voted.push(id);
     } else {
-      const changed = fields.filter((f) => !same(a[f], b[f]));
+      const changed = syncedFields.filter((f) => !same(a[f], b[f]));
       if (changed.length) d.updated.push({ id, fields: changed });
       if (Boolean(a.voted) !== Boolean(b.voted)) (b.voted ? d.voted : d.unvoted).push(id);
     }
@@ -264,7 +266,7 @@ export function toWire(d: Diff, state: BoardState) {
       position: Math.max(0, positionOf(id)),
       origin: t.origin ?? null,
     };
-    for (const f of fields) row[wireName[f]] = wireValue(t, f);
+    for (const f of syncedFields) row[wireName[f]] = wireValue(t, f);
     return row;
   });
   const createdSet = new Set(d.created);
@@ -458,7 +460,7 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
           },
         };
       const changed: Partial<Task> = {};
-      for (const f of [...fields, "votes"] as (SyncedField | "votes")[])
+      for (const f of [...syncedFields, "votes"] as (SyncedField | "votes")[])
         if (!same(prev[f], incoming[f])) (changed as Record<string, unknown>)[f] = incoming[f];
       if (Object.keys(changed).length) return { kind: "task", id, fields: changed, position: ev.row.position };
       // Only the position changed, so someone reordered the column
@@ -664,4 +666,64 @@ export function dropGone(state: BoardState, gone: Gone): BoardState {
   const suggestions = state.roadmap.suggestions.filter((s) => !gone.suggestions.has(s.id));
   if (tasks === state.tasks && suggestions.length === state.roadmap.suggestions.length) return state;
   return { ...state, tasks, roadmap: { ...state.roadmap, suggestions } };
+}
+
+// How long this tab remembers what it saved, to know its own echoes
+const ECHO_WINDOW = 30_000;
+
+// JSON with object keys in a set order. The database stores JSON with its keys reordered
+const canon = (v: unknown) =>
+  JSON.stringify(v ?? null, (_, x) =>
+    x && typeof x === "object" && !Array.isArray(x)
+      ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : x,
+  );
+
+type Sent = { at: number; value: string };
+
+/**
+ * What this tab saved lately. Each save comes back over the live feed, and an echo of an older save can arrive
+ * after a newer one has already been made. Applied as it is, it would put the older value back on screen, and
+ * whatever was typed next would build on it. This tells those echoes apart from changes made by someone else
+ */
+export class SentLog {
+  private log = new Map<string, Sent[]>();
+
+  private push(key: string, value: unknown, now: number) {
+    const list = (this.log.get(key) ?? []).filter((e) => now - e.at < ECHO_WINDOW);
+    list.push({ at: now, value: canon(value) });
+    this.log.set(key, list);
+  }
+
+  /** Notes what a save that went through set, read from the state it was sent from */
+  record(d: Diff, state: BoardState, now = Date.now()) {
+    for (const id of d.created) for (const f of syncedFields) this.push(`${id}:${f}`, state.tasks[id]?.[f], now);
+    for (const u of d.updated) for (const f of u.fields) this.push(`${u.id}:${f}`, state.tasks[u.id]?.[f], now);
+    if (d.roadmapPublic) this.push("board:public", state.roadmap.public, now);
+    if (d.page) this.push("board:page", state.roadmap.page, now);
+  }
+
+  /** Whether a value is one this tab saved and has since replaced */
+  stale(key: string, value: unknown, now = Date.now()) {
+    const list = (this.log.get(key) ?? []).filter((e) => now - e.at < ECHO_WINDOW);
+    if (list.length < 2) return false;
+    const v = canon(value);
+    return list.at(-1)!.value !== v && list.slice(0, -1).some((e) => e.value === v);
+  }
+
+  /** The change without what only repeats an older save of this tab's */
+  screen(c: Change, now = Date.now()): Change {
+    if (c.kind === "task" && c.fields) {
+      const kept = Object.entries(c.fields).filter(([f, v]) => !this.stale(`${c.id}:${f}`, v, now));
+      if (kept.length === Object.keys(c.fields).length) return c;
+      return kept.length ? { ...c, fields: Object.fromEntries(kept) as Partial<Task> } : { kind: "none" };
+    }
+    if (c.kind === "board") {
+      const out = { ...c };
+      if (c.public !== undefined && this.stale("board:public", c.public, now)) out.public = undefined;
+      if (c.page && this.stale("board:page", c.page, now)) out.page = undefined;
+      return out;
+    }
+    return c;
+  }
 }

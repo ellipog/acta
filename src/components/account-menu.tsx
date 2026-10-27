@@ -12,6 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { openAppearance } from "@/lib/appearance";
 import { loadClient } from "@/lib/supabase/browser";
 
 export function AccountMenu({
@@ -57,6 +58,9 @@ export function AccountMenu({
             </Link>
           </DropdownMenuItem>
         ) : null}
+        <DropdownMenuItem onSelect={openAppearance}>
+          <Icon name="palette" /> Appearance
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={async () => {

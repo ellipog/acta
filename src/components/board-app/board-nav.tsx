@@ -31,7 +31,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { addBoard, removeBoard, saveBoard } from "@/lib/board-actions";
 import { boardPath, cachedBoard, useCounts } from "@/lib/board-cache";
 import { useBoardEdits } from "@/lib/board-edits";
-import type { BoardSummary, LiveBoard } from "@/lib/live";
+import { can, isManager, type BoardSummary, type LiveBoard } from "@/lib/live";
 import { publicHref } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
 
@@ -55,7 +55,7 @@ function BoardMenuItems({
   roadmap?: string;
   settings: string;
   canDelete: boolean;
-  onEdit: () => void;
+  onEdit?: () => void;
   onDelete: () => void;
 }) {
   const Item = kit === "context" ? ContextMenuItem : DropdownMenuItem;
@@ -80,9 +80,11 @@ function BoardMenuItems({
         <Icon name="link" /> Copy link
       </Item>
       <Separator />
-      <Item onSelect={onEdit}>
-        <Icon name="pencil" /> Edit board…
-      </Item>
+      {onEdit ? (
+        <Item onSelect={onEdit}>
+          <Icon name="pencil" /> Edit board…
+        </Item>
+      ) : null}
       {roadmap ? (
         <Item onSelect={() => window.open(roadmap, "_blank", "noopener")}>
           <Icon name="globe" /> Public roadmap
@@ -129,7 +131,8 @@ export function BoardLinks({
   const [deleting, setDeleting] = useState<BoardSummary | null>(null);
   const ws = live.workspace.slug;
   const settings = `/${ws}/settings`;
-  const canDelete = live.workspace.role !== "member";
+  const canDelete = isManager(live.workspace.role);
+  const canChange = can(live.workspace.role, live.workspace.permissions, "boards");
 
   const editable = (b: BoardSummary) => {
     if (b.id === live.board.id) return live.board;
@@ -149,15 +152,17 @@ export function BoardLinks({
           roadmap: current && isPublic ? publicHref(ws, b.slug) : undefined,
           settings,
           canDelete,
-          onEdit: () => setEditing(b),
+          onEdit: canChange ? () => setEditing(b) : undefined,
           onDelete: () => setDeleting(b),
         };
+        // The count stays put and steps aside for the ⋯ button while it shows
+        const room = "group-focus-within/board:pr-8 group-hover/board:pr-8 group-has-data-[state=open]/board:pr-8";
         const inner = (
           <>
             <Icon name="board" size="sm" />
             <span className="truncate">{b.name}</span>
             {count !== undefined ? (
-              <span className="ml-auto font-mono text-[11px] text-ink-3 group-focus-within/board:opacity-0 group-hover/board:opacity-0 group-has-data-[state=open]/board:opacity-0">
+              <span className="ml-auto font-mono text-[11px] text-ink-3 tabular-nums">
                 {count}
               </span>
             ) : null}
@@ -168,11 +173,11 @@ export function BoardLinks({
             <ContextMenuTrigger asChild>
               <div className="group/board relative">
                 {current ? (
-                  <button className={cn(item(active), "pr-8")} onClick={onNavigate} aria-current="page">
+                  <button className={cn(item(active), room)} onClick={onNavigate} aria-current="page">
                     {inner}
                   </button>
                 ) : (
-                  <Link href={href} className={cn(item(false), "pr-8")} onClick={onNavigate}>
+                  <Link href={href} className={cn(item(false), room)} onClick={onNavigate}>
                     {inner}
                   </Link>
                 )}

@@ -35,6 +35,7 @@ export type PublicRoadmapData = {
     slug: string;
     sigil: DitherName;
     tone: WorkspaceSummary["tone"];
+    image?: string | null;
   };
   board: {
     id: string;

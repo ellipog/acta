@@ -1,8 +1,13 @@
 @import "tailwindcss";
 
-@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+/*
+  Dark is whatever sits under a dark theme, unless a part of the page asks for light again, the way a public
+  roadmap's preview can inside a dark app
+*/
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *:not([data-theme="dark"] [data-theme="light"], [data-theme="dark"] [data-theme="light"] *)));
 
-:root {
+:root,
+[data-theme="light"] {
   --page: #f3f0e8;
   --surface: #faf8f3;
   --raised: #fdfcf8;
@@ -76,6 +81,168 @@
   --bedrock-muted: #77746e;
 
   color-scheme: dark;
+}
+
+/*
+  Appearance, chosen in the Appearance panel and kept on the device. The root carries each choice as an
+  attribute before the page paints. A part of the page with a theme of its own, like a public roadmap's preview,
+  starts again from the plain theme. Each choice sets the same properties in light and dark, so the dark rule,
+  being more specific, always wins in dark
+*/
+:root[data-accent="amethyst"] {
+  --lapis: #6a4a9c;
+  --lapis-hover: #5a3d87;
+  --lapis-soft: #e7e0f1;
+  --lapis-ink: #4a3170;
+}
+:root[data-accent="amethyst"][data-theme="dark"] {
+  --lapis: #b39be6;
+  --lapis-hover: #c5b2ee;
+  --lapis-soft: #2c2440;
+  --lapis-ink: #d8cbf5;
+}
+:root[data-accent="rhodonite"] {
+  --lapis: #a8436e;
+  --lapis-hover: #91375e;
+  --lapis-soft: #f3dfe7;
+  --lapis-ink: #73284a;
+}
+:root[data-accent="rhodonite"][data-theme="dark"] {
+  --lapis: #e58fb3;
+  --lapis-hover: #eda7c4;
+  --lapis-soft: #3d2230;
+  --lapis-ink: #f4c3d7;
+}
+:root[data-accent="fluorite"] {
+  --lapis: #1f7586;
+  --lapis-hover: #186472;
+  --lapis-soft: #d9ecef;
+  --lapis-ink: #134e59;
+}
+:root[data-accent="fluorite"][data-theme="dark"] {
+  --lapis: #6cc0cf;
+  --lapis-hover: #8bd0dc;
+  --lapis-soft: #183338;
+  --lapis-ink: #ade0e8;
+}
+:root[data-accent="obsidian"] {
+  --lapis: #2b2f3a;
+  --lapis-hover: #1d2029;
+  --lapis-soft: #e2e1dd;
+  --lapis-ink: #1d2230;
+}
+:root[data-accent="obsidian"][data-theme="dark"] {
+  --lapis: #d6d2c8;
+  --lapis-hover: #e9e5db;
+  --lapis-soft: #2c2f36;
+  --lapis-ink: #ece8de;
+}
+/* A colour of the person's own, mixed lighter for dark so it reads on the dark page */
+:root[data-accent="custom"] {
+  --lapis: var(--accent-custom);
+  --lapis-hover: color-mix(in oklab, var(--accent-custom) 85%, black);
+  --lapis-soft: color-mix(in oklab, var(--accent-custom) 16%, var(--raised));
+  --lapis-ink: color-mix(in oklab, var(--accent-custom) 70%, var(--ink));
+}
+:root[data-accent="custom"][data-accent-light] {
+  --on-accent: #11131a;
+}
+:root[data-accent="custom"][data-theme="dark"] {
+  --lapis: color-mix(in oklab, var(--accent-custom) 65%, white);
+  --lapis-hover: color-mix(in oklab, var(--accent-custom) 50%, white);
+  --lapis-soft: color-mix(in oklab, var(--accent-custom) 22%, var(--raised));
+  --lapis-ink: color-mix(in oklab, var(--accent-custom) 40%, var(--ink));
+  --on-accent: #11131a;
+}
+
+/* Surfaces. Warm stone and basalt are the plain theme */
+:root[data-surface="neutral"] {
+  --page: #f2f2f0;
+  --surface: #f9f9f8;
+  --raised: #ffffff;
+  --sunken: #e8e8e5;
+  --line: #d6d6d2;
+  --line-strong: #b4b4af;
+  --depth-1: #eeeeec;
+  --depth-2: #e9e9e6;
+  --depth-3: #e4e4e0;
+  --depth-4: #deded9;
+}
+:root[data-surface="neutral"][data-theme="dark"] {
+  --page: #161616;
+  --surface: #1d1d1d;
+  --raised: #252525;
+  --sunken: #111111;
+  --line: #313131;
+  --line-strong: #4a4a4a;
+  --depth-1: #141414;
+  --depth-2: #131313;
+  --depth-3: #111111;
+  --depth-4: #0f0f0f;
+}
+:root[data-surface="cool"] {
+  --page: #eef1f5;
+  --surface: #f6f8fa;
+  --raised: #fcfdfe;
+  --sunken: #e3e8ee;
+  --line: #d3dae3;
+  --line-strong: #aeb8c5;
+  --depth-1: #eaeef3;
+  --depth-2: #e5eaf0;
+  --depth-3: #e0e6ed;
+  --depth-4: #d9e0e8;
+}
+:root[data-surface="cool"][data-theme="dark"] {
+  --page: #11161f;
+  --surface: #171d28;
+  --raised: #1e2531;
+  --sunken: #0d1118;
+  --line: #29313f;
+  --line-strong: #3f4a5c;
+  --depth-1: #10141c;
+  --depth-2: #0f131a;
+  --depth-3: #0d1117;
+  --depth-4: #0c0f15;
+}
+
+/* More contrast: darker secondary text and lines. One element more specific than the surfaces, so it wins */
+html:root[data-contrast="more"] {
+  --ink-2: #363b49;
+  --ink-3: #565b69;
+  --line: color-mix(in oklab, var(--ink-3) 40%, var(--page));
+  --line-strong: color-mix(in oklab, var(--ink-3) 70%, var(--page));
+}
+html:root[data-contrast="more"][data-theme="dark"] {
+  --ink-2: #d2cec5;
+  --ink-3: #a9a59e;
+  --line: color-mix(in oklab, var(--ink-3) 28%, var(--page));
+  --line-strong: color-mix(in oklab, var(--ink-3) 45%, var(--page));
+}
+
+:root[data-size="sm"] {
+  font-size: 93.75%;
+}
+:root[data-size="lg"] {
+  font-size: 106.25%;
+}
+:root[data-size="xl"] {
+  font-size: 112.5%;
+}
+
+:root[data-font="system"] {
+  --font-geist-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+:root[data-font="mono"] {
+  --font-geist-sans: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
 }
 
 @theme inline {

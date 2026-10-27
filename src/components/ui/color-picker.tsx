@@ -88,7 +88,7 @@ function paintField(canvas: HTMLCanvasElement, color: (x: number, y: number) => 
   ctx.putImageData(img, 0, 0);
 }
 
-function CustomColor({ value, onChange }: { value: ColorValue; onChange: (hex: string) => void }) {
+export function CustomColor({ value, onChange }: { value: ColorValue; onChange: (hex: string) => void }) {
   const [hsv, setHsv] = useState<Hsv>(() => (value.startsWith("#") ? rgbToHsv(...fromHex(value)) : { h: 222, s: 0.69, v: 0.55 }));
   const [draft, setDraft] = useState(() => (value.startsWith("#") ? value : toHex(hsvToRgb(hsv))));
   const fieldRef = useRef<HTMLCanvasElement>(null);

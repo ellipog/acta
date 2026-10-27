@@ -23,8 +23,10 @@
 | **Board, table and timeline** | One set of tasks, three ways to see it. Drag cards between columns, edit cells in place, and plan on a timeline. |
 | **Live** | Changes from teammates and agents appear as they happen, and you can see who else is on the board. |
 | **Fast** | Boards you've opened stay in memory. Going back to one shows it at once and fetches only what changed. |
-| **Workspaces** | Invite people as owners, admins or members. Each workspace holds as many boards as you like. |
-| **Public roadmaps** | Publish any board as a roadmap page. Visitors can vote and send ideas, and you choose which tasks show. |
+| **Workspaces** | Invite people as owners, admins, members or viewers, and fine-tune what each member may do. Each workspace has its own picture and holds as many boards as you like. |
+| **My tasks** | Everything assigned to you, from every board in the workspace, in one place. |
+| **Public roadmaps** | Publish any board as a roadmap page. Visitors can vote and send ideas, and you choose which tasks show and how the page looks: its theme, colour, header, links, announcement and the order of its sections. |
+| **Appearance** | Light, dark or your system's mode, an accent of your own, warmer or cooler surfaces, more contrast, larger text and less motion. |
 | **Agents** | An MCP server lets Claude Code, Cursor and other agents read and work on your boards with keys you control. |
 
 Built with Next.js 16 (App Router, Cache Components), React 19, Tailwind CSS 4 and Supabase (auth, Postgres,
@@ -114,6 +116,7 @@ Frankfurt, next to the Supabase project.
 | `bun run dev` | Start the dev server |
 | `bun run build` | Production build |
 | `bun run lint` | ESLint |
+| `bun run test` | Tests in `tests/`: every kind of board edit saved and read back, member permissions, table drag and drop, public page settings and appearance |
 | `bun run dither` | Re-render the one-bit images in `public/dither` from `assets/source` |
 | `bun run logo` | Re-draw the favicon and app icons from `src/lib/logo.ts` |
 

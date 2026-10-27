@@ -6,10 +6,12 @@ import { toast } from "@/components/ui/toast";
 import { fetchBoardState } from "@/lib/actions";
 import { rememberBoard } from "@/lib/board-cache";
 import { defaultPage, type BoardState, type StatusCategory } from "@/lib/board-store";
+import { revert, saveChanges } from "@/lib/board-save";
 import {
   absorb,
   apply,
   diffBoards,
+  SentLog,
   dropGone,
   emptyDiff,
   goneSince,
@@ -58,6 +60,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
   const token = useRef<string | null>(null);
   const saves = useRef(0);
   const columnTimers = useRef(new Map<StatusCategory, ReturnType<typeof setTimeout>>());
+  // What this tab saved lately, so the echo of an older save can't undo a newer one
+  const sent = useRef(new SentLog());
   const router = useRouter();
   const boardId = live?.board.id;
   const meId = live?.me.id;
@@ -147,7 +151,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
         return;
       }
       const before = base.current;
-      const change = resolve(before, ev, ctx);
+      const change = sent.current.screen(resolve(before, ev, ctx));
       if (change.kind === "none") return;
       if (change.kind === "reorder") return readColumn(change.status);
       if (change.kind === "task" && change.add && latest.current.tasks[change.id] && !before.tasks[change.id]) {
@@ -225,8 +229,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
   const flush = useCallback(async () => {
     if (!boardId || !base.current || inflight.current) return;
     const target = latest.current;
-    const d = diffBoards(base.current, target);
-    if (emptyDiff(d)) {
+    if (emptyDiff(diffBoards(base.current, target))) {
       setStatus("saved");
       return;
     }
@@ -234,55 +237,50 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     saves.current++;
     setStatus("saving");
     const supabase = await loadClient();
-    const { data, error } = await supabase.rpc("apply_board_changes", {
-      p_board: boardId,
-      p_changes: toWire(d, target),
-    });
+    const result = await saveChanges(
+      base.current,
+      target,
+      async (changes) => supabase.rpc("apply_board_changes", { p_board: boardId, p_changes: changes }),
+      prefix,
+    );
     inflight.current = false;
 
-    if (error) {
-      const network = !error.code || /fetch|network/i.test(error.message);
-      if (network) {
-        setStatus("offline");
-        const wait = Math.min(30_000, 1000 * 2 ** retry.current++);
-        timer.current = setTimeout(() => void handlers.current.flush(), wait);
-      } else {
-        setStatus("error");
-        toast({
-          icon: "x",
-          title: "A change didn’t save",
-          description: "We reloaded the board so it matches what’s saved.",
-        });
-        retry.current = 0;
-        base.current = null;
-        const fresh = await fetchBoardState(boardId).catch(() => null);
-        if (fresh) {
-          base.current = fresh;
-          snapshot.current = fresh;
-          dispatch({ type: "rebase", current: () => fresh, history: () => null });
-          setStatus("saved");
-        }
-      }
-      const pending = queue.current;
-      queue.current = [];
-      pending.forEach(receive);
-      return;
-    }
-
-    retry.current = 0;
-    let next = absorb(base.current, target, d);
-    const result = data as { moved: Record<string, number>; next: number };
-    for (const [from, to] of Object.entries(result.moved ?? {})) {
-      const a = taskKey(prefix, Number(from));
-      const b = taskKey(prefix, to);
-      next = renumber(next, a, b);
+    for (const [a, b] of result.renamed)
       dispatch({ type: "rebase", current: (s) => renumber(s, a, b), history: (s) => renumber(s, a, b) });
+    for (const part of result.saved) sent.current.record(part, result.goal);
+    base.current = result.base;
+    const saved = result.base;
+    if (result.refused.length) {
+      // Only what the database turned down comes off the board. Everything else was saved
+      dispatch({
+        type: "rebase",
+        current: (s) => result.refused.reduce((b, r) => revert(b, saved, r.diff), s),
+        history: (s) => s,
+      });
+      const [one] = result.refused;
+      toast({
+        icon: "x",
+        title: result.refused.length === 1 ? `${one.what} didn’t save` : `${result.refused.length} changes didn’t save`,
+        description:
+          result.refused.length === 1
+            ? `${one.why} It was undone, and your other changes are saved.`
+            : `${result.refused.map((r) => r.what).join(", ")}. ${one.why} Your other changes are saved.`,
+      });
     }
-    base.current = { ...next, next: Math.max(next.next, result.next ?? 0) };
     const pending = queue.current;
     queue.current = [];
     pending.forEach(receive);
-    if (latest.current !== target) timer.current = setTimeout(() => void handlers.current.flush(), 50);
+
+    if (result.waiting) {
+      // Nothing is lost: the changes stay on screen and go again after a pause
+      setStatus("offline");
+      const wait = Math.min(30_000, 1000 * 2 ** retry.current++);
+      timer.current = setTimeout(() => void handlers.current.flush(), wait);
+      return;
+    }
+    retry.current = 0;
+    if (latest.current !== target || result.refused.length)
+      timer.current = setTimeout(() => void handlers.current.flush(), 50);
     else setStatus("saved");
     if (!mounted.current) remember();
   }, [boardId, dispatch, prefix, receive, remember]);

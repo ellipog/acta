@@ -3,8 +3,12 @@
 import { refresh } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import type { Role } from "./live";
+import { avatarBucket, imageType, maxAvatarBytes } from "./avatars";
+import type { Tone } from "./board-store";
+import type { DitherName } from "./dither-assets";
+import { permissionList, sigils, workspaceTones, type Permissions, type Role } from "./live";
 import { boardPrefixFor, boardSlugFor, boardSlugProblem, slugify, slugProblem } from "./slugs";
+import { createAdminClient, serviceReady } from "./supabase/admin";
 import { createClient } from "./supabase/server";
 import { getAuth, readBoard } from "./workspace";
 
@@ -93,6 +97,62 @@ export async function updateWorkspace(_: ActionResult, form: FormData): Promise<
   return { ok: true, message: "Saved." };
 }
 
+const isUuid = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+export async function setWorkspaceLook(workspace: string, look: { sigil?: string; tone?: string }): Promise<ActionResult> {
+  const patch: { sigil?: string; tone?: string } = {};
+  if (look.sigil && sigils.includes(look.sigil as DitherName)) patch.sigil = look.sigil;
+  if (look.tone && workspaceTones.includes(look.tone as Tone)) patch.tone = look.tone;
+  if (!Object.keys(patch).length) return { ok: false, message: "That isn’t one of the choices." };
+  const { supabase } = await signedIn();
+  const { data, error } = await supabase.from("workspaces").update(patch).eq("id", workspace).select("id");
+  if (error) return { ok: false, message: "That didn’t save." };
+  if (!data?.length) return { ok: false, message: "Only owners and admins can change this." };
+  refresh();
+  return { ok: true, message: "Saved." };
+}
+
+// A picture of the workspace's own, or none to go back to its sigil. It's stored with the people's pictures,
+// under workspaces/, and only the newest is kept
+export async function setWorkspaceImage(form: FormData): Promise<ActionResult> {
+  const id = text(form, "workspace", 64);
+  if (!isUuid(id)) return { ok: false, message: "That workspace isn’t there." };
+  const { supabase } = await signedIn();
+  const { data: manager } = await supabase.rpc("is_manager", { ws: id });
+  if (!manager) return { ok: false, message: "Only owners and admins can change this." };
+  if (!serviceReady) return { ok: false, message: "Pictures aren’t available right now." };
+  const bucket = createAdminClient().storage.from(avatarBucket);
+  const folder = `workspaces/${id}`;
+  let url: string | null = null;
+  let path: string | undefined;
+
+  if (form.get("source") === "upload") {
+    const file = form.get("picture");
+    if (!(file instanceof File) || file.size === 0) return { ok: false, message: "Choose a picture first." };
+    if (file.size > maxAvatarBytes) return { ok: false, message: "That picture is too large." };
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const type = imageType(bytes);
+    if (!type) return { ok: false, message: "Use a PNG, JPG or WebP image." };
+    path = `${folder}/${Date.now()}.${type === "jpeg" ? "jpg" : type}`;
+    const { error } = await bucket.upload(path, bytes, { contentType: `image/${type}`, cacheControl: "31536000" });
+    if (error) return { ok: false, message: "That didn’t upload. Try again." };
+    url = bucket.getPublicUrl(path).data.publicUrl;
+  }
+
+  const { data, error } = await supabase.from("workspaces").update({ image_url: url }).eq("id", id).select("id");
+  if (error || !data?.length) {
+    if (path) await bucket.remove([path]);
+    if (error && noColumn(error.code))
+      return { ok: false, message: "Pictures need the latest database update. Ask whoever runs Acta to apply it." };
+    return { ok: false, message: "That didn’t save. Try again." };
+  }
+  const { data: files } = await bucket.list(folder, { limit: 100 });
+  const old = (files ?? []).map((f) => `${folder}/${f.name}`).filter((p) => p !== path);
+  if (old.length) await bucket.remove(old);
+  refresh();
+  return { ok: true, message: url ? "Picture updated." : "Picture removed." };
+}
+
 export async function deleteWorkspace(_: ActionResult, form: FormData): Promise<ActionResult> {
   const { supabase } = await signedIn();
   const id = text(form, "workspace", 64);
@@ -111,14 +171,18 @@ export async function leaveWorkspace(_: ActionResult, form: FormData): Promise<A
   redirect("/home");
 }
 
+const roles: Role[] = ["owner", "admin", "member", "viewer"];
+// Before the permissions migration there is no permissions column, and only the role can change
+const noColumn = (code?: string) => code === "42703" || code === "PGRST204";
+
+// A new role starts from that role's defaults, so permissions set for the old one don't carry over
 export async function setRole(workspace: string, userId: string, role: Role): Promise<ActionResult> {
+  if (!roles.includes(role)) return { ok: false, message: "That isn’t a role." };
   const { supabase } = await signedIn();
-  const { data, error } = await supabase
-    .from("members")
-    .update({ role })
-    .eq("workspace_id", workspace)
-    .eq("user_id", userId)
-    .select("role");
+  const save = (patch: Record<string, unknown>) =>
+    supabase.from("members").update(patch).eq("workspace_id", workspace).eq("user_id", userId).select("role");
+  let { data, error } = await save({ role, permissions: {} });
+  if (error && noColumn(error.code)) ({ data, error } = await save({ role }));
   if (error)
     return {
       ok: false,
@@ -127,6 +191,30 @@ export async function setRole(workspace: string, userId: string, role: Role): Pr
   if (!data?.length) return { ok: false, message: "You can’t change that role." };
   refresh();
   return { ok: true, message: "Role changed." };
+}
+
+export async function setPermissions(
+  workspace: string,
+  userId: string,
+  permissions: Permissions,
+): Promise<ActionResult> {
+  const known = new Set(permissionList.map((p) => p.id));
+  const clean = Object.fromEntries(
+    Object.entries(permissions).filter(([k, v]) => known.has(k as never) && typeof v === "boolean"),
+  );
+  const { supabase } = await signedIn();
+  const { data, error } = await supabase
+    .from("members")
+    .update({ permissions: clean })
+    .eq("workspace_id", workspace)
+    .eq("user_id", userId)
+    .select("user_id");
+  if (error && noColumn(error.code))
+    return { ok: false, message: "Permissions need the latest database update. Ask whoever runs Acta to apply it." };
+  if (error) return { ok: false, message: "That didn’t save." };
+  if (!data?.length) return { ok: false, message: "You can’t change what they can do." };
+  refresh();
+  return { ok: true, message: "Permissions saved." };
 }
 
 export async function removeMember(workspace: string, userId: string): Promise<ActionResult> {
