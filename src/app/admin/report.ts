@@ -28,3 +28,71 @@ export const ranges = {
 } as const;
 
 export type RangeId = keyof typeof ranges;
+
+// The owner's dashboard: people, work, agents and roadmaps across the whole app
+
+export type Part = { label: string; value: number };
+
+export type OwnerSlot = {
+  t: string;
+  signups: number;
+  users: number;
+  active: number;
+  created: number;
+  done: number;
+  byPeople: number;
+  byAgents: number;
+  byGitHub: number;
+};
+
+export type OwnerReport = {
+  bucket: "day" | "week" | "month";
+  series: OwnerSlot[];
+  users: {
+    total: number;
+    new: number;
+    newBefore: number;
+    daily: number;
+    weekly: number;
+    monthly: number;
+    active: number;
+    activeBefore: number;
+    methods: Part[];
+    joined: number;
+  };
+  cohorts: { week: string; size: number; weeks: number[] }[];
+  workspaces: {
+    total: number;
+    new: number;
+    shared: number;
+    active: number;
+    members: number;
+    boards: number;
+    tasksPerBoard: number;
+    busiest: Part[];
+  };
+  tasks: {
+    total: number;
+    open: number;
+    created: number;
+    createdBefore: number;
+    done: number;
+    doneBefore: number;
+    canceled: number;
+    daysToDone: number;
+    comments: number;
+  };
+  agents: { keys: number; newKeys: number; usedKeys: number; edits: number; allEdits: number; github: number; names: Part[] };
+  roadmaps: { published: number; votes: number; ideas: number; visitors: number };
+  appearance: { browsers: number; theme: Part[]; icons: Part[]; accent: Part[] };
+};
+
+export const ownerRanges = {
+  "7d": { label: "7 days", hours: 24 * 7, bucket: "day" },
+  "30d": { label: "30 days", hours: 24 * 30, bucket: "day" },
+  "90d": { label: "90 days", hours: 24 * 90, bucket: "week" },
+  "12mo": { label: "12 months", hours: 24 * 365, bucket: "month" },
+  all: { label: "all time", hours: null, bucket: "month" },
+} as const;
+
+export type OwnerRangeId = keyof typeof ownerRanges;

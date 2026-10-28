@@ -41,6 +41,30 @@ function landing() {
   return extra;
 }
 
+const lookSent = "acta-look-sent";
+
+// Once a day, how this browser has Acta looking, so the owner can see which themes, icons and accents people pick.
+// Public roadmaps wear their owner's look and say nothing about the visitor's
+function sendLook(pathname: string) {
+  if (pathname.startsWith("/p/") || ignored()) return;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    if (localStorage.getItem(lookSent) === today) return;
+    localStorage.setItem(lookSent, today);
+    const root = document.documentElement;
+    const look = JSON.parse(localStorage.getItem("acta-appearance") ?? "{}") as Record<string, unknown>;
+    const pick = (key: string, fallback: string) => (typeof look[key] === "string" ? (look[key] as string) : fallback);
+    track("appearance", {
+      theme: root.getAttribute("data-theme") === "dark" ? "dark" : "light",
+      system: (localStorage.getItem("theme") ?? "light") === "system",
+      icons: pick("icons", "line"),
+      accent: pick("accent", "lapis"),
+      size: pick("size", "md"),
+      font: pick("font", "geist"),
+    });
+  } catch {}
+}
+
 export function Analytics() {
   const pathname = usePathname();
 
@@ -53,6 +77,8 @@ export function Analytics() {
     const extra = seen.landed ? {} : landing();
     seen.landed = true;
     send({ kind: "pageview", path: pathname, ...extra });
+    // After the theme has settled on the page
+    setTimeout(() => sendLook(pathname), 3000);
   }, [pathname]);
 
   return null;

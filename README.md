@@ -125,7 +125,7 @@ work, and the demo board saves to the browser.
 3. Enable the OAuth providers you list in `NEXT_PUBLIC_AUTH_PROVIDERS`.
 4. Under **Authentication → Emails**, set up custom SMTP. The built-in sender only mails your own team and allows
    a couple of emails an hour, so sign-in links won’t reach anyone else.
-5. Admins, who can see `/admin` analytics, come from `public.admin_emails`. Insert your address there.
+5. Admins come from `public.admin_emails`. Insert your address there. They see `/admin`: an overview of people, retention, work, agents, roadmaps and appearance choices (leaving the admins themselves out), and the site's traffic.
 
 ### Public roadmaps
 

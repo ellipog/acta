@@ -5,16 +5,13 @@ import { useState, useSyncExternalStore } from "react";
 import { ignoreKey } from "@/components/analytics";
 import { Switch } from "@/components/ui/controls";
 import { DitherFill } from "@/components/ui/dither";
-import { Eyebrow } from "@/components/ui/display";
 import { Icon } from "@/components/ui/icons";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { MONTHS } from "@/lib/dates";
 import { cn } from "@/lib/utils";
+import { axisLabel, count, Delta, longLabel, niceTop } from "./charts";
 import { ranges, type RangeId, type Report, type Row, type Slot, type Totals } from "./report";
 
 const whole = new Intl.NumberFormat("en");
-const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
-const count = (n: number) => (n >= 10_000 ? compact.format(n) : whole.format(n));
 const percent = (n: number) => `${Math.round(n * 100)}%`;
 const duration = (seconds: number) => {
   const s = Math.round(seconds);
@@ -57,32 +54,6 @@ const country = (code: string) => {
   }
 };
 
-function parts(t: string) {
-  const [date, time] = t.split("T");
-  const [y, m, d] = date.split("-").map(Number);
-  return { y, m, d, time, month: MONTHS[m - 1], short: MONTHS[m - 1].slice(0, 3) };
-}
-
-function axisLabel(t: string, bucket: string) {
-  const p = parts(t);
-  if (bucket === "hour") return p.time;
-  if (bucket === "month") return p.m === 1 ? `${p.short} ’${String(p.y).slice(2)}` : p.short;
-  return `${p.short} ${p.d}`;
-}
-
-function longLabel(t: string, bucket: string) {
-  const p = parts(t);
-  const weekday = new Date(Date.UTC(p.y, p.m - 1, p.d)).toLocaleDateString("en-GB", { weekday: "short", timeZone: "UTC" });
-  if (bucket === "hour") return `${weekday} ${p.short} ${p.d}, ${p.time}`;
-  if (bucket === "day") return `${weekday} ${p.short} ${p.d}`;
-  if (bucket === "week") return `Week of ${p.short} ${p.d}`;
-  return `${p.month} ${p.y}`;
-}
-
-function niceTop(max: number) {
-  for (let k = 1; ; k *= 10) for (const m of [2, 4, 6, 8, 10]) if (m * k >= max) return m * k;
-}
-
 function useIgnored() {
   return useSyncExternalStore(
     (notify) => {
@@ -97,22 +68,6 @@ function useIgnored() {
       }
     },
     () => false,
-  );
-}
-
-function Delta({ now, before, upIsGood, points }: { now: number; before: number; upIsGood: boolean; points?: boolean }) {
-  if (!before && !now) return <span className="text-xs text-ink-3">No change</span>;
-  if (!before) return <span className="text-xs text-ink-3">New this period</span>;
-  const change = points ? (now - before) * 100 : ((now - before) / before) * 100;
-  const rounded = Math.round(change);
-  if (rounded === 0) return <span className="text-xs text-ink-3">Same as before</span>;
-  const good = rounded > 0 === upIsGood;
-  return (
-    <span className={cn("flex items-center gap-1 text-xs", good ? "text-malachite" : "text-hematite")}>
-      <Icon name={rounded > 0 ? "arrow-up" : "arrow-down"} size="sm" />
-      {Math.abs(rounded)}
-      {points ? " pts" : "%"}
-    </span>
   );
 }
 
@@ -305,20 +260,15 @@ export function AnalyticsView({ report, range, dev }: { report: Report; range: R
   const href = (next: { range?: RangeId; dev?: boolean }) => {
     const r = next.range ?? range;
     const d = next.dev ?? dev;
-    const q = new URLSearchParams();
+    const q = new URLSearchParams({ tab: "traffic" });
     if (r !== "7d") q.set("range", r);
     if (d) q.set("dev", "1");
-    const s = q.toString();
-    return s ? `/admin?${s}` : "/admin";
+    return `/admin?${q}`;
   };
 
   return (
     <div className="flex flex-col gap-6">
-      <header className="flex flex-wrap items-end gap-x-6 gap-y-4">
-        <div className="mr-auto">
-          <Eyebrow>Admin</Eyebrow>
-          <h1 className="mt-2 font-display text-4xl">Analytics</h1>
-        </div>
+      <header className="-mt-2 flex justify-end">
         <p className="flex items-center gap-2 text-sm text-ink-2" aria-live="polite">
           <span className={cn("size-2", report.live ? "animate-pulse bg-malachite" : "bg-line-strong")} />
           {report.live === 1 ? "1 person here now" : `${report.live} people here now`}
