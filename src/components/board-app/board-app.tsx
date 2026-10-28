@@ -7,14 +7,17 @@ import { Dialog as D } from "radix-ui";
 import { Icon, type IconName } from "@/components/ui/icons";
 import {
   closed,
+  defaultStatusTitle,
   demoMeta,
   me,
   nextTaskId,
   people,
   seedBoard,
   setBoardMeta,
+  statusTitle,
   timeAgo,
   type BoardState,
+  type StatusCategory,
   type Person,
   type Task,
 } from "@/lib/board-store";
@@ -995,9 +998,16 @@ function Sidebar({
   // Archived tasks are put away, so they count for neither the board nor its progress
   const current = Object.values(state.tasks).filter((t) => !t.archived);
   const total = current.length;
-  const doneCount = current.filter((t) => t.status === "done").length;
-  // Canceled work isn't left to do, so it stays out of the progress
-  const planned = total - current.filter((t) => t.status === "canceled").length;
+  // Canceled work isn't left to do, so it stays out of the progress. With done work hidden, the progress is how
+  // much of what's left is underway
+  const shown: StatusCategory = prefs.filters.hideDone ? "in_progress" : "done";
+  const count = current.filter((t) => t.status === shown).length;
+  const planned = prefs.filters.hideDone
+    ? current.filter((t) => !closed(t.status)).length
+    : total - current.filter((t) => t.status === "canceled").length;
+  // A board's own name for the status is kept as written. The usual ones read as part of the sentence
+  const word =
+    statusTitle[shown] === defaultStatusTitle[shown] ? statusTitle[shown].toLowerCase() : statusTitle[shown];
   const mine = current.filter((t) => t.assignee === me.id && !closed(t.status)).length;
   // On a real workspace My tasks is its own page. The demo has one board, so there it filters
   const onlyMine = !live && prefs.filters.assignee?.length === 1 && prefs.filters.assignee[0] === me.id;
@@ -1076,7 +1086,7 @@ function Sidebar({
 
       <div className="shrink-0 border-t border-line p-3">
         <p className="font-mono text-[11px] text-ink-3">
-          {doneCount} of {planned} done
+          {count} of {planned} {word}
         </p>
         <div className="mt-1.5 flex h-1.5 gap-px">
           {Array.from({ length: 24 }, (_, i) => (
@@ -1084,7 +1094,11 @@ function Sidebar({
               key={i}
               className={cn(
                 "flex-1",
-                i < Math.round((doneCount / Math.max(1, planned)) * 24) ? "bg-malachite" : "bg-line",
+                i < Math.round((count / Math.max(1, planned)) * 24)
+                  ? shown === "done"
+                    ? "bg-malachite"
+                    : "bg-pyrite"
+                  : "bg-line",
               )}
             />
           ))}
