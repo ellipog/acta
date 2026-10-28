@@ -3,7 +3,7 @@
 import { DropdownMenu as M } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { menuContent, menuItem } from "./menu-styles";
-import { PixelArrow, PixelCheck } from "./pixel";
+import { PixelArrow, PixelCheck, PixelTick } from "./pixel";
 import { Surface } from "./surface";
 
 export function DropdownMenu(props: React.ComponentProps<typeof M.Root>) {
@@ -62,8 +62,8 @@ export function DropdownMenuCheckboxItem({
       {...props}
     >
       <span className="grid size-4 shrink-0 place-items-center border border-line-strong bg-raised text-on-accent group-data-[state=checked]/item:border-lapis group-data-[state=checked]/item:bg-lapis">
-        <M.ItemIndicator>
-          <PixelCheck />
+        <M.ItemIndicator className="grid place-items-center">
+          <PixelTick />
         </M.ItemIndicator>
       </span>
       {children}

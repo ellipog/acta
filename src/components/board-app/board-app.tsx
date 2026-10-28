@@ -18,6 +18,7 @@ import {
   type Person,
   type Task,
 } from "@/lib/board-store";
+import { onPref, readPref, syncPrefs, writePref } from "@/lib/account-prefs";
 import { rememberBoard, setCount, setMine } from "@/lib/board-cache";
 import { settleEdits, useBoardEdits, withEdits } from "@/lib/board-edits";
 import { can, metaFor, type LiveBoard, type Permission } from "@/lib/live";
@@ -53,7 +54,8 @@ import { cn } from "@/lib/utils";
 import type { DitherName } from "@/lib/dither-assets";
 import { demoReducer, initDemo, type DemoAction } from "./demo-state";
 import {
-  columnMeta,
+  defaultColumns,
+  metaOf,
   defaultPrefs,
   fieldIcon,
   fieldLabel,
@@ -154,7 +156,7 @@ export function BoardApp({
   const [demo, rawDispatch] = useReducer(demoReducer, undefined, () =>
     initDemo(live ? live.state : seedBoard(), full ? {} : { view }),
   );
-  const { board: state, prefs, restored } = demo;
+  const { board: state, prefs, restored, synced } = demo;
   const { status, here, knownAt } = useBoardSync(live, state, rawDispatch);
   useWorkspace(full ? live : undefined);
   const liveId = live?.board.id;
@@ -168,7 +170,8 @@ export function BoardApp({
   useEffect(() => {
     if (liveId) setMine({ [liveId]: mineCount });
   }, [liveId, mineCount]);
-  const prefsKey = live ? `acta-prefs-${live.board.id}` : PREFS_KEY;
+  // A board's prefs follow the person signed in to their other devices. The demo's stay in this browser
+  const prefsKey = live ? `prefs-${live.board.id}` : PREFS_KEY;
   const setPrefs = useCallback((patch: Partial<Prefs>) => rawDispatch({ type: "prefs", patch }), []);
 
   // What this person may change here. The demo is anyone's to change
@@ -251,11 +254,32 @@ export function BoardApp({
     try {
       const b = isLive ? null : localStorage.getItem(BOARD_KEY);
       if (b) board = JSON.parse(b);
-      const p = localStorage.getItem(prefsKey);
-      if (p) saved = JSON.parse(p);
+      if (isLive) saved = readPref<Partial<Prefs>>(prefsKey);
+      else {
+        const p = localStorage.getItem(prefsKey);
+        if (p) saved = JSON.parse(p);
+      }
     } catch {}
     rawDispatch({ type: "restore", board, prefs: saved });
   }, [full, isLive, prefsKey]);
+
+  // Settings changed on another device arrive in the background. Filters someone is trying out here stay put
+  const prefsNow = useRef(prefs);
+  useLayoutEffect(() => {
+    prefsNow.current = prefs;
+  });
+  const meId = live?.me.id;
+  useEffect(() => {
+    if (!full || !meId) return;
+    syncPrefs(meId);
+    return onPref(prefsKey, () => {
+      const saved = readPref<Partial<Prefs>>(prefsKey);
+      if (!saved) return;
+      const { filters, keptFilters } = prefsNow.current;
+      rawDispatch({ type: "restore", board: null, prefs: saved });
+      if (!sameFilters(filters, keptFilters)) rawDispatch({ type: "prefs", patch: { filters } });
+    });
+  }, [full, meId, prefsKey]);
 
   useEffect(() => {
     if (!full || !restored || live) return;
@@ -265,11 +289,15 @@ export function BoardApp({
   }, [full, restored, state, live]);
 
   useEffect(() => {
-    if (!full || !restored) return;
+    // Prefs just read back are already saved, and saving them again would send one device's defaults over the
+    // settings the account already has
+    if (!full || !restored || prefs === synced) return;
+    const value = { ...prefs, filters: {} };
+    if (isLive) return writePref(prefsKey, value);
     try {
-      localStorage.setItem(prefsKey, JSON.stringify({ ...prefs, filters: {} }));
+      localStorage.setItem(prefsKey, JSON.stringify(value));
     } catch {}
-  }, [full, restored, prefs, prefsKey]);
+  }, [full, restored, prefs, synced, prefsKey, isLive]);
 
   // A link to one of its tasks, like those on My tasks, opens it. The board may have been out of sight and is
   // only being shown again, so this runs each time it shows. The address loses the task once it's open, so
@@ -379,10 +407,12 @@ export function BoardApp({
       const kept = tidyFilters(next);
       setPrefs({ keptFilters: kept });
       // The board may already be out of sight, where its own saving waits until it's shown again
-      try {
-        const stored = JSON.parse(localStorage.getItem(prefsKey) ?? "{}");
-        localStorage.setItem(prefsKey, JSON.stringify({ ...stored, keptFilters: kept }));
-      } catch {}
+      if (isLive) writePref(prefsKey, { ...readPref<Partial<Prefs>>(prefsKey), keptFilters: kept });
+      else
+        try {
+          const stored = JSON.parse(localStorage.getItem(prefsKey) ?? "{}");
+          localStorage.setItem(prefsKey, JSON.stringify({ ...stored, keptFilters: kept }));
+        } catch {}
       if (!quiet)
         toast({
           icon: hasFilters(kept) ? "filter" : "x",
@@ -391,7 +421,7 @@ export function BoardApp({
           duration: 2400,
         });
     },
-    [setPrefs, prefsKey, boardName],
+    [setPrefs, prefsKey, boardName, isLive],
   );
 
   // Leaving with unsaved filters asks once whether to keep them
@@ -651,7 +681,7 @@ export function BoardApp({
                       prefs={prefs}
                       setPrefs={setPrefs}
                       trigger={
-                        <button className={tool(prefs.columns.some((c) => c.hidden && c.id !== "updated"))}>
+                        <button className={tool(prefs.columns.some((c) => c.hidden && defaultColumns.some((d) => d.id === c.id && !d.hidden)))}>
                           <Icon name="columns" size="sm" />
                           <span className="hidden @2xl:inline">Fields</span>
                         </button>
@@ -713,7 +743,7 @@ export function BoardApp({
                 <span className="flex h-6 shrink-0 items-center border border-line-strong bg-raised text-xs">
                   <Icon name="sort" size="sm" className="ml-2 text-ink-3" />
                   <span className="ml-1.5 text-ink-3">Sorted by</span>
-                  <span className="ml-1.5">{prefs.sort.key === "id" ? "ID" : columnMeta[prefs.sort.key].label}</span>
+                  <span className="ml-1.5">{prefs.sort.key === "id" ? "ID" : metaOf(prefs.sort.key).label}</span>
                   <Icon name={prefs.sort.dir === 1 ? "arrow-up" : "arrow-down"} size="sm" className="ml-1 text-lapis" />
                   <button
                     aria-label="Clear sort"

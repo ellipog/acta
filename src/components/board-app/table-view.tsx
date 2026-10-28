@@ -27,6 +27,7 @@ import { useNow } from "@/lib/hooks";
 import {
   archiveTasks,
   closed,
+  customText,
   formatDue,
   labels,
   labelTone,
@@ -36,7 +37,11 @@ import {
   statusTitle,
   timeAgo,
   updatedAt,
+  updatedBy,
+  withCustom,
   type BoardAction,
+  type CustomField,
+  type CustomValue,
   type BoardState,
   type Person,
   type StatusCategory,
@@ -44,19 +49,22 @@ import {
 } from "@/lib/board-store";
 import { cn } from "@/lib/utils";
 import {
-  columnMeta,
-  compare,
+  compareBy,
   fieldLabel,
+  fieldOf,
   fieldOptions,
+  metaOf,
   noteFor,
   patchFor,
   valueOf,
+  withFieldColumns,
   type ColumnId,
   type ColumnPref,
   type GroupField,
   type Prefs,
   type SortKey,
 } from "./fields";
+import { CustomFieldInput } from "./custom-fields";
 import { FieldsMenu } from "./fields-menu";
 import { planDrop, planStep, type DropAt } from "./table-drop";
 import { TaskMenu } from "./task-menu";
@@ -126,7 +134,7 @@ export function TableView({
 
   const rows = useMemo(() => {
     const all = statuses.flatMap((s) => state.columns[s.id].map((id) => state.tasks[id])).filter((t) => t && visible(t));
-    return sort ? [...all].sort((a, b) => compare[sort.key](a, b) * sort.dir) : all;
+    return sort ? [...all].sort((a, b) => compareBy(sort.key)(a, b) * sort.dir) : all;
   }, [state, visible, sort]);
 
   const groups = useMemo<Group[]>(() => {
@@ -157,9 +165,10 @@ export function TableView({
   const navRows = groups.flatMap((g) => (isCollapsed(g) ? [] : g.rows.map((r) => r.id)));
   const rowIndex = new Map(navRows.map((id, i) => [id, i]));
 
+  const columns = withFieldColumns(prefs.columns);
   const cols = [
-    ...prefs.columns.filter((c) => c.id === "title"),
-    ...prefs.columns.filter((c) => c.id !== "title" && !c.hidden),
+    ...columns.filter((c) => c.id === "title"),
+    ...columns.filter((c) => c.id !== "title" && !c.hidden),
   ];
   const colIds = cols.map((c) => c.id);
   const widthOf = (c: ColumnPref) => (resize?.id === c.id ? resize.width : c.width);
@@ -209,6 +218,15 @@ export function TableView({
   };
   const setDue = (ids: string[], due: string | undefined) => setDate("due", ids, due);
 
+  const setCustom = (ids: string[], f: CustomField, value: CustomValue | undefined) => {
+    const shown = Array.isArray(value) ? value.join(", ") : f.type === "date" && value ? formatDue(String(value)) : value;
+    const note = value === undefined ? `cleared ${f.name}` : `set ${f.name} to ${shown}`;
+    for (const id of ids) {
+      const t = state.tasks[id];
+      if (t) dispatch({ type: "update", id, patch: { custom: withCustom(t, f.id, value) }, note });
+    }
+  };
+
   const rename = (t: Task, title: string) => {
     const next = title.trim();
     if (next && next !== t.title) dispatch({ type: "update", id: t.id, patch: { title: next }, note: "renamed the task" });
@@ -229,9 +247,16 @@ export function TableView({
         return t.subtasks.length ? `${t.subtasks.filter((s) => s.done).length}/${t.subtasks.length}` : "";
       case "updated":
         return now ? timeAgo(updatedAt(t), now) : "";
+      case "updatedBy": {
+        const by = updatedBy(t);
+        return by ? (by.via ? `${by.who} via ${by.via}` : by.who) : "";
+      }
       default: {
-        const v = valueOf(t, col)[0];
-        return v === "none" ? "" : (fieldOptions[col].find((o) => o.value === v)?.label ?? "");
+        const f = fieldOf(col);
+        if (f) return customText(t, f);
+        if (col.startsWith("f:")) return "";
+        const v = valueOf(t, col as GroupField)[0];
+        return v === "none" ? "" : (fieldOptions[col as GroupField].find((o) => o.value === v)?.label ?? "");
       }
     }
   };
@@ -240,7 +265,7 @@ export function TableView({
     const ids = selSet.has(row) ? sel : [row];
     const clean = text.trim();
     const fail = () =>
-      toast({ icon: "x", title: `Can’t paste into ${columnMeta[col].label}`, description: `“${clean.slice(0, 40)}” isn’t one of its values.` });
+      toast({ icon: "x", title: `Can’t paste into ${metaOf(col).label}`, description: `“${clean.slice(0, 40)}” isn’t one of its values.` });
     if (col === "title") return rename(state.tasks[row], clean);
     if (col === "due" || col === "start") {
       if (!clean) return setDate(col, ids, undefined);
@@ -252,6 +277,17 @@ export function TableView({
       if (wanted.length && !next.length) return fail();
       for (const id of ids) setLabels(state.tasks[id], next);
       return;
+    }
+    const f = fieldOf(col);
+    if (f) {
+      if (!clean) return setCustom(ids, f, undefined);
+      if (f.type === "number") return Number.isFinite(Number(clean)) ? setCustom(ids, f, Number(clean)) : fail();
+      if (f.type === "date") return /^\d{4}-\d{2}-\d{2}$/.test(clean) ? setCustom(ids, f, clean) : fail();
+      if (f.type === "text") return setCustom(ids, f, clean.slice(0, 1000));
+      const pick = (v: string) => f.options?.find((o) => o.toLowerCase() === v.trim().toLowerCase());
+      if (f.type === "select") return pick(clean) ? setCustom(ids, f, pick(clean)) : fail();
+      const next = clean.split(",").map(pick).filter((o): o is string => Boolean(o));
+      return next.length ? setCustom(ids, f, next) : fail();
     }
     if (!isSelectField(col)) return;
     const option = clean
@@ -266,6 +302,10 @@ export function TableView({
     if (col === "due" || col === "start") setDate(col, ids.filter((id) => state.tasks[id][col]), undefined);
     else if (col === "labels") ids.forEach((id) => state.tasks[id].labels.length && setLabels(state.tasks[id], []));
     else if (isSelectField(col) && col !== "status") setField(ids, col, "none");
+    else {
+      const f = fieldOf(col);
+      if (f) setCustom(ids.filter((id) => state.tasks[id] && customText(state.tasks[id], f)), f, undefined);
+    }
   };
 
   const toggleRow = (id: string, extend: boolean) => {
@@ -353,7 +393,8 @@ export function TableView({
       case "Enter":
       case "F2":
         if (col === "title") setEditing(row);
-        else if (col === "subtasks" || col === "updated") onOpen(row);
+        else if (col === "subtasks" || col === "updated" || col === "updatedBy") onOpen(row);
+        else if (fieldOf(col)?.type === "text" || fieldOf(col)?.type === "number") onOpen(row);
         else handled = false;
         break;
       case "Escape":
@@ -394,7 +435,7 @@ export function TableView({
     e.stopPropagation();
     const el = e.currentTarget;
     const startX = e.clientX;
-    const min = columnMeta[c.id].min;
+    const min = metaOf(c.id).min;
     let width = c.width;
     el.setPointerCapture(e.pointerId);
     const move = (ev: PointerEvent) => {
@@ -406,7 +447,7 @@ export function TableView({
       el.removeEventListener("pointerup", up);
       el.removeEventListener("pointercancel", up);
       setResize(null);
-      setPrefs({ columns: prefs.columns.map((x) => (x.id === c.id ? { ...x, width } : x)) });
+      setPrefs({ columns: columns.map((x) => (x.id === c.id ? { ...x, width } : x)) });
     };
     el.addEventListener("pointermove", move);
     el.addEventListener("pointerup", up);
@@ -535,7 +576,7 @@ export function TableView({
 
   const renderCell = (t: Task, col: ColumnId) => {
     const tab = tabFor(t.id, col);
-    const label = `${columnMeta[col].label} of ${t.id}`;
+    const label = `${metaOf(col).label} of ${t.id}`;
     switch (col) {
       case "status":
       case "assignee":
@@ -613,13 +654,54 @@ export function TableView({
           </span>
         );
       }
+      case "updatedBy": {
+        const by = updatedBy(t);
+        const last = t.activity.at(-1);
+        return (
+          <span onClick={() => onOpen(t.id)} className="flex h-full min-w-0 cursor-pointer items-center gap-2 px-3">
+            {by && last ? (
+              <Tooltip content={`${by.who}${by.via ? ` via ${by.via}` : ""} ${last.text}`}>
+                <span className="flex min-w-0 items-center gap-2">
+                  <Avatar name={by.who} src={by.person?.avatar} tone={by.person?.tone} size="xs" />
+                  <span className="truncate text-sm">{by.who}</span>
+                  {by.via ? <span className="truncate text-[11px] text-ink-3">via {by.via}</span> : null}
+                </span>
+              </Tooltip>
+            ) : null}
+          </span>
+        );
+      }
       case "title":
         return null;
+      default: {
+        const f = fieldOf(col);
+        if (!f) return null;
+        if (f.type === "text" || f.type === "number")
+          return (
+            <span
+              onClick={() => onOpen(t.id)}
+              className={cn(
+                "flex h-full cursor-pointer items-center px-3 text-sm",
+                f.type === "number" && "justify-end font-mono text-[12px] tabular-nums",
+              )}
+            >
+              <span className="truncate">{customText(t, f)}</span>
+            </span>
+          );
+        return (
+          <CustomFieldInput
+            task={t}
+            field={f}
+            cell={{ tabIndex: tab, label }}
+            onChange={(custom, note) => dispatch({ type: "update", id: t.id, patch: { custom }, note })}
+          />
+        );
+      }
     }
   };
 
   const headerCell = (c: ColumnPref, i: number) => {
-    const meta = columnMeta[c.id];
+    const meta = metaOf(c.id);
     const sortedHere = sort && (sort.key === c.id || (c.id === "title" && sort.key === "id")) ? sort : null;
     const sortOptions: [SortKey, string, string][] =
       c.id === "title"
@@ -629,7 +711,9 @@ export function TableView({
           ]
         : c.id === "updated"
           ? [["updated", "Recent first", "Oldest first"]]
-          : [[c.id, "Ascending", "Descending"]];
+          : c.id === "updatedBy"
+            ? [["updatedBy", "A to Z", "Z to A"]]
+            : [[c.id, "Ascending", "Descending"]];
     return (
       <th
         key={c.id}
@@ -686,7 +770,7 @@ export function TableView({
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
-                    onSelect={() => setPrefs({ columns: prefs.columns.map((x) => (x.id === c.id ? { ...x, hidden: true } : x)) })}
+                    onSelect={() => setPrefs({ columns: columns.map((x) => (x.id === c.id ? { ...x, hidden: true } : x)) })}
                   >
                     <Icon name="eye-off" /> Hide field
                   </DropdownMenuItem>
@@ -698,7 +782,7 @@ export function TableView({
             aria-hidden
             onPointerDown={(e) => startResize(e, c)}
             onDoubleClick={() =>
-              setPrefs({ columns: prefs.columns.map((x) => (x.id === c.id ? { ...x, width: columnMeta[c.id].width } : x)) })
+              setPrefs({ columns: columns.map((x) => (x.id === c.id ? { ...x, width: metaOf(c.id).width } : x)) })
             }
             className="col-resize group/resize absolute inset-y-0 right-0 z-10 flex w-2 justify-end"
           >
@@ -913,7 +997,11 @@ export function TableView({
                                     key={c.id}
                                     data-row={t.id}
                                     data-col={c.id}
-                                    tabIndex={c.id === "subtasks" || c.id === "updated" ? tabFor(t.id, c.id) : undefined}
+                                    tabIndex={
+                                      c.id === "subtasks" || c.id === "updated" || c.id === "updatedBy"
+                                        ? tabFor(t.id, c.id)
+                                        : undefined
+                                    }
                                     onFocus={() =>
                                       (active?.row !== t.id || active.col !== c.id) && setActive({ row: t.id, col: c.id })
                                     }

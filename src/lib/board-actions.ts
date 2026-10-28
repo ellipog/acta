@@ -2,7 +2,7 @@ import { toast } from "@/components/ui/toast";
 import { boardPath, forgetBoard, moveBoard, rememberBoard } from "./board-cache";
 import { doneAdding, dropEdit, editBoard, markSaved, startAdding } from "./board-edits";
 import { boardState, type NestedBoard } from "./board-load";
-import type { Label, Project } from "./board-store";
+import { fieldTypes, newId, type CustomField, type Label, type Project, type StatusNames } from "./board-store";
 import type { LiveBoard } from "./live";
 import { boardPrefixFor, boardSlugFor, boardSlugProblem } from "./slugs";
 import { loadClient } from "./supabase/browser";
@@ -12,7 +12,31 @@ import { loadClient } from "./supabase/browser";
 
 type Router = { push: (href: string) => void; replace: (href: string) => void; refresh: () => void };
 
-export type BoardFields = { name?: string; slug?: string; labels?: Label[]; projects?: Project[] };
+export type BoardFields = {
+  name?: string;
+  slug?: string;
+  labels?: Label[];
+  projects?: Project[];
+  fields?: CustomField[];
+  statusNames?: StatusNames;
+};
+
+// Keeps a board's fields to ones the database and the board can use: named once each, of a known type, with the
+// options a select needs
+export function tidyFields(list: CustomField[]): CustomField[] {
+  const seen = new Set<string>();
+  const out: CustomField[] = [];
+  for (const f of list) {
+    const name = f.name.trim().slice(0, 40);
+    if (!name || seen.has(name.toLowerCase()) || !fieldTypes.some((t) => t.id === f.type)) continue;
+    seen.add(name.toLowerCase());
+    const field: CustomField = { id: f.id || newId().slice(0, 8), name, type: f.type };
+    if (f.type === "select" || f.type === "multi")
+      field.options = [...new Set((f.options ?? []).map((o) => o.trim().slice(0, 40)).filter(Boolean))].slice(0, 50);
+    out.push(field);
+  }
+  return out.slice(0, 30);
+}
 
 // Trims names, drops empty and repeated ones and keeps to the limit the database allows
 function tidy<T extends { tone: string }>(list: T[], key: "id" | "name") {
@@ -37,7 +61,14 @@ export async function saveBoard(
   change: BoardFields,
   ctx: { workspace: string; current: boolean; router: Router; keep?: () => void },
 ) {
-  const patch: { name?: string; slug?: string; labels?: Label[]; projects?: Project[] } = {};
+  const patch: {
+    name?: string;
+    slug?: string;
+    labels?: Label[];
+    projects?: Project[];
+    fields?: CustomField[];
+    status_names?: StatusNames;
+  } = {};
   if (change.name !== undefined) {
     const name = change.name.trim().slice(0, 60);
     if (!name) return failed("A board needs a name", "Nothing was changed.");
@@ -51,10 +82,23 @@ export async function saveBoard(
   }
   if (change.labels) patch.labels = tidy(change.labels, "id");
   if (change.projects) patch.projects = tidy(change.projects, "name");
+  if (change.fields) patch.fields = tidyFields(change.fields);
+  if (change.statusNames)
+    patch.status_names = Object.fromEntries(
+      Object.entries(change.statusNames)
+        .map(([k, v]) => [k, (v ?? "").trim().slice(0, 30)])
+        .filter(([, v]) => v),
+    );
   if (!Object.keys(patch).length) return;
 
   // A new address only shows once it works, since links to it lead nowhere until then
-  const v = editBoard(board.id, { name: patch.name, labels: patch.labels, projects: patch.projects });
+  const v = editBoard(board.id, {
+    name: patch.name,
+    labels: patch.labels,
+    projects: patch.projects,
+    fields: patch.fields,
+    statusNames: patch.status_names,
+  });
   const supabase = await loadClient();
   const { error } = await supabase.from("boards").update(patch).eq("id", board.id);
   if (error) {
@@ -103,7 +147,7 @@ export async function addBoard(live: LiveBoard, name: string, router: Router) {
     const { data, error } = await supabase
       .from("boards")
       .insert({ workspace_id: live.workspace.id, slug: boardSlugFor(clean, taken), name: clean, prefix: boardPrefixFor(clean) })
-      .select("id, slug, name, prefix, next_number, labels, projects, roadmap_public, page")
+      .select("*")
       .single();
     made = data;
     // Someone else took the address in the meantime
@@ -130,6 +174,8 @@ export async function addBoard(live: LiveBoard, name: string, router: Router) {
         prefix: made.prefix,
         labels: made.labels ?? [],
         projects: made.projects ?? [],
+        fields: made.fields ?? [],
+        statusNames: made.status_names ?? {},
       },
       state,
       at,

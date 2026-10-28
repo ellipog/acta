@@ -24,10 +24,12 @@
 | **Live** | Changes from teammates and agents appear as they happen, and you can see who else is on the board. |
 | **Fast** | Boards you've opened stay in memory. Going back to one shows it at once and fetches only what changed. |
 | **Workspaces** | Invite people as owners, admins, members or viewers, and fine-tune what each member may do. Each workspace has its own picture and holds as many boards as you like. |
+| **Your own fields** | Give a board fields of its own (text, numbers, dates, single and multi selects), fill them in on each task, show them as table columns, and call its statuses what your team calls them. |
+| **Settings that follow you** | Put your boards in your own order, and each board keeps your view, columns, sorting and saved filters on every device you sign in on, without waiting on the network. |
 | **My tasks** | Everything assigned to you, from every board in the workspace, in one place. |
 | **Public roadmaps** | Publish any board as a roadmap page. Visitors can vote and send ideas, and you choose which tasks show and how the page looks: its theme, colour, header, links, announcement and the order of its sections. |
-| **Appearance** | Light, dark or your system's mode, an accent of your own, warmer or cooler surfaces, more contrast, larger text and less motion. |
-| **Agents** | An MCP server lets Claude Code, Cursor and other agents read and work on your boards with keys you control. |
+| **Appearance** | Light, dark or your system's mode, an accent of your own, warmer or cooler surfaces, more contrast, larger text, pixel or line icons and less motion. |
+| **Agents and API** | An MCP server lets Claude Code, Cursor and other agents read and work on your boards with keys you control, and an HTTP API lets scripts and other tools do the same. |
 
 Built with Next.js 16 (App Router, Cache Components), React 19, Tailwind CSS 4 and Supabase (auth, Postgres,
 realtime and storage).
@@ -51,7 +53,7 @@ Acta board: workspace/board
 | --- | --- |
 | **Read** | List boards, tasks, suggestions and activity, and search across every board it can reach |
 | **Write** | Also create, change, sort, comment on, delete and restore tasks, one at a time or many at once |
-| **Manage** | Also create boards, add, rename and recolour labels and projects, run the public roadmap and triage ideas |
+| **Manage** | Also create boards, add, rename and recolour labels, projects and fields, rename statuses, run the public roadmap and triage ideas |
 
 A key acts as the person who made it, and only in the workspaces they chose. The route checks the key, then
 `agent_apply` and `agent_board` check it again in the database before running the app's own write path, so a key
@@ -60,6 +62,29 @@ never gets further than its owner. Everything an agent does is marked with the k
 
 Agents bringing work over from another tracker can keep its history: when each task was created and shipped,
 and who wrote each comment and when. Work closed as not planned goes to **Canceled**.
+
+## HTTP API
+
+Anything that can send an HTTP request can use the same keys: scripts, forms, CI jobs, Zapier or n8n. The API serves
+the MCP server's tools as plain JSON at `/api/v1/<tool>`, goes through the same checks, and a key can do exactly as
+much as it can over MCP.
+
+```bash
+# What this key can do, with each tool's arguments as JSON Schema
+curl https://acta.aaenz.no/api/v1 -H "Authorization: Bearer <key>"
+
+# Read: GET with the arguments in the query string (lists repeat or use commas)
+curl "https://acta.aaenz.no/api/v1/list_tasks?board=aaen-studios/acta&status=todo,review" \
+  -H "Authorization: Bearer <key>"
+
+# Write: POST the arguments as JSON
+curl https://acta.aaenz.no/api/v1/create_tasks -H "Authorization: Bearer <key>" -H "Content-Type: application/json" \
+  -d '{"board": "aaen-studios/acta", "tasks": [{"title": "Add CSV export", "labels": ["Feature"]}]}'
+```
+
+Answers are the tool's result as JSON. A mistake the caller can fix comes back as `400` with an `error` to read, a
+missing or revoked key as `401`, and a tool the key's access doesn't cover as `403`. CORS is open, since every call
+needs a key.
 
 ## Running it
 
@@ -100,6 +125,11 @@ Each board can publish a roadmap page at `/p/<workspace>/<board>`. Point a secon
 `NEXT_PUBLIC_PUBLIC_ORIGIN` to it, and `src/proxy.ts` serves `<that domain>/<workspace>/<board>` from there.
 A board's **new tasks are public** setting puts new tasks on its roadmap, for people and agents alike.
 
+A page can carry its owner's own code. Its CSS is nested under `.acta-page`, so it only styles the page, and its
+header and footer HTML show in sandboxed frames with no origin of their own, so their scripts can't reach the
+visitor's session. To build the whole page yourself, `GET /api/public/<workspace>/<board>` returns what the
+published page shows as JSON, open to any origin.
+
 ## Deploying
 
 Acta runs on Vercel at `acta.aaenz.no` (`siteHost` in `src/lib/slugs.ts`). `vercel.json` keeps its functions in
@@ -126,7 +156,7 @@ Frankfurt, next to the Supabase project.
 src/app            routes: landing, /demo, /login, /new, /[workspace]/[board], /p (public roadmaps), /library (unlisted UI kit)
 src/components     board app (board, table, timeline, roadmap views), landing sections, UI kit
 src/lib            board state and reducer, loading, caching and live sync with Supabase, server actions, slugs
-src/lib/agents     agent keys and the MCP server behind /api/mcp
+src/lib/agents     agent keys, the MCP server behind /api/mcp and the HTTP API behind /api/v1
 supabase           SQL migrations
 assets             source images and dither recipes
 ```

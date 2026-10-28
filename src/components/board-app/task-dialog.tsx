@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Dialog as D } from "radix-ui";
 import { Icon } from "@/components/ui/icons";
+import { PixelTick } from "@/components/ui/pixel";
 import { StatusMarker } from "@/components/board";
 import { Avatar } from "@/components/ui/display";
 import { Badge, Kbd } from "@/components/ui/badge";
@@ -18,6 +19,7 @@ import { toast } from "@/components/ui/toast";
 import {
   archiveTasks,
   closed,
+  customFields,
   formatDue,
   labelTone,
   me,
@@ -28,6 +30,7 @@ import {
   type Task,
 } from "@/lib/board-store";
 import { cn } from "@/lib/utils";
+import { CustomFieldInput } from "./custom-fields";
 import { fieldOptions, noteFor, patchFor, valueOf, type GroupField } from "./fields";
 
 export function TaskDialog({
@@ -272,7 +275,7 @@ function TaskBody({
                           s.done ? "border-lapis bg-lapis text-on-accent" : "border-line-strong bg-raised",
                         )}
                       >
-                        {s.done ? <Icon name="check" size="sm" /> : null}
+                        {s.done ? <PixelTick /> : null}
                       </span>
                       <span className={cn(s.done && "text-ink-3 line-through")}>{s.title}</span>
                     </button>
@@ -431,6 +434,11 @@ function TaskBody({
                 }
               />
             </Prop>
+            {customFields.map((f) => (
+              <Prop key={f.id} label={f.name}>
+                <CustomFieldInput task={task} field={f} onChange={(custom, note) => update({ custom }, note)} />
+              </Prop>
+            ))}
             <Prop label="Public roadmap">
               <label className="flex items-center justify-between gap-3 border border-line bg-raised px-3 py-2">
                 <span className="min-w-0">

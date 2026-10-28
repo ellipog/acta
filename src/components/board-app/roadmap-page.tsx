@@ -20,6 +20,7 @@ import { MONTHS } from "@/lib/dates";
 import type { DitherName } from "@/lib/dither-assets";
 import {
   me,
+  pageCss,
   personById,
   safeHref,
   stageOf,
@@ -36,6 +37,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
 import type { Zoom } from "./fields";
+import { PageFrame } from "./page-frame";
 
 // The page visitors see. It lives apart from the roadmap editor so the public page doesn't download the editor,
 // and the timeline only loads for pages laid out as one
@@ -748,10 +750,17 @@ export function Visitor({
     <div
       data-theme={page.theme === "visitor" ? undefined : page.theme}
       style={accentVars(page.color)}
-      className="bg-page text-ink"
+      className="acta-page bg-page text-ink"
     >
+      {page.css.trim() ? <style dangerouslySetInnerHTML={{ __html: pageCss(page.css) }} /> : null}
+      {page.headerHtml.trim() ? <PageFrame html={page.headerHtml} label="Header" /> : null}
       {page.announcement.trim() ? (
-        <div className={cn("flex items-center justify-center gap-2 border-b px-4 py-2 text-center text-sm", t.soft)}>
+        <div
+          className={cn(
+            "acta-announcement flex items-center justify-center gap-2 border-b px-4 py-2 text-center text-sm",
+            t.soft,
+          )}
+        >
           <Icon name="sparkle" size="sm" className="shrink-0" />
           {announcementHref ? (
             <a href={announcementHref} {...outside} className="underline-offset-2 hover:underline">
@@ -763,13 +772,22 @@ export function Visitor({
         </div>
       ) : null}
 
-      <div className={cn("px-4 @2xl:px-10", compact ? "py-6 @2xl:py-8" : "py-8 @2xl:py-10")}>
-        {hero}
-        <div className={cn("flex flex-col", compact ? "mt-6 gap-8" : "mt-8 gap-12")}>
-          {page.sections.map((s) => (blocks[s] ? <div key={s}>{blocks[s]}</div> : null))}
+      <div className={cn("acta-body px-4 @2xl:px-10", compact ? "py-6 @2xl:py-8" : "py-8 @2xl:py-10")}>
+        <div className="acta-hero">{hero}</div>
+        <div className={cn("acta-sections flex flex-col", compact ? "mt-6 gap-8" : "mt-8 gap-12")}>
+          {page.sections.map((s) =>
+            blocks[s] ? (
+              <div key={s} className={`acta-section acta-${s}`}>
+                {blocks[s]}
+              </div>
+            ) : null,
+          )}
         </div>
 
-        <footer className="mt-12 border-t border-line pt-4">
+        {page.footerHtml.trim() ? (
+          <PageFrame html={page.footerHtml} label="Footer" className="mt-12 block w-full border-0 bg-transparent" />
+        ) : null}
+        <footer className="acta-footer mt-12 border-t border-line pt-4">
           {page.footer.trim() ? <p className="mb-3 text-sm whitespace-pre-line text-ink-2">{page.footer}</p> : null}
           <p className="font-mono text-[11px] text-ink-3">
             {home ? (

@@ -1,6 +1,6 @@
 // How Acta looks on this device, beyond light and dark: an accent, the surfaces' warmth, contrast, text size, the
-// interface font and motion. It's kept in localStorage and put on the root as data attributes (see globals.css)
-// by a script in the root layout before the page paints, and again here whenever it changes
+// interface font, the icons and motion. It's kept in localStorage and put on the root as data attributes (see
+// globals.css) by a script in the root layout before the page paints, and again here whenever it changes
 
 export type Accent = "lapis" | "amethyst" | "rhodonite" | "fluorite" | "obsidian" | "custom";
 
@@ -12,6 +12,8 @@ export type Appearance = {
   contrast: "normal" | "more";
   size: "sm" | "md" | "lg" | "xl";
   font: "geist" | "system" | "mono";
+  // Pixel art, or plain lines
+  icons: "pixel" | "line";
   motion: "full" | "reduced";
 };
 
@@ -22,11 +24,12 @@ export const defaultAppearance: Appearance = {
   contrast: "normal",
   size: "md",
   font: "geist",
+  icons: "pixel",
   motion: "full",
 };
 
 const key = "acta-appearance";
-const fields = ["accent", "surface", "contrast", "size", "font", "motion"] as const;
+const fields = ["accent", "surface", "contrast", "size", "font", "icons", "motion"] as const;
 const hex = /^#[0-9a-f]{6}$/i;
 
 // Public roadmaps wear their owner's look, not the visitor's

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
 import { AccountButton } from "@/components/account-button";
 import { ThemeControls } from "@/components/theme-toggle";
 import { Avatar } from "@/components/ui/display";
@@ -15,6 +16,7 @@ import {
 import { Icon } from "@/components/ui/icons";
 import { PixelCaret } from "@/components/ui/pixel";
 import { Wordmark } from "@/components/wordmark";
+import { inOrder, syncPrefs, useBoardOrder } from "@/lib/account-prefs";
 import { useCounts, useMine, type Shell } from "@/lib/board-cache";
 import type { WorkspaceSummary } from "@/lib/live";
 import { cn } from "@/lib/utils";
@@ -99,6 +101,9 @@ export function MyTasksLink({
 export function WorkspaceNav({ shell, onNavigate }: { shell: Shell; onNavigate?: () => void }) {
   const counts = useCounts();
   const ws = shell.workspace.slug;
+  const boards = inOrder(shell.boards, useBoardOrder(shell.workspace.id));
+  const meId = shell.me.id;
+  useEffect(() => syncPrefs(meId), [meId]);
   return (
     <>
       <div className="flex h-12 shrink-0 items-center border-b border-line px-3">
@@ -108,7 +113,7 @@ export function WorkspaceNav({ shell, onNavigate }: { shell: Shell; onNavigate?:
       <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2 text-sm">
         <MyTasksLink shell={shell} active onNavigate={onNavigate} />
         <p className="mt-4 mb-1 px-2 font-mono text-[11px] text-ink-3">Boards</p>
-        {shell.boards.map((b) => {
+        {boards.map((b) => {
           const n = counts[b.id] ?? b.count;
           return (
             <Link key={b.id} href={`/${ws}/${b.slug}`} onClick={onNavigate} className={navItem(false)}>

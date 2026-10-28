@@ -4,6 +4,9 @@ import type { IconName } from "@/components/ui/icons";
 import type { SelectOption } from "@/components/ui/select";
 import {
   closed,
+  customFields,
+  customText,
+  customValue,
   labels,
   labelTone,
   people,
@@ -15,11 +18,14 @@ import {
   sizes,
   statuses,
   updatedAt,
+  updatedBy,
+  type CustomField,
+  type FieldType,
   type Task,
 } from "@/lib/board-store";
 import { cn } from "@/lib/utils";
 
-export type ColumnId =
+type BuiltinColumn =
   | "title"
   | "status"
   | "assignee"
@@ -30,7 +36,10 @@ export type ColumnId =
   | "due"
   | "labels"
   | "subtasks"
-  | "updated";
+  | "updated"
+  | "updatedBy";
+// A board's own fields show as columns too, as "f:" and the field's id
+export type ColumnId = BuiltinColumn | `f:${string}`;
 export type GroupField = "status" | "priority" | "assignee" | "project" | "size";
 export type Grouping = GroupField | "none";
 export type SortKey = ColumnId | "id";
@@ -59,10 +68,9 @@ export type Prefs = {
   keptFilters: Filters;
 };
 
-export const columnMeta: Record<
-  ColumnId,
-  { label: string; icon: IconName; width: number; min: number; group?: GroupField }
-> = {
+type ColumnMeta = { label: string; icon: IconName; width: number; min: number; group?: GroupField };
+
+export const columnMeta: Record<BuiltinColumn, ColumnMeta> = {
   title: { label: "Title", icon: "file", width: 400, min: 220 },
   status: { label: "Status", icon: "status", width: 148, min: 112, group: "status" },
   assignee: { label: "Assignee", icon: "user", width: 164, min: 112, group: "assignee" },
@@ -74,6 +82,7 @@ export const columnMeta: Record<
   labels: { label: "Labels", icon: "tag", width: 172, min: 104 },
   subtasks: { label: "Subtasks", icon: "list", width: 120, min: 100 },
   updated: { label: "Updated", icon: "clock", width: 108, min: 92 },
+  updatedBy: { label: "Updated by", icon: "user", width: 164, min: 112 },
 };
 
 export const defaultColumns: ColumnPref[] = (
@@ -89,8 +98,36 @@ export const defaultColumns: ColumnPref[] = (
     "labels",
     "subtasks",
     "updated",
-  ] as ColumnId[]
-).map((id) => ({ id, width: columnMeta[id].width, hidden: id === "updated" }));
+    "updatedBy",
+  ] as BuiltinColumn[]
+).map((id) => ({ id, width: columnMeta[id].width, hidden: id === "updated" || id === "updatedBy" }));
+
+const typeIcon: Record<FieldType, IconName> = {
+  text: "file",
+  number: "size",
+  date: "calendar",
+  select: "status",
+  multi: "tag",
+};
+
+/** The board's own field a column shows, if it shows one */
+export const fieldOf = (id: ColumnId): CustomField | undefined =>
+  id.startsWith("f:") ? customFields.find((f) => `f:${f.id}` === id) : undefined;
+
+export function metaOf(id: ColumnId): ColumnMeta {
+  if (!id.startsWith("f:")) return columnMeta[id as BuiltinColumn];
+  const f = fieldOf(id);
+  return { label: f?.name || "Field", icon: f ? typeIcon[f.type] : "file", width: 148, min: 96 };
+}
+
+/** Someone's columns with the board's own fields among them: new ones hidden at the end, removed ones gone */
+export function withFieldColumns(columns: ColumnPref[]): ColumnPref[] {
+  const kept = columns.filter((c) => !c.id.startsWith("f:") || fieldOf(c.id));
+  const added = customFields
+    .filter((f) => !kept.some((c) => c.id === `f:${f.id}`))
+    .map((f) => ({ id: `f:${f.id}` as ColumnId, width: 148, hidden: true }));
+  return added.length || kept.length !== columns.length ? [...kept, ...added] : columns;
+}
 
 export const defaultPrefs: Prefs = {
   view: "table",
@@ -119,7 +156,10 @@ export function LabelDot({ id, className }: { id: string; className?: string }) 
 }
 
 export const fieldOptions: Record<GroupField | "label", SelectOption[]> = {
-  status: statuses.map((s) => ({ value: s.id, label: s.title, icon: <StatusMarker status={s.id} /> })),
+  // Read each time, since a board can name its statuses
+  get status() {
+    return statuses.map((s) => ({ value: s.id, label: s.title, icon: <StatusMarker status={s.id} /> }));
+  },
   priority: priorities.map((p) => ({
     value: p.id,
     label: p.title,
@@ -229,7 +269,7 @@ const sizeRank = (t: Task) => (t.size ? sizes.findIndex((z) => z.id === t.size) 
 const num = (id: string) => Number(id.split("-")[1]);
 const progress = (t: Task) => (t.subtasks.length ? t.subtasks.filter((s) => s.done).length / t.subtasks.length : -1);
 
-export const compare: Record<SortKey, (a: Task, b: Task) => number> = {
+export const compare: Record<BuiltinColumn | "id", (a: Task, b: Task) => number> = {
   id: (a, b) => num(a.id) - num(b.id),
   title: (a, b) => a.title.localeCompare(b.title),
   status: (a, b) => statusOrder[a.status] - statusOrder[b.status],
@@ -242,7 +282,26 @@ export const compare: Record<SortKey, (a: Task, b: Task) => number> = {
   labels: (a, b) => (a.labels[0] ?? "~").localeCompare(b.labels[0] ?? "~"),
   subtasks: (a, b) => progress(a) - progress(b),
   updated: (a, b) => updatedAt(b) - updatedAt(a),
+  updatedBy: (a, b) => (updatedBy(a)?.who ?? "~").localeCompare(updatedBy(b)?.who ?? "~"),
 };
+
+// Empty values go last, the same as the board's own fields
+function compareField(f: CustomField) {
+  return (a: Task, b: Task) => {
+    const x = customValue(a, f);
+    const y = customValue(b, f);
+    if (x === undefined || y === undefined) return (x === undefined ? 1 : 0) - (y === undefined ? 1 : 0);
+    if (typeof x === "number" && typeof y === "number") return x - y;
+    if (f.type === "select" && f.options) return f.options.indexOf(String(x)) - f.options.indexOf(String(y));
+    return customText(a, f).localeCompare(customText(b, f));
+  };
+}
+
+export function compareBy(key: SortKey): (a: Task, b: Task) => number {
+  if (!key.startsWith("f:")) return compare[key as BuiltinColumn | "id"];
+  const f = fieldOf(key as ColumnId);
+  return f ? compareField(f) : () => 0;
+}
 
 export function matches(t: Task, filters: Filters) {
   if (t.archived && !filters.archived) return false;

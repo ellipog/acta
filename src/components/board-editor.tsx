@@ -6,14 +6,36 @@ import { Dialog, DialogClose, DialogContent } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
 import type { BoardFields } from "@/lib/board-actions";
-import type { Label, Project, Tone } from "@/lib/board-store";
+import { Select } from "@/components/ui/select";
+import {
+  defaultStatusTitle,
+  fieldTypes,
+  newId,
+  statuses,
+  type CustomField,
+  type FieldType,
+  type Label,
+  type Project,
+  type StatusNames,
+  type Tone,
+} from "@/lib/board-store";
 import { boardSlugProblem, siteHost, SLUG_MAX, slugify } from "@/lib/slugs";
 import { loadClient } from "@/lib/supabase/browser";
 import { cn } from "@/lib/utils";
 
-// A board's name, address, labels and projects, from the sidebar or the workspace settings
+// A board's name, address, labels, projects, fields and status names, from the sidebar or the workspace settings
 
-export type EditableBoard = { id: string; slug: string; name: string; labels?: Label[]; projects?: Project[] };
+export type EditableBoard = {
+  id: string;
+  slug: string;
+  name: string;
+  labels?: Label[];
+  projects?: Project[];
+  fields?: CustomField[];
+  statusNames?: StatusNames;
+};
+
+const hasOptions = (t: FieldType) => t === "select" || t === "multi";
 
 const toneClass: Record<Tone | "ink", string> = {
   lapis: "bg-lapis",
@@ -55,6 +77,8 @@ export function BoardEditor({
   const [slug, setSlug] = useState(board.slug);
   const [labels, setLabels] = useState<Label[] | null>(board.labels ?? null);
   const [projects, setProjects] = useState<Project[] | null>(board.projects ?? null);
+  const [fields, setFields] = useState<CustomField[] | null>(board.fields ?? null);
+  const [names, setNames] = useState<StatusNames | null>(board.statusNames ?? null);
   const [seen, setSeen] = useState(false);
   const cleanSlug = slug.replace(/-+$/, "");
   const problem = cleanSlug === board.slug ? null : boardSlugProblem(cleanSlug);
@@ -66,18 +90,23 @@ export function BoardEditor({
     setSlug(board.slug);
     setLabels(board.labels ?? null);
     setProjects(board.projects ?? null);
+    setFields(board.fields ?? null);
+    setNames(board.statusNames ?? null);
   }
   if (!open && seen) setSeen(false);
 
-  const unread = open && (!board.labels || !board.projects);
+  const unread = open && (!board.labels || !board.projects || !board.fields || !board.statusNames);
   useEffect(() => {
     if (!unread) return;
     let stale = false;
     void loadClient().then(async (supabase) => {
-      const { data } = await supabase.from("boards").select("labels, projects").eq("id", board.id).single();
+      // Read whole, since fields and status names only exist once their migration has run
+      const { data } = await supabase.from("boards").select("*").eq("id", board.id).single();
       if (stale) return;
       setLabels((l) => l ?? (data?.labels as Label[] | undefined) ?? []);
       setProjects((p) => p ?? (data?.projects as Project[] | undefined) ?? []);
+      setFields((f) => f ?? (data?.fields as CustomField[] | undefined) ?? []);
+      setNames((n) => n ?? (data?.status_names as StatusNames | undefined) ?? {});
     });
     return () => {
       stale = true;
@@ -90,6 +119,8 @@ export function BoardEditor({
     if (cleanSlug !== board.slug) change.slug = cleanSlug;
     if (labels && JSON.stringify(labels) !== JSON.stringify(board.labels)) change.labels = labels;
     if (projects && JSON.stringify(projects) !== JSON.stringify(board.projects)) change.projects = projects;
+    if (fields && JSON.stringify(fields) !== JSON.stringify(board.fields ?? [])) change.fields = fields;
+    if (names && JSON.stringify(names) !== JSON.stringify(board.statusNames ?? {})) change.statusNames = names;
     onOpenChange(false);
     if (Object.keys(change).length) onSave(change);
   };
@@ -232,6 +263,91 @@ export function BoardEditor({
                 </>
               ) : (
                 <p className="text-xs text-ink-3">Reading the projects…</p>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-ink-2">Fields</p>
+              {fields ? (
+                <>
+                  {fields.map((f, i) => {
+                    const change = (patch: Partial<CustomField>) =>
+                      setFields(fields.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+                    return (
+                      <div key={f.id} className="flex flex-col gap-2 border border-line p-2">
+                        <div className="flex gap-2">
+                          <Input
+                            value={f.name}
+                            autoFocus={!f.name && i === fields.length - 1}
+                            aria-label="Field name"
+                            placeholder="Field name"
+                            maxLength={40}
+                            onChange={(e) => change({ name: e.target.value })}
+                          />
+                          <Select
+                            aria-label="Field type"
+                            value={f.type}
+                            onValueChange={(type) =>
+                              change({ type, options: hasOptions(type) ? (f.options ?? []) : undefined })
+                            }
+                            options={fieldTypes.map((t) => ({ value: t.id, label: t.title }))}
+                            className="w-40 shrink-0"
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            aria-label="Remove field"
+                            onClick={() => setFields(fields.filter((_, j) => j !== i))}
+                          >
+                            <Icon name="x" />
+                          </Button>
+                        </div>
+                        {hasOptions(f.type) ? (
+                          <Input
+                            value={(f.options ?? []).join(", ")}
+                            aria-label="Options"
+                            placeholder="Options, separated by commas"
+                            onChange={(e) => change({ options: e.target.value.split(",").map((o) => o.trimStart()) })}
+                          />
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="self-start"
+                    onClick={() => setFields([...fields, { id: newId().slice(0, 8), name: "", type: "text" }])}
+                  >
+                    <Icon name="plus" /> Add field
+                  </Button>
+                  <p className="text-[11px] text-ink-3">
+                    Fill them in on each task, and show them as table columns under Fields. Removing a field hides
+                    its values.
+                  </p>
+                </>
+              ) : (
+                <p className="text-xs text-ink-3">Reading the fields…</p>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-ink-2">Status names</p>
+              {names ? (
+                <div className="grid grid-cols-2 gap-2">
+                  {statuses.map((s) => (
+                    <Input
+                      key={s.id}
+                      value={names[s.id] ?? ""}
+                      aria-label={`Name for ${defaultStatusTitle[s.id]}`}
+                      placeholder={defaultStatusTitle[s.id]}
+                      maxLength={30}
+                      onChange={(e) => setNames({ ...names, [s.id]: e.target.value })}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-ink-3">Reading the statuses…</p>
               )}
             </div>
           </div>

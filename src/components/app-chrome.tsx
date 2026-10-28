@@ -4,6 +4,7 @@ import { Wordmark } from "@/components/wordmark";
 import { ThemeControls } from "@/components/theme-toggle";
 import { Avatar, Skeleton } from "@/components/ui/display";
 import { Icon } from "@/components/ui/icons";
+import { SkeletonBoards } from "@/components/skeleton-boards";
 import type { Shell } from "@/lib/board-cache";
 import type { WorkspaceSummary } from "@/lib/live";
 import { cn } from "@/lib/utils";
@@ -49,23 +50,13 @@ export function AppSkeleton({
               <Icon name="user" size="sm" /> My tasks
             </Link>
             <p className="mt-4 mb-1 px-2 font-mono text-[11px] text-ink-3">Boards</p>
-            {shell.boards.map((b) => {
-              const n = counts?.[b.id] ?? b.count;
-              return (
-                <Link
-                  key={b.id}
-                  href={`/${shell.workspace.slug}/${b.slug}`}
-                  className={cn(
-                    "flex h-8 items-center gap-2 px-2",
-                    b.slug === board ? "bg-lapis-soft text-lapis-ink" : "text-ink-2 hover:bg-sunken hover:text-ink",
-                  )}
-                >
-                  <Icon name="board" size="sm" />
-                  <span className="truncate">{b.name}</span>
-                  {n !== undefined ? <span className="ml-auto font-mono text-[11px] text-ink-3">{n}</span> : null}
-                </Link>
-              );
-            })}
+            <SkeletonBoards
+              workspace={shell.workspace.id}
+              slug={shell.workspace.slug}
+              boards={shell.boards}
+              board={board}
+              counts={counts}
+            />
           </nav>
           <div className="shrink-0 border-t border-line p-3">
             <Skeleton className="h-3 w-24" />

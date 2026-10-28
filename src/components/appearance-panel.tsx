@@ -265,6 +265,29 @@ export function AppearancePanel({ open, onOpenChange }: { open: boolean; onOpenC
               />
             </Section>
 
+            <Section title="Icons">
+              <Segmented
+                aria-label="Icons"
+                value={look.icons}
+                onValueChange={(icons) => setAppearance({ icons })}
+                options={(
+                  [
+                    ["pixel", "Pixel"],
+                    ["line", "Line"],
+                  ] as const
+                ).map(([value, label]) => ({
+                  value,
+                  label: (
+                    <span className="flex items-center gap-1.5">
+                      <Icon name="board" size="sm" set={value} />
+                      <Icon name="calendar" size="sm" set={value} />
+                      {label}
+                    </span>
+                  ),
+                }))}
+              />
+            </Section>
+
             <Section title="Comfort">
               <Row
                 label="More contrast"

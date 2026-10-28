@@ -1233,6 +1233,53 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
           </Setting>
         </Group>
 
+        <Group title="Your own code">
+          <Setting
+            label="CSS"
+            htmlFor="page-css"
+            hint="Styles for this page only. Hooks: .acta-page, .acta-hero, .acta-section, .acta-roadmap, .acta-ideas, .acta-shipped, .acta-footer."
+          >
+            <Textarea
+              id="page-css"
+              value={page.css}
+              maxLength={pageLimits.css}
+              spellCheck={false}
+              onChange={(e) => set({ css: e.target.value })}
+              placeholder={"h1 { letter-spacing: -0.02em; }\n.acta-footer { border: 0; }"}
+              className="min-h-24 font-mono text-[12px]"
+            />
+          </Setting>
+          <Setting
+            label="Header HTML"
+            htmlFor="page-header-html"
+            hint="Shown above the page, in a frame of its own. Scripts run there, apart from the page."
+          >
+            <Textarea
+              id="page-header-html"
+              value={page.headerHtml}
+              maxLength={pageLimits.html}
+              spellCheck={false}
+              onChange={(e) => set({ headerHtml: e.target.value })}
+              placeholder={'<nav><a href="https://yourco.com">Home</a></nav>'}
+              className="min-h-20 font-mono text-[12px]"
+            />
+          </Setting>
+          <Setting label="Footer HTML" htmlFor="page-footer-html" hint="Shown above the footer, the same way.">
+            <Textarea
+              id="page-footer-html"
+              value={page.footerHtml}
+              maxLength={pageLimits.html}
+              spellCheck={false}
+              onChange={(e) => set({ footerHtml: e.target.value })}
+              className="min-h-20 font-mono text-[12px]"
+            />
+          </Setting>
+          <p className="text-[11px] text-ink-3">
+            Or build the whole page yourself from its data at{" "}
+            <span className="font-mono">/api/public/{me.workspace}/{page.slug}</span>.
+          </p>
+        </Group>
+
         <Group
           title="Your brand"
           action={

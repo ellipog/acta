@@ -134,6 +134,7 @@ export class FakeBoardServer {
         public: Boolean(t.public),
         shipped_on: (t.shipped_on as string) ?? null,
         archived_at: (t.archived_at as string) ?? null,
+        custom: (t.custom as Row["custom"]) ?? {},
         vote_count: 0,
         position: (t.position as number) ?? 0,
         origin: (t.origin as string) ?? null,

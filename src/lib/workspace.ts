@@ -154,6 +154,8 @@ export const loadBoard = cache(async (workspaceSlug: string, boardSlug: string):
       prefix: board.prefix,
       labels: board.labels ?? [],
       projects: board.projects ?? [],
+      fields: board.fields ?? [],
+      statusNames: board.status_names ?? {},
     },
     state: boardState(board, nameOf),
     at: Date.now(),

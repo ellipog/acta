@@ -47,6 +47,11 @@ const fields = {
   start: date.nullable().describe("Start date, YYYY-MM-DD. null clears it."),
   due: date.nullable().describe("Due date, YYYY-MM-DD. null clears it."),
   public: z.boolean().describe("Show it on the board's public roadmap"),
+  fields: z
+    .record(z.string(), z.union([z.string(), z.number(), z.array(z.string()), z.null()]))
+    .describe(
+      "The board's own fields by name (see get_board), like {\"Customer\": \"Acme\", \"Effort\": 3}. Select fields take one of their options, multi selects a list. null clears one",
+    ),
 };
 
 // Everything update_task can change, shared with update_tasks
@@ -79,25 +84,63 @@ function failure(message: string) {
   return { isError: true, content: [{ type: "text" as const, text: message }] };
 }
 
-// Mistakes the agent can fix come back as tool errors it can read. Anything else is logged
+// Mistakes the agent can fix come back as tool errors it can read. Anything else is logged. The work itself rides
+// along, so the HTTP API can run the same tool and answer in its own way
 function run<A>(work: (args: A) => Promise<unknown>) {
-  return async (args: A) => {
-    try {
-      return reply(await work(args));
-    } catch (error) {
-      if (error instanceof Problem) return failure(error.message);
-      console.error("MCP tool failed", error);
-      return failure("Acta couldn’t do that just now. Try again in a moment.");
-    }
-  };
+  return Object.assign(
+    async (args: A) => {
+      try {
+        return reply(await work(args));
+      } catch (error) {
+        if (error instanceof Problem) return failure(error.message);
+        console.error("MCP tool failed", error);
+        return failure("Acta couldn’t do that just now. Try again in a moment.");
+      }
+    },
+    { work },
+  );
 }
 
 const reads = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const writes = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
 
+type Registrar = Pick<McpServer, "registerTool">;
+
 export function actaServer(agent: Agent) {
-  const acta = actaFor(agent);
   const server = new McpServer({ name: "acta", title: "Acta", version: "1.0.0" }, { instructions });
+  addTools(server, agent);
+  return server;
+}
+
+/** A tool as the HTTP API sees it: what it takes, whether it only reads, and the work it does */
+export type Tool = {
+  name: string;
+  title: string;
+  description: string;
+  input: z.ZodObject;
+  readOnly: boolean;
+  work: (args: unknown) => Promise<unknown>;
+};
+
+/** The tools a key may use, the same ones its MCP server has */
+export function actaTools(agent: Agent): Tool[] {
+  const tools: Tool[] = [];
+  const registerTool = ((name: string, config: Parameters<McpServer["registerTool"]>[1], callback: unknown) => {
+    tools.push({
+      name,
+      title: config.title ?? name,
+      description: config.description ?? "",
+      input: (config.inputSchema as z.ZodObject | undefined) ?? z.object({}),
+      readOnly: Boolean(config.annotations?.readOnlyHint),
+      work: (callback as { work: Tool["work"] }).work,
+    });
+  }) as unknown as Registrar["registerTool"];
+  addTools({ registerTool }, agent);
+  return tools;
+}
+
+function addTools(server: Registrar, agent: Agent) {
+  const acta = actaFor(agent);
 
   server.registerTool(
     "list_boards",
@@ -115,7 +158,7 @@ export function actaServer(agent: Agent) {
     {
       title: "Get a board",
       description:
-        "A board's labels, projects, people, task counts per status and public roadmap settings. Use it to learn the valid labels, projects and assignees before creating tasks.",
+        "A board's labels, projects, its own fields, people, task counts per status and public roadmap settings. Use it to learn the valid labels, projects, fields and assignees before creating tasks.",
       inputSchema: z.object({ board }),
       annotations: reads,
     },
@@ -179,11 +222,15 @@ export function actaServer(agent: Agent) {
     "list_suggestions",
     {
       title: "List roadmap suggestions",
-      description: "Ideas people sent in through the board's public roadmap, most voted first.",
-      inputSchema: z.object({ board }),
+      description:
+        "Ideas people sent in through the board's public roadmap, most voted first. Pass declined to see the ones that were turned down instead, newest first, with who declined each.",
+      inputSchema: z.object({
+        board,
+        declined: z.boolean().optional().describe("Show declined ideas instead"),
+      }),
       annotations: reads,
     },
-    run(({ board }) => acta.suggestions(board)),
+    run(({ board, declined }) => acta.suggestions(board, declined)),
   );
 
   server.registerTool(
@@ -224,6 +271,7 @@ export function actaServer(agent: Agent) {
                 description: fields.description.optional(),
                 status: fields.status.optional(),
                 priority: priority.optional(),
+                fields: fields.fields.optional(),
                 public: fields.public
                   .optional()
                   .describe("Show it on the public roadmap. Defaults to the board's new_tasks_public setting"),
@@ -371,7 +419,7 @@ export function actaServer(agent: Agent) {
       {
         title: "Update a board",
         description:
-          "Renames a board, or adds, renames, recolours and removes its labels and projects. Renaming a label or project renames it on every task that has it.",
+          "Renames a board, or adds, renames, recolours and removes its labels and projects. Renaming a label or project renames it on every task that has it. Also adds, renames and removes the board's own fields, and renames its statuses.",
         inputSchema: z.object({
           board,
           name: z.string().min(1).max(60).optional(),
@@ -397,6 +445,29 @@ export function actaServer(agent: Agent) {
             )
             .optional(),
           remove_projects: z.array(z.string()).optional(),
+          add_fields: z
+            .array(
+              z.object({
+                name: z.string().min(1).max(40),
+                type: z.enum(["text", "number", "date", "select", "multi"]),
+                options: z.array(z.string().min(1).max(40)).max(50).optional().describe("For select and multi fields"),
+              }),
+            )
+            .optional(),
+          update_fields: z
+            .array(
+              z.object({
+                field: z.string().describe("The field's current name"),
+                name: z.string().min(1).max(40).optional().describe("Its new name"),
+                options: z.array(z.string().min(1).max(40)).max(50).optional().describe("Its options, replacing them"),
+              }),
+            )
+            .optional(),
+          remove_fields: z.array(z.string()).optional().describe("Fields to remove. Their values are hidden"),
+          status_names: z
+            .partialRecord(status, z.string().max(30).nullable())
+            .optional()
+            .describe('What the board calls each status, like {"review": "QA"}. null puts the usual name back'),
         }),
         annotations: writes,
       },
@@ -442,6 +513,4 @@ export function actaServer(agent: Agent) {
       run(({ board, suggestion, accept }) => acta.reviewSuggestion(board, suggestion, accept)),
     );
   }
-
-  return server;
 }

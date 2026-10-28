@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { Label, Project } from "./board-store";
+import type { CustomField, Label, Project, StatusNames } from "./board-store";
 import type { LiveBoard } from "./live";
 
 // Changes to boards that show before the server has them: a new name, labels or projects, a board on its way in
@@ -10,6 +10,8 @@ export type BoardEdit = {
   slug?: string;
   labels?: Label[];
   projects?: Project[];
+  fields?: CustomField[];
+  statusNames?: StatusNames;
   gone?: boolean;
   // Saved, so it only waits for the page to show the same
   settled?: boolean;
@@ -98,6 +100,8 @@ export function withEdits(live: LiveBoard, all: Edits): LiveBoard {
           name: mine.name ?? live.board.name,
           labels: mine.labels ?? live.board.labels,
           projects: mine.projects ?? live.board.projects,
+          fields: mine.fields ?? live.board.fields,
+          statusNames: mine.statusNames ?? live.board.statusNames,
         }
       : live.board,
   };
@@ -113,7 +117,11 @@ export function settleEdits(live: LiveBoard) {
       : listed &&
         same(e.name, listed.name) &&
         same(e.slug, listed.slug) &&
-        (id !== live.board.id || (same(e.labels, live.board.labels) && same(e.projects, live.board.projects)));
+        (id !== live.board.id ||
+          (same(e.labels, live.board.labels) &&
+            same(e.projects, live.board.projects) &&
+            same(e.fields, live.board.fields) &&
+            same(e.statusNames, live.board.statusNames)));
     if (caughtUp) dropEdit(id);
   }
 }

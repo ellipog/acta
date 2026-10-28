@@ -1,13 +1,13 @@
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import { after } from "next/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createAdminClient, serviceReady } from "@/lib/supabase/admin";
 
 export type Access = "read" | "write" | "manage";
 
 export const accessRank: Record<Access, number> = { read: 1, write: 2, manage: 3 };
 
-// Who an MCP request acts as. The hash goes to the database with every write, which checks it again
+// Who an MCP or API request acts as. The hash goes to the database with every write, which checks it again
 export type Agent = {
   keyId: string;
   hash: string;
@@ -51,4 +51,25 @@ export async function verifyKey(token: string): Promise<Agent | null> {
     access: data.access as Access,
     workspaces: data.workspaces,
   };
+}
+
+const refuse = (status: number, message: string) =>
+  Response.json(
+    { error: status === 401 ? "invalid_token" : "unavailable", error_description: message },
+    { status, headers: status === 401 ? { "WWW-Authenticate": 'Bearer realm="acta", error="invalid_token"' } : {} },
+  );
+
+/** The key a request was sent with, for the MCP server and the HTTP API. A response instead when there's none */
+export async function agentFor(request: Request): Promise<{ agent: Agent; token: string } | Response> {
+  if (!serviceReady) return refuse(503, "Acta’s agent access isn’t set up on this server.");
+  const token = request.headers.get("authorization")?.match(/^Bearer\s+(\S+)$/i)?.[1];
+  const agent = token ? await verifyKey(token) : null;
+  if (!token || !agent)
+    return refuse(
+      401,
+      token
+        ? "That Acta key doesn’t work. It may have been revoked. Make a new one under Account → Agents."
+        : "Send an Acta key as a bearer token. Make one under Account → Agents.",
+    );
+  return { agent, token };
 }

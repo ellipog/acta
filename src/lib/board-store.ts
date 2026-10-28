@@ -34,7 +34,23 @@ export type Task = {
   // When it was put away. Archived tasks leave the board without being deleted
   archived?: string;
   origin?: string;
+  // Values for the board's own fields, by field id
+  custom?: Record<string, CustomValue>;
 };
+
+// Fields a board adds to its tasks, beyond the ones every board has
+export type FieldType = "text" | "number" | "date" | "select" | "multi";
+export type CustomField = { id: string; name: string; type: FieldType; options?: string[] };
+// Text and dates are strings, numbers are numbers, and a multi select is a list of its options
+export type CustomValue = string | number | string[];
+
+export const fieldTypes: { id: FieldType; title: string }[] = [
+  { id: "text", title: "Text" },
+  { id: "number", title: "Number" },
+  { id: "date", title: "Date" },
+  { id: "select", title: "Single select" },
+  { id: "multi", title: "Multi select" },
+];
 
 export type Suggestion = {
   id: string;
@@ -96,6 +112,11 @@ export type PublicPage = {
   shippedLimit: number;
   shippedByMonth: boolean;
   footer: string;
+  // The owner's own code. CSS applies inside the page only, and the HTML shows above the page and above its footer
+  // in a sandboxed frame, so nothing in it can reach the visitor's session or the rest of Acta
+  css: string;
+  headerHtml: string;
+  footerHtml: string;
 };
 
 export const defaultPage: PublicPage = {
@@ -139,9 +160,18 @@ export const defaultPage: PublicPage = {
   shippedLimit: 0,
   shippedByMonth: false,
   footer: "",
+  css: "",
+  headerHtml: "",
+  footerHtml: "",
 };
 
-export const pageLimits = { text: 120, long: 600, url: 300, links: 4 };
+export const pageLimits = { text: 120, long: 600, url: 300, links: 4, css: 12000, html: 12000 };
+
+/**
+ * The page's CSS, nested under the page so it can't restyle anything around it, like the app around the preview.
+ * A "<" could close the style element, and no CSS needs one, so they go
+ */
+export const pageCss = (css: string) => (css.trim() ? `.acta-page{${css.replace(/</g, "")}}` : "");
 
 /** Keeps what a page says to what fits, and its links to ones that open somewhere */
 export function fitPage(patch: Partial<PublicPage>): Partial<PublicPage> {
@@ -151,6 +181,8 @@ export function fitPage(patch: Partial<PublicPage>): Partial<PublicPage> {
   for (const k of ["title", "ideaOne", "ideaMany", "ideaPrompt", "announcement"] as const)
     if (typeof out[k] === "string") out[k] = text(out[k]);
   for (const k of ["tagline", "footer"] as const) if (typeof out[k] === "string") out[k] = text(out[k], pageLimits.long);
+  if (out.css !== undefined) out.css = text(out.css, pageLimits.css);
+  for (const k of ["headerHtml", "footerHtml"] as const) if (out[k] !== undefined) out[k] = text(out[k], pageLimits.html);
   if (typeof out.announcementLink === "string") out.announcementLink = text(out.announcementLink, pageLimits.url);
   if (out.cta) out.cta = link(typeof out.cta === "object" ? out.cta : { label: "", url: "" });
   if (out.links)
@@ -220,7 +252,7 @@ export const archiveTasks = (ids: string[], on: boolean): BoardAction => ({
   note: on ? "archived the task" : "brought the task back from the archive",
 });
 
-export const statusTitle: Record<StatusCategory, string> = {
+export const defaultStatusTitle: Record<StatusCategory, string> = {
   backlog: "Backlog",
   todo: "Todo",
   in_progress: "In progress",
@@ -228,6 +260,9 @@ export const statusTitle: Record<StatusCategory, string> = {
   done: "Done",
   canceled: "Canceled",
 };
+// What the board calls each status. A board can give them names of its own (see setBoardMeta)
+export const statusTitle: Record<StatusCategory, string> = { ...defaultStatusTitle };
+export type StatusNames = Partial<Record<StatusCategory, string>>;
 
 export const priorities: { id: Priority; title: string }[] = [
   { id: "urgent", title: "Urgent" },
@@ -261,6 +296,8 @@ export type BoardMeta = {
   team: string;
   prefix: string;
   live: boolean;
+  fields?: CustomField[];
+  statusNames?: StatusNames;
 };
 
 export const demoMeta: BoardMeta = {
@@ -297,6 +334,7 @@ export const projects: string[] = demoMeta.projects.map((p) => p.name);
 export const projectTone: Record<string, Tone | "ink"> = Object.fromEntries(
   demoMeta.projects.map((p) => [p.name, p.tone]),
 );
+export const customFields: CustomField[] = [];
 export const me = {
   name: demoMeta.me,
   id: demoMeta.meId,
@@ -318,6 +356,34 @@ export function setBoardMeta(meta: BoardMeta) {
   projects.splice(0, projects.length, ...meta.projects.map((p) => p.name));
   for (const key of Object.keys(projectTone)) delete projectTone[key];
   for (const p of meta.projects) projectTone[p.name] = p.tone;
+  customFields.splice(0, customFields.length, ...(meta.fields ?? []));
+  for (const s of statuses) {
+    s.title = meta.statusNames?.[s.id]?.trim() || defaultStatusTitle[s.id];
+    statusTitle[s.id] = s.title;
+  }
+}
+
+/** What a task holds for one of the board's fields, read as its type expects */
+export function customValue(task: Task, field: CustomField): CustomValue | undefined {
+  const v = task.custom?.[field.id];
+  if (v === undefined || v === null || v === "") return undefined;
+  if (field.type === "multi") return Array.isArray(v) ? v.map(String) : [String(v)];
+  if (field.type === "number") return typeof v === "number" ? v : Number.isFinite(Number(v)) ? Number(v) : undefined;
+  return Array.isArray(v) ? v.join(", ") : String(v);
+}
+
+/** A field's value as text, for cells, copying and agents */
+export function customText(task: Task, field: CustomField) {
+  const v = customValue(task, field);
+  return v === undefined ? "" : Array.isArray(v) ? v.join(", ") : String(v);
+}
+
+/** Sets one field on a task, or clears it with undefined, leaving the task's other fields as they are */
+export function withCustom(task: Task, field: string, value: CustomValue | undefined): Record<string, CustomValue> {
+  const next = { ...(task.custom ?? {}) };
+  if (value === undefined || value === "" || (Array.isArray(value) && !value.length)) delete next[field];
+  else next[field] = value;
+  return next;
 }
 
 export const newId = () =>
@@ -330,6 +396,11 @@ export const nextTaskId = (state: BoardState) => `${me.prefix}-${state.next}`;
 export const personById = (id?: string) => people.find((p) => p.id === id);
 export const labelTone = (id: string) => labels.find((l) => l.id === id)?.tone ?? "lapis";
 export const updatedAt = (t: Task) => t.activity.at(-1)?.at ?? 0;
+/** Who changed the task last, and through what, such as an agent */
+export const updatedBy = (t: Task) => {
+  const last = t.activity.at(-1);
+  return last ? { who: last.who, via: last.via, person: people.find((p) => p.name === last.who) } : null;
+};
 
 export type Stage = "planned" | "progress" | "shipped";
 // Canceled work never reaches the public roadmap, so it has no stage of its own
@@ -755,6 +826,8 @@ export const limits = {
   subtask: 200,
   // The subtasks of one task, as JSON. The database allows 20,000 bytes and writes JSON a little longer
   subtaskBytes: 16_000,
+  // A task's own field values, as JSON. The database allows 10,000 bytes
+  customBytes: 9_000,
   comment: 10_000,
   idea: 200,
   ideaDetails: 2_000,
@@ -777,6 +850,11 @@ export function fitTask<T extends Partial<Task>>(patch: T): T {
     );
     while (list.length && bytes(list) > limits.subtaskBytes) list = list.slice(0, -1);
     if (list.length !== out.subtasks.length || list.some((s, i) => s !== out.subtasks![i])) out.subtasks = list;
+  }
+  if (out.custom && bytes(out.custom) > limits.customBytes) {
+    const entries = Object.entries(out.custom);
+    while (entries.length && bytes(Object.fromEntries(entries)) > limits.customBytes) entries.pop();
+    out.custom = Object.fromEntries(entries);
   }
   return out;
 }

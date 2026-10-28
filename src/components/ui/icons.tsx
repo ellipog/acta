@@ -725,20 +725,103 @@ const paths = Object.fromEntries(Object.entries(drawings).map(([k, v]) => [k, to
 export type IconName = keyof typeof art | "arrow-left" | "arrow-down" | "arrow-up" | "chevron-up" | "chevron-right" | "chevron-left" | "upload";
 export const iconNames = Object.keys(drawings).sort() as IconName[];
 
+// The line set, for people who'd rather not have pixel art. Drawn on a 24 unit grid with a 2 unit stroke and shown
+// in the same box as the pixel drawing, so switching between them never moves anything. Brand marks stay as they are
+const circle = (x: number, y: number, r = 1) => `M${x + r} ${y}a${r} ${r} 0 1 1-${2 * r} 0a${r} ${r} 0 1 1 ${2 * r} 0z`;
+
+const lines: Partial<Record<IconName, string>> = {
+  plus: "M12 5v14M5 12h14",
+  minus: "M5 12h14",
+  x: "M6 6l12 12M18 6L6 18",
+  check: "M4.5 12.5l5 5L19.5 7",
+  "arrow-right": "M5 12h14M13 6l6 6-6 6",
+  "arrow-left": "M19 12H5M11 6l-6 6 6 6",
+  "arrow-down": "M12 5v14M6 13l6 6 6-6",
+  "arrow-up": "M12 19V5M6 11l6-6 6 6",
+  "chevron-down": "M6 9l6 6 6-6",
+  "chevron-up": "M6 15l6-6 6 6",
+  "chevron-right": "M9 6l6 6-6 6",
+  "chevron-left": "M15 6l-6 6 6 6",
+  search: `${circle(10.5, 10.5, 6.5)}M15.5 15.5L20 20`,
+  trash: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6",
+  copy: "M8 8h12v12H8zM16 8V4H4v12h4",
+  table: "M3 5h18v14H3zM3 10h18M3 15h18M9 10v9",
+  board: "M4 4h4v12H4zM10 4h4v8h-4zM16 4h4v15h-4z",
+  layers: "M12 3l9 5-9 5-9-5zM3 12.5l9 5 9-5M3 17l9 5 9-5",
+  moon: "M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z",
+  palette: `M12 3a9 9 0 1 0 0 18c1.4 0 2-.9 2-2s-1-1.6-1-2.6 1-1.4 2-1.4h2a4 4 0 0 0 4-4c0-4.4-4-8-9-8z${circle(7.5, 11)}${circle(10, 7)}${circle(15, 7.5)}`,
+  sun: `${circle(12, 12, 4)}M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4`,
+  inbox: "M3 13h5l1.5 3h5l1.5-3h5M3 13l3-8h12l3 8v6H3z",
+  user: `${circle(12, 8, 4)}M4 21c0-4 3.5-7 8-7s8 3 8 7`,
+  users: `${circle(9.5, 8, 3.5)}M2.5 20c0-3.5 3-6 7-6s7 2.5 7 6M16 4.5a3.5 3.5 0 0 1 0 7M18 14c2.2.6 3.5 2.6 3.5 5`,
+  settings: `${circle(12, 12, 3)}${circle(12, 12, 7)}M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1`,
+  reset: "M4 12a8 8 0 1 0 2.5-5.8M4 4v5h5",
+  pencil: "M4 20l1-4L16 5l3 3L8 19zM14 7l3 3",
+  panel: "M3 4h18v16H3zM9 4v16",
+  comment: "M4 5h16v11H10l-5 4v-4H4z",
+  lock: "M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4",
+  globe: `${circle(12, 12, 9)}M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9z`,
+  calendar: "M4 5h16v16H4zM4 10h16M8 3v4M16 3v4",
+  archive: "M3 4h18v4H3zM5 8v12h14V8M10 12h4",
+  filter: "M3 5h18l-7 8v6l-4 2v-8z",
+  bell: "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4",
+  eye: `M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z${circle(12, 12, 3)}`,
+  "eye-off":
+    "M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-2.6 3.4M6.6 6.6C3.7 8.4 2 12 2 12s3.5 7 10 7c1.9 0 3.5-.6 4.9-1.4M9.9 9.9a3 3 0 0 0 4.2 4.2",
+  flag: "M5 21V4M5 4h12l-2 4 2 4H5",
+  tag: `M3 3h8l10 10-8 8L3 11z${circle(7.5, 7.5)}`,
+  clock: `${circle(12, 12, 9)}M12 7v5l3 2`,
+  star: "M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z",
+  folder: "M3 6h6l2 2h10v11H3z",
+  file: "M6 3h8l5 5v13H6zM14 3v5h5",
+  grip: [6, 12, 18].map((y) => circle(9, y) + circle(15, y)).join(""),
+  dots: circle(5, 12) + circle(12, 12) + circle(19, 12),
+  download: "M12 4v11M7 10l5 5 5-5M4 20h16",
+  upload: "M12 16V5M7 10l5-5 5 5M4 20h16",
+  link: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
+  sparkle: "M11 3c.8 4.5 2.5 6.2 7 7-4.5.8-6.2 2.5-7 7-.8-4.5-2.5-6.2-7-7 4.5-.8 6.2-2.5 7-7zM19 16v5M16.5 18.5h5",
+  undo: "M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3",
+  menu: "M4 6h16M4 12h16M4 18h16",
+  sort: "M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4",
+  group: "M4 4h16v6H4zM4 14h16v6H4z",
+  hash: "M9 3L7 21M17 3l-2 18M4 9h17M3 15h17",
+  external: "M14 4h6v6M20 4l-9 9M18 14v6H4V6h6",
+  bulb: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z",
+  keyboard: `M2 6h20v12H2z${[6, 10, 14, 18].map((x) => circle(x, 10, 0.5)).join("")}M7 14h10`,
+  status: `${circle(12, 12, 9)}M12 12V3M12 12h9`,
+  size: "M3 8h18v8H3zM7 8v3M11 8v4M15 8v3M19 8v4",
+  list: `M9 6h11M9 12h11M9 18h11${circle(4.5, 6)}${circle(4.5, 12)}${circle(4.5, 18)}`,
+  columns: "M3 4h18v16H3zM9 4v16M15 4v16",
+  timeline: "M3 6h10M7 12h12M5 18h8",
+  signpost: "M12 2v20M5 5h12l3 3-3 3H5zM8 21h8",
+  mail: "M3 5h18v14H3zM3 6l9 7 9-7",
+  "sign-out": "M10 4H4v16h6M15 8l4 4-4 4M19 12H9",
+  chart: "M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3",
+  shield: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z",
+};
+
 const scales = { sm: 1.5, md: 2, lg: 3, xl: 5 };
 
+/**
+ * One icon. Both drawings are in the page and Appearance picks which one shows (see globals.css), so the choice
+ * applies before anything paints. `set` draws only one of them, for showing the choice itself
+ */
 export function Icon({
   name,
   size = "md",
   label,
   className,
+  set,
 }: {
   name: IconName;
   size?: keyof typeof scales;
   label?: string;
   className?: string;
+  set?: "pixel" | "line";
 }) {
   const px = 9 * scales[size];
+  const line = set === "pixel" ? undefined : lines[name];
+  const pixel = set !== "line" || !line;
   return (
     <svg
       viewBox="0 0 9 9"
@@ -751,7 +834,10 @@ export function Icon({
       className={cn("pixel shrink-0 fill-current", className)}
       style={pixelBox(9, 9, scales[size])}
     >
-      <path d={paths[name]} />
+      {pixel ? <path d={paths[name]} className={line && !set ? "icon-px" : undefined} /> : null}
+      {line ? (
+        <path d={line} transform="scale(0.375)" strokeWidth={2} className={set ? "icon-line icon-shown" : "icon-line"} />
+      ) : null}
     </svg>
   );
 }

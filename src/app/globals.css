@@ -236,6 +236,23 @@ html:root[data-contrast="more"][data-theme="dark"] {
   --font-geist-sans: var(--font-geist-mono), ui-monospace, monospace;
 }
 
+/* Line icons, in place of the pixel ones. Both drawings are in each icon and this picks which shows */
+.icon-line {
+  display: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  shape-rendering: geometricPrecision;
+}
+.icon-line.icon-shown,
+:root[data-icons="line"] .icon-line {
+  display: inline;
+}
+:root[data-icons="line"] .icon-px {
+  display: none;
+}
+
 :root[data-motion="reduced"] *,
 :root[data-motion="reduced"] *::before,
 :root[data-motion="reduced"] *::after {

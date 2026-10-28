@@ -1,5 +1,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { pageFrom, type BoardState, type Label, type Project, type StatusCategory, type Task } from "./board-store";
+import {
+  pageFrom,
+  type BoardState,
+  type CustomField,
+  type Label,
+  type Project,
+  type StatusCategory,
+  type StatusNames,
+  type Task,
+} from "./board-store";
 import { fromRow, taskKey, type SuggestionRow, type TaskRow } from "./board-sync";
 
 // Reading a board, shared by the server (first page load) and the browser (boards it fetches ahead of a click)
@@ -27,14 +36,18 @@ export type NestedBoard = {
   next_number: number;
   labels: Label[] | null;
   projects: Project[] | null;
+  // Missing until the custom fields migration runs
+  fields?: CustomField[] | null;
+  status_names?: StatusNames | null;
   roadmap_public: boolean;
   page: object;
   tasks: NestedTask[];
   suggestions: (SuggestionRow & { suggestion_votes: { voter: string }[] })[];
 };
 
+// The board's own columns are read whole, so ones a migration adds later don't stop it loading before then
 export const boardColumns =
-  "id, slug, name, prefix, next_number, labels, projects, roadmap_public, page, " +
+  "*, " +
   "tasks(*, comments(*), activity(id, actor, text, created_at, via), task_votes(voter)), " +
   "suggestions(*, suggestion_votes(voter))";
 

@@ -254,8 +254,8 @@ export function AgentKeys({ keys, workspaces }: { keys: AgentKey[]; workspaces: 
   return (
     <div>
       <p className="max-w-md text-sm text-ink-2">
-        Let AI agents like Claude Code, Codex and Cursor read and update your boards over MCP. A key acts as you, so it
-        only reaches workspaces you’re in.
+        Let AI agents like Claude Code, Codex and Cursor read and update your boards over MCP, and scripts and other
+        tools over the HTTP API at /api/v1. A key acts as you, so it only reaches workspaces you’re in.
       </p>
       {keys.length ? (
         <ul className="mt-5 flex flex-col border border-line">

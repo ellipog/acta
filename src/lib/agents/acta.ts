@@ -5,11 +5,15 @@ import {
   pageFrom,
   priorities,
   statusTitle,
+  type CustomField,
+  type CustomValue,
+  type FieldType,
   type Label,
   type Priority,
   type Project,
   type Size,
   type StatusCategory,
+  type StatusNames,
   type Subtask,
   type Tone,
 } from "@/lib/board-store";
@@ -39,6 +43,9 @@ type BoardRow = {
   projects: Project[] | null;
   roadmap_public: boolean;
   page: Record<string, unknown>;
+  // Missing until the custom fields migration has run
+  fields?: CustomField[] | null;
+  status_names?: StatusNames | null;
 };
 export type Board = BoardRow & { workspace: Place; ref: string };
 
@@ -62,6 +69,7 @@ type TaskRow = {
   updated_at: string;
   deleted_at: string | null;
   archived_at?: string | null;
+  custom?: Record<string, CustomValue> | null;
 };
 
 export type TaskInput = {
@@ -76,6 +84,8 @@ export type TaskInput = {
   start?: string | null;
   due?: string | null;
   public?: boolean;
+  // The board's own fields, by name. null clears one
+  fields?: Record<string, string | number | string[] | null>;
 };
 
 // A comment, possibly brought over from elsewhere with who wrote it there and when
@@ -117,7 +127,6 @@ export type Filters = {
 // Enough of a board to name its tasks
 type Spot = { prefix: string; ref: string };
 
-const boardFields = "id, workspace_id, slug, name, prefix, next_number, labels, projects, roadmap_public, page";
 const listFields =
   "number, title, status, priority, size, project, labels, start_on, due_on, assignee, subtasks, public, shipped_on, vote_count, created_at, updated_at, deleted_at";
 
@@ -147,6 +156,62 @@ async function archiveReady(db: ReturnType<typeof agentDb>) {
   const { error } = await db.from("tasks").select("archived_at").limit(1);
   archive = { ok: !error, at: Date.now() };
   return archive.ok;
+}
+
+// The same for the boards' own fields
+let custom: { ok: boolean; at: number } | null = null;
+async function customReady(db: ReturnType<typeof agentDb>) {
+  if (custom && (custom.ok || Date.now() - custom.at < 60_000)) return custom.ok;
+  const { error } = await db.from("tasks").select("custom").limit(1);
+  custom = { ok: !error, at: Date.now() };
+  return custom.ok;
+}
+
+// A task's own field values as an agent sees them, by field name
+function customOut(b: BoardRow, t: TaskRow) {
+  const out: Record<string, CustomValue> = {};
+  for (const f of b.fields ?? []) {
+    const v = t.custom?.[f.id];
+    if (v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && !v.length)) out[f.name] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+// Field values an agent sent by name, checked against the board and merged into what the task holds
+function customIn(b: BoardRow, current: Record<string, CustomValue>, input: TaskInput["fields"]) {
+  const next = { ...current };
+  const notes: string[] = [];
+  for (const [name, raw] of Object.entries(input ?? {})) {
+    const f = (b.fields ?? []).find((x) => same(x.name, name));
+    if (!f)
+      throw new Problem(
+        `This board has no field “${name}”. Its fields: ${(b.fields ?? []).map((x) => `“${x.name}”`).join(", ") || "none"}.`,
+      );
+    let value: CustomValue | undefined;
+    if (raw === null || raw === "" || (Array.isArray(raw) && !raw.length)) value = undefined;
+    else if (f.type === "number") {
+      const n = typeof raw === "number" ? raw : Number(raw);
+      if (!Number.isFinite(n)) throw new Problem(`${f.name} takes a number.`);
+      value = n;
+    } else if (f.type === "date") value = day(String(raw), f.name) ?? undefined;
+    else if (f.type === "select" || f.type === "multi") {
+      const pick = (v: string) => {
+        const hit = (f.options ?? []).find((o) => same(o, v));
+        if (!hit)
+          throw new Problem(`${f.name} can be ${(f.options ?? []).map((o) => `“${o}”`).join(", ")}, not “${v}”.`);
+        return hit;
+      };
+      const list = Array.isArray(raw) ? raw.map(String) : [String(raw)];
+      if (f.type === "select" && list.length > 1) throw new Problem(`${f.name} takes one value.`);
+      value = f.type === "select" ? pick(list[0]) : [...new Set(list.map(pick))];
+    } else value = String(Array.isArray(raw) ? raw.join(", ") : raw).slice(0, 1000);
+    if (JSON.stringify(value) === JSON.stringify(next[f.id])) continue;
+    if (value === undefined) delete next[f.id];
+    else next[f.id] = value;
+    const shown = Array.isArray(value) ? value.join(", ") : f.type === "date" ? formatDue(String(value)) : value;
+    notes.push(value === undefined ? `cleared ${f.name}` : `set ${f.name} to ${shown}`);
+  }
+  return { next, notes };
 }
 
 // A date or a time that has passed, for work brought over from elsewhere. A bare date counts as midday UTC,
@@ -207,7 +272,10 @@ function dbProblem(error: { code?: string; message: string }) {
 export function actaFor(agent: Agent) {
   const db = agentDb();
   const can = (need: Access) => accessRank[agent.access] >= accessRank[need];
-  const fields = async () => ((await archiveReady(db)) ? `${listFields}, archived_at` : listFields);
+  const fields = async () => {
+    const [archived, own] = await Promise.all([archiveReady(db), customReady(db)]);
+    return `${listFields}${archived ? ", archived_at" : ""}${own ? ", custom" : ""}`;
+  };
 
   let places: Promise<Place[]> | null = null;
   const workspaces = () =>
@@ -265,7 +333,8 @@ export function actaFor(agent: Agent) {
     const ws = await place(where.workspace);
     const { data } = await db
       .from("boards")
-      .select(boardFields)
+      // Whole, since the newer columns only exist once their migration has run
+      .select("*")
       .eq("workspace_id", ws.id)
       .eq("slug", where.board)
       .maybeSingle();
@@ -425,6 +494,7 @@ export function actaFor(agent: Agent) {
     ]);
     return {
       ...summary(b, t, who),
+      fields: customOut(b, t),
       url: taskUrl(b, t.number),
       description: t.description || undefined,
       subtasks: t.subtasks.length ? t.subtasks.map((s) => ({ id: s.id, title: s.title, done: s.done })) : undefined,
@@ -544,6 +614,10 @@ export function actaFor(agent: Agent) {
         archived_tasks: archived || undefined,
         labels: (b.labels ?? []).map((l) => l.id),
         projects: (b.projects ?? []).map((p) => p.name),
+        fields: b.fields?.length
+          ? b.fields.map((f) => compact({ name: f.name, type: f.type, options: f.options }))
+          : undefined,
+        status_names: b.status_names && Object.keys(b.status_names).length ? b.status_names : undefined,
         people: list.map((p) => compact({ name: p.name, role: p.role, you: p.id === agent.userId || undefined })),
         roadmap: compact({
           public: b.roadmap_public,
@@ -632,6 +706,7 @@ export function actaFor(agent: Agent) {
           description: t.description ?? "",
           subtasks: (t.subtasks ?? []).map((s) => ({ id: `s${randomUUID().slice(0, 8)}`, title: s, done: false })),
           public: t.public ?? newPublic,
+          ...(t.fields ? { custom: customIn(b, {}, t.fields).next } : {}),
           shipped_on: status === "done" ? (day(t.shipped, "shipped") ?? today()) : null,
           position,
           created_at: at,
@@ -713,6 +788,13 @@ export function actaFor(agent: Agent) {
       if (p.public !== undefined && p.public !== t.public) {
         fields.public = p.public;
         notes.push(p.public ? "added it to the public roadmap" : "took it off the public roadmap");
+      }
+      if (p.fields) {
+        const own = customIn(b, t.custom ?? {}, p.fields);
+        if (own.notes.length) {
+          fields.custom = own.next;
+          notes.push(...own.notes);
+        }
       }
       if (p.archived !== undefined && p.archived !== Boolean(t.archived_at)) {
         if (!(await archiveReady(db)))
@@ -948,7 +1030,6 @@ export function actaFor(agent: Agent) {
             origin: t.origin,
           },
         ],
-        activity: [{ id: randomUUID(), number: t.number, text: "restored the task" }],
       });
       return { restored: taskId(b, t.number), title: t.title, status: t.status, url: taskUrl(b, t.number) };
     },
@@ -1028,8 +1109,36 @@ export function actaFor(agent: Agent) {
       return { deleted: taskId(b, t.number), title: t.title };
     },
 
-    async suggestions(ref: string) {
+    async suggestions(ref: string, declined = false) {
       const b = await board(ref);
+      if (declined) {
+        const [{ data, error }, who] = await Promise.all([
+          db
+            .from("declined_suggestions")
+            .select("id, title, details, by_name, votes, created_at, declined_at, declined_by, via")
+            .eq("board_id", b.id)
+            .order("declined_at", { ascending: false })
+            .limit(100),
+          nameOf(b.workspace_id),
+        ]);
+        if (error) throw dbProblem(error);
+        return {
+          board: b.ref,
+          declined: (data ?? []).map((s) =>
+            compact({
+              id: s.id,
+              title: s.title,
+              details: s.details,
+              by: s.by_name,
+              votes: s.votes,
+              at: s.created_at,
+              declined_at: s.declined_at,
+              declined_by: who(s.declined_by),
+              via: s.via,
+            }),
+          ),
+        };
+      }
       const { data } = await db
         .from("suggestions")
         .select("id, title, details, by_name, vote_count, created_at")
@@ -1111,6 +1220,10 @@ export function actaFor(agent: Agent) {
         add_projects?: { name: string; tone?: Tone | "ink" }[];
         update_projects?: { project: string; name?: string; tone?: Tone | "ink" }[];
         remove_projects?: string[];
+        add_fields?: { name: string; type: FieldType; options?: string[] }[];
+        update_fields?: { field: string; name?: string; options?: string[] }[];
+        remove_fields?: string[];
+        status_names?: Partial<Record<StatusCategory, string | null>>;
       },
     ) {
       const b = await board(ref);
@@ -1157,6 +1270,50 @@ export function actaFor(agent: Agent) {
       const nextProjects = projects.filter((x) => !goneProjects.includes(x.name)).slice(0, 30);
       if (JSON.stringify(nextProjects) !== JSON.stringify(b.projects ?? [])) fields.projects = nextProjects;
 
+      // The board's own fields, which agents name rather than point at by id
+      const wantsFields = p.add_fields?.length || p.update_fields?.length || p.remove_fields?.length;
+      if ((wantsFields || p.status_names) && b.fields === undefined)
+        throw new Problem(
+          "Fields and status names need the latest database migration. Ask the person who runs Acta to apply it.",
+        );
+      const own = [...(b.fields ?? [])];
+      const options = (list?: string[]) =>
+        [...new Set((list ?? []).map((o) => o.trim().slice(0, 40)).filter(Boolean))].slice(0, 50);
+      const findField = (name: string) => {
+        const i = own.findIndex((f) => same(f.name, name));
+        if (i === -1)
+          throw new Problem(
+            `${b.ref} has no field “${name}”. Its fields: ${own.map((f) => `“${f.name}”`).join(", ") || "none"}.`,
+          );
+        return i;
+      };
+      for (const f of p.add_fields ?? []) {
+        const name = f.name.trim().slice(0, 40);
+        if (!name) continue;
+        if (own.some((x) => same(x.name, name))) throw new Problem(`${b.ref} already has a field “${name}”.`);
+        const choices = f.type === "select" || f.type === "multi";
+        if (choices && !options(f.options).length) throw new Problem(`${name} needs options to choose from.`);
+        own.push({ id: randomUUID().slice(0, 8), name, type: f.type, ...(choices ? { options: options(f.options) } : {}) });
+      }
+      for (const u of p.update_fields ?? []) {
+        const i = findField(u.field);
+        const name = u.name?.trim().slice(0, 40) || own[i].name;
+        if (own.some((x, j) => j !== i && same(x.name, name))) throw new Problem(`${b.ref} already has a field “${name}”.`);
+        own[i] = { ...own[i], name, ...(u.options && own[i].options ? { options: options(u.options) } : {}) };
+      }
+      for (const name of p.remove_fields ?? []) own.splice(findField(name), 1);
+      if (JSON.stringify(own) !== JSON.stringify(b.fields ?? [])) fields.fields = own.slice(0, 30);
+
+      if (p.status_names) {
+        const names: StatusNames = { ...(b.status_names ?? {}) };
+        for (const [status, name] of Object.entries(p.status_names) as [StatusCategory, string | null][]) {
+          const clean = name?.trim().slice(0, 30);
+          if (clean) names[status] = clean;
+          else delete names[status];
+        }
+        if (JSON.stringify(names) !== JSON.stringify(b.status_names ?? {})) fields.status_names = names;
+      }
+
       if (Object.keys(fields).length) {
         const { error } = await db.rpc("agent_board", {
           p_key: agent.hash,
@@ -1190,6 +1347,8 @@ export function actaFor(agent: Agent) {
         name: (fields.name as string) ?? b.name,
         labels: nextLabels.map((l) => ({ name: l.id, tone: l.tone })),
         projects: nextProjects.map((x) => ({ name: x.name, tone: x.tone })),
+        fields: own.length ? own.map((f) => compact({ name: f.name, type: f.type, options: f.options })) : undefined,
+        status_names: (fields.status_names as StatusNames | undefined) ?? (b.status_names || undefined),
         tasks_updated: retagged || undefined,
       });
     },

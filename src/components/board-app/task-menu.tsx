@@ -149,6 +149,17 @@ export function TaskMenu({
           </ContextMenuSubContent>
         </ContextMenuSub>
 
+        <ContextMenuItem
+          onSelect={() =>
+            update(
+              { public: !task.public },
+              task.public ? "took it off the public roadmap" : "added it to the public roadmap",
+            )
+          }
+        >
+          <Icon name="globe" /> {task.public ? "Take off the roadmap" : "Add to the roadmap"}
+        </ContextMenuItem>
+
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => navigator.clipboard?.writeText(task.id).catch(() => {})}>
           <Icon name="copy" /> Copy ID

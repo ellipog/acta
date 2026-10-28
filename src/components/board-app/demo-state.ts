@@ -7,6 +7,8 @@ export type Demo = {
   board: BoardState;
   prefs: Prefs;
   restored: boolean;
+  // The prefs as last read back from storage, so they aren't saved again as though someone had changed them
+  synced?: Prefs;
   past: Step[];
   future: Step[];
 };
@@ -69,7 +71,8 @@ export function describe(action: BoardAction, board: BoardState): string {
 
 function mergePrefs(saved: Partial<Prefs> | null, base: Prefs): Prefs {
   if (!saved) return base;
-  const known = (saved.columns ?? []).filter((c) => c.id in columnMeta);
+  // A board's own fields keep their columns. Whether the field still exists is the table's to decide
+  const known = (saved.columns ?? []).filter((c) => c.id in columnMeta || c.id.startsWith("f:"));
   const missing = defaultColumns.filter((d) => !known.some((c) => c.id === d.id));
   return {
     ...base,
@@ -88,13 +91,16 @@ export function initDemo(board: BoardState, prefs: Partial<Prefs> = {}): Demo {
 
 export function demoReducer(demo: Demo, action: DemoAction): Demo {
   switch (action.type) {
-    case "restore":
+    case "restore": {
+      const prefs = mergePrefs(action.prefs, demo.prefs);
       return {
         ...demo,
         board: action.board ? normalizeBoard(action.board) : demo.board,
-        prefs: mergePrefs(action.prefs, demo.prefs),
+        prefs,
+        synced: prefs,
         restored: true,
       };
+    }
     case "prefs":
       return { ...demo, prefs: { ...demo.prefs, ...action.patch } };
     case "checkpoint":

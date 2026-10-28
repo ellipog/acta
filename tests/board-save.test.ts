@@ -207,6 +207,7 @@ describe("every edit reaches the database", () => {
       shipped: "2026-11-09",
       archived: "2026-11-10T00:00:00.000Z",
       origin: "44444444-4444-4444-8444-444444444444",
+      custom: { f1: "Text", f2: 3, f3: ["A", "B"] },
     } satisfies Required<Task>;
     // Comments, activity and votes have tables of their own, and the id and origin are fixed when it's made
     const elsewhere = ["id", "comments", "thread", "activity", "votes", "voted", "origin"];
@@ -345,6 +346,15 @@ describe("limits", () => {
     expect(out.labels).toHaveLength(limits.labels);
     expect(out.project).toHaveLength(limits.project);
     expect(new TextEncoder().encode(JSON.stringify(out.subtasks)).length).toBeLessThanOrEqual(limits.subtaskBytes);
+  });
+
+  test("a task's own field values stay inside what the database allows", async () => {
+    const custom = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`f${i}`, "z".repeat(1000)]));
+    const out = fitTask({ custom });
+    expect(new TextEncoder().encode(JSON.stringify(out.custom)).length).toBeLessThanOrEqual(limits.customBytes);
+    expect(out.custom?.f0).toBe(custom.f0);
+    const base = await seeded();
+    await saves(base, run(base, { type: "update", id: "ACT-1", patch: { custom: { f0: "Acme", f1: 3, f2: ["a", "b"] } } }));
   });
 
   test("an empty comment or idea isn't made at all", async () => {

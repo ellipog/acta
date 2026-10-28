@@ -1,4 +1,4 @@
-import type { BoardMeta, BoardState, Label, Person, Project, Tone } from "./board-store";
+import type { BoardMeta, BoardState, CustomField, Label, Person, Project, StatusNames, Tone } from "./board-store";
 import type { DitherName } from "./dither-assets";
 
 export type Role = "owner" | "admin" | "member" | "viewer";
@@ -61,7 +61,16 @@ export type LiveBoard = {
   workspaces: WorkspaceSummary[];
   boards: BoardSummary[];
   members: Member[];
-  board: { id: string; slug: string; name: string; prefix: string; labels: Label[]; projects: Project[] };
+  board: {
+    id: string;
+    slug: string;
+    name: string;
+    prefix: string;
+    labels: Label[];
+    projects: Project[];
+    fields: CustomField[];
+    statusNames: StatusNames;
+  };
   state: BoardState;
   // When the server read the board, so the browser only asks for what changed after it
   at: number;
@@ -99,6 +108,8 @@ export function metaFor(live: LiveBoard): BoardMeta {
     people,
     labels: live.board.labels,
     projects: live.board.projects,
+    fields: live.board.fields,
+    statusNames: live.board.statusNames,
     workspace: live.workspace.slug,
     team: live.workspace.name,
     prefix: live.board.prefix,

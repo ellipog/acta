@@ -22,7 +22,7 @@ import { Checkbox } from "@/components/ui/controls";
 import { Icon } from "@/components/ui/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { columnMeta, defaultColumns, type ColumnPref, type Prefs } from "./fields";
+import { defaultColumns, metaOf, withFieldColumns, type ColumnPref, type Prefs } from "./fields";
 
 export function FieldsMenu({
   prefs,
@@ -40,9 +40,10 @@ export function FieldsMenu({
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
-  const title = prefs.columns.find((c) => c.id === "title")!;
-  const rest = prefs.columns.filter((c) => c.id !== "title");
-  const shown = prefs.columns.filter((c) => !c.hidden).length;
+  const columns = withFieldColumns(prefs.columns);
+  const title = columns.find((c) => c.id === "title")!;
+  const rest = columns.filter((c) => c.id !== "title");
+  const shown = columns.filter((c) => !c.hidden).length;
 
   const onDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
@@ -51,7 +52,7 @@ export function FieldsMenu({
   };
 
   const toggle = (id: string) =>
-    setPrefs({ columns: prefs.columns.map((c) => (c.id === id ? { ...c, hidden: !c.hidden } : c)) });
+    setPrefs({ columns: columns.map((c) => (c.id === id ? { ...c, hidden: !c.hidden } : c)) });
 
   return (
     <Popover>
@@ -60,7 +61,7 @@ export function FieldsMenu({
         <div className="flex items-center justify-between border-b border-line px-3 py-2.5">
           <span className="text-sm font-medium">Fields</span>
           <span className="font-mono text-[11px] text-ink-3">
-            {shown} of {prefs.columns.length} shown
+            {shown} of {columns.length} shown
           </span>
         </div>
         <div className="p-1">
@@ -83,7 +84,7 @@ export function FieldsMenu({
         </div>
         <div className="flex items-center justify-between border-t border-line px-3 py-2 text-[11px] text-ink-3">
           <span>Drag to reorder</span>
-          <button onClick={() => setPrefs({ columns: defaultColumns })} className="hover:text-ink">
+          <button onClick={() => setPrefs({ columns: withFieldColumns(defaultColumns) })} className="hover:text-ink">
             Reset
           </button>
         </div>
@@ -94,7 +95,7 @@ export function FieldsMenu({
 
 function FieldRow({ col, onToggle }: { col: ColumnPref; onToggle: () => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: col.id });
-  const meta = columnMeta[col.id];
+  const meta = metaOf(col.id);
   return (
     <div
       ref={setNodeRef}

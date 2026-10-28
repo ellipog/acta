@@ -2,6 +2,7 @@ import type {
   Activity,
   BoardState,
   Comment,
+  CustomValue,
   Priority,
   PublicPage,
   Size,
@@ -29,6 +30,8 @@ export type TaskRow = {
   shipped_on: string | null;
   // Missing until the archive migration runs
   archived_at?: string | null;
+  // Missing until the custom fields migration runs
+  custom?: Record<string, CustomValue> | null;
   vote_count: number;
   position: number;
   origin: string | null;
@@ -79,7 +82,8 @@ export type SyncedField =
   | "subtasks"
   | "public"
   | "shipped"
-  | "archived";
+  | "archived"
+  | "custom";
 
 // Every task field that's saved as a column of its own. A new field on Task belongs here unless it's kept some
 // other way, which tests/board-save.test.ts checks
@@ -98,6 +102,7 @@ export const syncedFields: SyncedField[] = [
   "public",
   "shipped",
   "archived",
+  "custom",
 ];
 
 const wireName: Record<SyncedField, string> = {
@@ -115,6 +120,7 @@ const wireName: Record<SyncedField, string> = {
   public: "public",
   shipped: "shipped_on",
   archived: "archived_at",
+  custom: "custom",
 };
 
 export const taskKey = (prefix: string, n: number) => `${prefix}-${n}`;
@@ -127,6 +133,7 @@ const isUuid = (id?: string) => !!id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 function wireValue(task: Task, f: SyncedField) {
   const v = task[f];
   if (f === "public") return Boolean(v);
+  if (f === "custom") return v ?? {};
   return v ?? null;
 }
 
@@ -146,6 +153,7 @@ export function fromRow(row: TaskRow): Pick<Task, SyncedField | "votes"> {
     public: row.public,
     shipped: row.shipped_on ?? undefined,
     archived: row.archived_at ?? undefined,
+    custom: row.custom && Object.keys(row.custom).length ? row.custom : undefined,
     votes: row.vote_count,
   };
 }
