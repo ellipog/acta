@@ -156,7 +156,7 @@ title, branch or a closing keyword to done. Each step can be turned off per repo
 repository's issues come over as tasks (only ones with a chosen label, if set), and their title, status and labels
 stay in step both ways, the later edit winning. Changes from GitHub are marked “via GitHub” and made as the member
 who linked that GitHub account under **Account**, or else as whoever connected GitHub. Linking accounts needs
-**Authentication → Manual linking** turned on in Supabase.
+**Allow manual linking** turned on in Supabase, under **Authentication → Sign In / Providers**.
 
 ## Deploying
 
