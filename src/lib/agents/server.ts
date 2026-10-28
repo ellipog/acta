@@ -1,6 +1,7 @@
 import "server-only";
 import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod";
+import { boardIcons } from "@/lib/board-icons";
 import { actaFor, Problem, sortKeys, taskStatuses } from "./acta";
 import type { Agent } from "./keys";
 
@@ -423,6 +424,7 @@ function addTools(server: Registrar, agent: Agent) {
         inputSchema: z.object({
           board,
           name: z.string().min(1).max(60).optional(),
+          icon: z.enum(boardIcons).optional().describe("The board's icon in the sidebar"),
           add_labels: z.array(z.object({ name: z.string().min(1).max(40), tone: tone.optional() })).optional(),
           update_labels: z
             .array(

@@ -43,7 +43,8 @@ export type WorkspaceSummary = {
   permissions?: Permissions;
 };
 // count is how many tasks the board holds and mine how many of them are yours and open, when they could be read
-export type BoardSummary = { id: string; slug: string; name: string; count?: number; mine?: number };
+// icon is missing until its migration has run, and the board editor only offers icons once it's there
+export type BoardSummary = { id: string; slug: string; name: string; icon?: string; count?: number; mine?: number };
 export type Member = {
   id: string;
   name: string;
@@ -70,6 +71,7 @@ export type LiveBoard = {
     projects: Project[];
     fields: CustomField[];
     statusNames: StatusNames;
+    icon?: string;
   };
   state: BoardState;
   // When the server read the board, so the browser only asks for what changed after it

@@ -7,6 +7,7 @@ import type { LiveBoard } from "./live";
 
 export type BoardEdit = {
   name?: string;
+  icon?: string;
   slug?: string;
   labels?: Label[];
   projects?: Project[];
@@ -92,7 +93,7 @@ export function withEdits(live: LiveBoard, all: Edits): LiveBoard {
       .filter((b) => !all.boards[b.id]?.gone)
       .map((b) => {
         const e = all.boards[b.id];
-        return e ? { ...b, name: e.name ?? b.name, slug: e.slug ?? b.slug } : b;
+        return e ? { ...b, name: e.name ?? b.name, slug: e.slug ?? b.slug, icon: e.icon ?? b.icon } : b;
       }),
     board: mine
       ? {
@@ -102,6 +103,7 @@ export function withEdits(live: LiveBoard, all: Edits): LiveBoard {
           projects: mine.projects ?? live.board.projects,
           fields: mine.fields ?? live.board.fields,
           statusNames: mine.statusNames ?? live.board.statusNames,
+          icon: mine.icon ?? live.board.icon,
         }
       : live.board,
   };
@@ -117,6 +119,7 @@ export function settleEdits(live: LiveBoard) {
       : listed &&
         same(e.name, listed.name) &&
         same(e.slug, listed.slug) &&
+        same(e.icon, listed.icon) &&
         (id !== live.board.id ||
           (same(e.labels, live.board.labels) &&
             same(e.projects, live.board.projects) &&

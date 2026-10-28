@@ -6,6 +6,7 @@ import { Dialog, DialogClose, DialogContent } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
 import type { BoardFields } from "@/lib/board-actions";
+import { boardIcon, boardIcons } from "@/lib/board-icons";
 import { Select } from "@/components/ui/select";
 import {
   defaultStatusTitle,
@@ -23,12 +24,14 @@ import { boardSlugProblem, siteHost, SLUG_MAX, slugify } from "@/lib/slugs";
 import { loadClient } from "@/lib/supabase/browser";
 import { cn } from "@/lib/utils";
 
-// A board's name, address, labels, projects, fields and status names, from the sidebar or the workspace settings
+// A board's name, icon, address, labels, projects, fields and status names, from the sidebar or the workspace
+// settings
 
 export type EditableBoard = {
   id: string;
   slug: string;
   name: string;
+  icon?: string;
   labels?: Label[];
   projects?: Project[];
   fields?: CustomField[];
@@ -74,6 +77,7 @@ export function BoardEditor({
   onSave: (change: BoardFields) => void;
 }) {
   const [name, setName] = useState(board.name);
+  const [icon, setIcon] = useState(boardIcon(board.icon));
   const [slug, setSlug] = useState(board.slug);
   const [labels, setLabels] = useState<Label[] | null>(board.labels ?? null);
   const [projects, setProjects] = useState<Project[] | null>(board.projects ?? null);
@@ -87,6 +91,7 @@ export function BoardEditor({
   if (open && !seen) {
     setSeen(true);
     setName(board.name);
+    setIcon(boardIcon(board.icon));
     setSlug(board.slug);
     setLabels(board.labels ?? null);
     setProjects(board.projects ?? null);
@@ -116,6 +121,7 @@ export function BoardEditor({
   const save = () => {
     const change: BoardFields = {};
     if (name.trim() !== board.name) change.name = name;
+    if (board.icon !== undefined && icon !== boardIcon(board.icon)) change.icon = icon;
     if (cleanSlug !== board.slug) change.slug = cleanSlug;
     if (labels && JSON.stringify(labels) !== JSON.stringify(board.labels)) change.labels = labels;
     if (projects && JSON.stringify(projects) !== JSON.stringify(board.projects)) change.projects = projects;
@@ -145,6 +151,33 @@ export function BoardEditor({
               </label>
               <Input id={`name-${board.id}`} value={name} onChange={(e) => setName(e.target.value)} maxLength={60} />
             </div>
+            {board.icon !== undefined ? (
+              <div className="flex flex-col gap-1.5">
+                <p id={`icon-${board.id}`} className="text-xs font-medium text-ink-2">
+                  Icon
+                </p>
+                <div role="radiogroup" aria-labelledby={`icon-${board.id}`} className="flex flex-wrap gap-1">
+                  {boardIcons.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      role="radio"
+                      aria-checked={icon === name}
+                      aria-label={name === "board" ? "Board, the usual icon" : name}
+                      onClick={() => setIcon(name)}
+                      className={cn(
+                        "grid size-9 place-items-center border outline-none focus-visible:ring-2 focus-visible:ring-lapis",
+                        icon === name
+                          ? "border-lapis bg-lapis-soft text-lapis-ink"
+                          : "border-line-strong bg-raised text-ink-2 hover:bg-sunken hover:text-ink",
+                      )}
+                    >
+                      <Icon name={name} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             <div className="flex flex-col gap-1.5">
               <label htmlFor={`slug-${board.id}`} className="text-xs font-medium text-ink-2">
                 Address

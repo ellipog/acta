@@ -35,7 +35,7 @@ async function Settings({ params }: { params: PageProps<"/[workspace]/settings">
     auth.supabase.from("workspace_links").select("token, workspaces!inner(slug)").eq("workspaces.slug", slug).maybeSingle(),
     auth.supabase
       .from("boards")
-      .select("id, slug, name, labels, projects, workspaces!inner(slug)")
+      .select("*, workspaces!inner(slug)")
       .eq("workspaces.slug", slug)
       .order("position")
       .order("created_at"),
@@ -58,6 +58,7 @@ async function Settings({ params }: { params: PageProps<"/[workspace]/settings">
             id: b.id,
             slug: b.slug,
             name: b.name,
+            icon: b.icon ?? undefined,
             labels: (b.labels ?? []) as Label[],
             projects: (b.projects ?? []) as Project[],
           }))}

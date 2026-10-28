@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Icon } from "@/components/ui/icons";
 import { inOrder, useBoardOrder } from "@/lib/account-prefs";
+import { boardIcon } from "@/lib/board-icons";
 import type { BoardSummary } from "@/lib/live";
 import { cn } from "@/lib/utils";
 
@@ -31,7 +32,7 @@ export function SkeletonBoards({
           b.slug === board ? "bg-lapis-soft text-lapis-ink" : "text-ink-2 hover:bg-sunken hover:text-ink",
         )}
       >
-        <Icon name="board" size="sm" />
+        <Icon name={boardIcon(b.icon)} size="sm" />
         <span className="truncate">{b.name}</span>
         {n !== undefined ? <span className="ml-auto font-mono text-[11px] text-ink-3">{n}</span> : null}
       </Link>

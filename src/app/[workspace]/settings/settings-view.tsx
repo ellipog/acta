@@ -36,6 +36,7 @@ import {
   type ActionResult,
 } from "@/lib/actions";
 import { removeBoard, saveBoard } from "@/lib/board-actions";
+import { boardIcon } from "@/lib/board-icons";
 import { useBoardEdits } from "@/lib/board-edits";
 import type { Label, Project, Tone } from "@/lib/board-store";
 import type { DitherName } from "@/lib/dither-assets";
@@ -58,7 +59,7 @@ import { siteHost, SLUG_MAX, slugify, slugProblem } from "@/lib/slugs";
 import { square } from "@/lib/square-image";
 import { cn } from "@/lib/utils";
 
-type BoardInfo = { id: string; slug: string; name: string; labels: Label[]; projects: Project[] };
+type BoardInfo = { id: string; slug: string; name: string; icon?: string; labels: Label[]; projects: Project[] };
 
 const roleHint: Record<Role, string> = {
   owner: "Everything, including deleting the workspace",
@@ -129,6 +130,7 @@ export function SettingsView({
       return {
         ...b,
         name: e.name ?? b.name,
+        icon: e.icon ?? b.icon,
         slug: e.slug ?? b.slug,
         labels: e.labels ?? b.labels,
         projects: e.projects ?? b.projects,
@@ -723,7 +725,7 @@ function BoardRow({
   return (
     <li className="flex items-center gap-3 py-3">
       <span className="grid size-8 place-items-center border border-line bg-raised text-ink-2">
-        <Icon name="board" size="sm" />
+        <Icon name={boardIcon(board.icon)} size="sm" />
       </span>
       <div className="min-w-0 flex-1">
         <Link href={`/${workspace.slug}/${board.slug}`} className="block truncate text-sm font-medium hover:text-lapis">

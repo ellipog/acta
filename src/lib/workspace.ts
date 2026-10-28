@@ -79,7 +79,7 @@ const getContents = cache(async (slug: string) => {
   const [{ data: boards }, { data: members }, counts, mine] = await Promise.all([
     auth.supabase
       .from("boards")
-      .select("id, slug, name, workspaces!inner(slug)")
+      .select("*, workspaces!inner(slug)")
       .eq("workspaces.slug", slug)
       .order("position")
       .order("created_at"),
@@ -105,7 +105,14 @@ const getContents = cache(async (slug: string) => {
   });
   return {
     boards: (boards ?? []).map(
-      (b): BoardSummary => ({ id: b.id, slug: b.slug, name: b.name, count: counts[b.id], mine: mine[b.id] }),
+      (b): BoardSummary => ({
+        id: b.id,
+        slug: b.slug,
+        name: b.name,
+        icon: b.icon ?? undefined,
+        count: counts[b.id],
+        mine: mine[b.id],
+      }),
     ),
     members: people,
   };
@@ -156,6 +163,7 @@ export const loadBoard = cache(async (workspaceSlug: string, boardSlug: string):
       projects: board.projects ?? [],
       fields: board.fields ?? [],
       statusNames: board.status_names ?? {},
+      icon: board.icon,
     },
     state: boardState(board, nameOf),
     at: Date.now(),

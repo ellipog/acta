@@ -98,6 +98,7 @@ export function useWorkspace(live: LiveBoard | undefined) {
               projects: nested.projects ?? [],
               fields: nested.fields ?? [],
               statusNames: nested.status_names ?? {},
+              icon: nested.icon,
             },
             state,
             at: started,

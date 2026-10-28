@@ -1,4 +1,5 @@
 import { toast } from "@/components/ui/toast";
+import { boardIcon } from "./board-icons";
 import { boardPath, forgetBoard, moveBoard, rememberBoard } from "./board-cache";
 import { doneAdding, dropEdit, editBoard, markSaved, startAdding } from "./board-edits";
 import { boardState, type NestedBoard } from "./board-load";
@@ -14,6 +15,7 @@ type Router = { push: (href: string) => void; replace: (href: string) => void; r
 
 export type BoardFields = {
   name?: string;
+  icon?: string;
   slug?: string;
   labels?: Label[];
   projects?: Project[];
@@ -63,6 +65,7 @@ export async function saveBoard(
 ) {
   const patch: {
     name?: string;
+    icon?: string;
     slug?: string;
     labels?: Label[];
     projects?: Project[];
@@ -80,6 +83,7 @@ export async function saveBoard(
     if (problem) return failed(`The address: ${problem.toLowerCase()}`, "Nothing was changed.");
     patch.slug = slug;
   }
+  if (change.icon) patch.icon = boardIcon(change.icon);
   if (change.labels) patch.labels = tidy(change.labels, "id");
   if (change.projects) patch.projects = tidy(change.projects, "name");
   if (change.fields) patch.fields = tidyFields(change.fields);
@@ -94,6 +98,7 @@ export async function saveBoard(
   // A new address only shows once it works, since links to it lead nowhere until then
   const v = editBoard(board.id, {
     name: patch.name,
+    icon: patch.icon,
     labels: patch.labels,
     projects: patch.projects,
     fields: patch.fields,
@@ -166,7 +171,7 @@ export async function addBoard(live: LiveBoard, name: string, router: Router) {
   rememberBoard(
     {
       ...live,
-      boards: [...live.boards, { id: made.id, slug: made.slug, name: made.name, count: 0 }],
+      boards: [...live.boards, { id: made.id, slug: made.slug, name: made.name, icon: made.icon, count: 0 }],
       board: {
         id: made.id,
         slug: made.slug,
@@ -176,6 +181,7 @@ export async function addBoard(live: LiveBoard, name: string, router: Router) {
         projects: made.projects ?? [],
         fields: made.fields ?? [],
         statusNames: made.status_names ?? {},
+        icon: made.icon,
       },
       state,
       at,

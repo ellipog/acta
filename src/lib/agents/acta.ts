@@ -46,6 +46,7 @@ type BoardRow = {
   // Missing until the custom fields migration has run
   fields?: CustomField[] | null;
   status_names?: StatusNames | null;
+  icon?: string;
 };
 export type Board = BoardRow & { workspace: Place; ref: string };
 
@@ -610,6 +611,7 @@ export function actaFor(agent: Agent) {
         workspace: b.workspace.name,
         url: boardUrl(b),
         task_prefix: b.prefix,
+        icon: b.icon,
         tasks_by_status: Object.fromEntries(counts),
         archived_tasks: archived || undefined,
         labels: (b.labels ?? []).map((l) => l.id),
@@ -1214,6 +1216,7 @@ export function actaFor(agent: Agent) {
       ref: string,
       p: {
         name?: string;
+        icon?: string;
         add_labels?: { name: string; tone?: Tone }[];
         update_labels?: { label: string; name?: string; tone?: Tone }[];
         remove_labels?: string[];
@@ -1229,6 +1232,11 @@ export function actaFor(agent: Agent) {
       const b = await board(ref);
       const fields: Record<string, unknown> = {};
       if (p.name?.trim() && p.name.trim() !== b.name) fields.name = p.name.trim().slice(0, 60);
+      if (p.icon && p.icon !== b.icon) {
+        if (b.icon === undefined)
+          throw new Problem("Board icons need the latest database migration. Ask the person who runs Acta to apply it.");
+        fields.icon = p.icon;
+      }
 
       const labels = [...(b.labels ?? [])];
       for (const l of p.add_labels ?? []) {
@@ -1345,6 +1353,7 @@ export function actaFor(agent: Agent) {
       return compact({
         board: b.ref,
         name: (fields.name as string) ?? b.name,
+        icon: (fields.icon as string | undefined) ?? b.icon,
         labels: nextLabels.map((l) => ({ name: l.id, tone: l.tone })),
         projects: nextProjects.map((x) => ({ name: x.name, tone: x.tone })),
         fields: own.length ? own.map((f) => compact({ name: f.name, type: f.type, options: f.options })) : undefined,

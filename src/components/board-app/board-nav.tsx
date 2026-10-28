@@ -32,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast";
 import { Tooltip } from "@/components/ui/tooltip";
 import { inOrder, setBoardOrder, useBoardOrder } from "@/lib/account-prefs";
+import { boardIcon } from "@/lib/board-icons";
 import { addBoard, removeBoard, saveBoard } from "@/lib/board-actions";
 import { boardPath, cachedBoard, useCounts } from "@/lib/board-cache";
 import { useBoardEdits } from "@/lib/board-edits";
@@ -178,6 +179,7 @@ export function BoardLinks({
       id: b.id,
       slug: b.slug,
       name: b.name,
+      icon: b.icon,
       labels: cached?.labels,
       projects: cached?.projects,
       fields: cached?.fields,
@@ -217,7 +219,7 @@ export function BoardLinks({
             const room = "group-focus-within/board:pr-8 group-hover/board:pr-8 group-has-data-[state=open]/board:pr-8";
             const inner = (
               <>
-                <Icon name="board" size="sm" />
+                <Icon name={boardIcon(b.icon)} size="sm" />
                 <span className="truncate">{b.name}</span>
                 {count !== undefined ? (
                   <span className="ml-auto font-mono text-[11px] text-ink-3 tabular-nums">{count}</span>

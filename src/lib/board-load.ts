@@ -39,6 +39,8 @@ export type NestedBoard = {
   // Missing until the custom fields migration runs
   fields?: CustomField[] | null;
   status_names?: StatusNames | null;
+  // Missing until the board icons migration runs
+  icon?: string;
   roadmap_public: boolean;
   page: object;
   tasks: NestedTask[];
