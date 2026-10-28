@@ -146,7 +146,7 @@ Developer settings → GitHub Apps** with:
 - **Callback URL** and **Setup URL**: `<your origin>/api/github/setup`, with **Request user authorization (OAuth)
   during installation** ticked, so Acta can check who installed it
 - **Webhook URL**: `<your origin>/api/github/webhook`, with a secret
-- **Repository permissions**: Contents, Metadata, Pull requests and Checks read-only, Issues read and write
+- **Repository permissions**: Checks, Contents and Metadata read-only, Issues and Pull requests read and write (write lets it comment on pull requests)
 - **Events**: Check suite, Create, Issue comment, Issues, Pull request, Pull request review and Push
 
 Owners and admins then connect it under **Workspace settings → GitHub** and link each repository to a board.
