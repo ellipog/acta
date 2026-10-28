@@ -1,5 +1,5 @@
 -- The owner's dashboard: how many people use Acta, how much they do, whether they come back, and what they use.
--- Everything is counted here and only totals leave the database. Admins only. By default the admins' own accounts
+-- Everything is counted here and only totals leave the database. Admins only. The admins' own accounts
 -- can be left out, so the owner's work on their own boards doesn't drown out everyone else's
 
 create function public.owner_report(
