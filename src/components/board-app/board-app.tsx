@@ -998,16 +998,7 @@ function Sidebar({
   // Archived tasks are put away, so they count for neither the board nor its progress
   const current = Object.values(state.tasks).filter((t) => !t.archived);
   const total = current.length;
-  // Canceled work isn't left to do, so it stays out of the progress. With done work hidden, the progress is how
-  // much of what's left is underway
-  const shown: StatusCategory = prefs.filters.hideDone ? "in_progress" : "done";
-  const count = current.filter((t) => t.status === shown).length;
-  const planned = prefs.filters.hideDone
-    ? current.filter((t) => !closed(t.status)).length
-    : total - current.filter((t) => t.status === "canceled").length;
-  // A board's own name for the status is kept as written. The usual ones read as part of the sentence
-  const word =
-    statusTitle[shown] === defaultStatusTitle[shown] ? statusTitle[shown].toLowerCase() : statusTitle[shown];
+  const progress = boardProgress(current, Boolean(prefs.filters.hideDone));
   const mine = current.filter((t) => t.assignee === me.id && !closed(t.status)).length;
   // On a real workspace My tasks is its own page. The demo has one board, so there it filters
   const onlyMine = !live && prefs.filters.assignee?.length === 1 && prefs.filters.assignee[0] === me.id;
@@ -1085,22 +1076,10 @@ function Sidebar({
       </nav>
 
       <div className="shrink-0 border-t border-line p-3">
-        <p className="font-mono text-[11px] text-ink-3">
-          {count} of {planned} {word}
-        </p>
-        <div className="mt-1.5 flex h-1.5 gap-px">
-          {Array.from({ length: 24 }, (_, i) => (
-            <span
-              key={i}
-              className={cn(
-                "flex-1",
-                i < Math.round((count / Math.max(1, planned)) * 24)
-                  ? shown === "done"
-                    ? "bg-malachite"
-                    : "bg-pyrite"
-                  : "bg-line",
-              )}
-            />
+        <p className="truncate font-mono text-[11px] text-ink-3">{progress.text}</p>
+        <div className="mt-1.5 flex h-1.5 gap-px" aria-hidden>
+          {progress.cells.map((tone, i) => (
+            <span key={i} className={cn("flex-1", tone)} />
           ))}
         </div>
         {live ? (
@@ -1310,4 +1289,51 @@ function Shortcuts({ open, onOpenChange }: { open: boolean; onOpenChange: (o: bo
       </DialogContent>
     </D.Root>
   );
+}
+
+// The sidebar's progress. Normally how much of the planned work is done. With done work hidden, how much of what's
+// left is underway, in review then in progress, in the colours their columns use. Canceled work isn't left to do,
+// so it counts for neither
+function boardProgress(tasks: Task[], hideDone: boolean) {
+  const cells = (parts: [number, string][], of: number) => {
+    const out: string[] = [];
+    let at = 0;
+    for (const [n, tone] of parts) {
+      const end = Math.round(((at += n) / Math.max(1, of)) * 24);
+      while (out.length < end) out.push(tone);
+    }
+    while (out.length < 24) out.push("bg-line");
+    return out;
+  };
+  // A board's own name for a status is kept as written. The usual ones read as part of the sentence
+  const word = (s: StatusCategory) =>
+    statusTitle[s] === defaultStatusTitle[s] ? statusTitle[s].toLowerCase() : statusTitle[s];
+  const count = (s: StatusCategory) => tasks.filter((t) => t.status === s).length;
+
+  if (!hideDone) {
+    const done = count("done");
+    const planned = tasks.length - count("canceled");
+    return { text: `${done} of ${planned} ${word("done")}`, cells: cells([[done, "bg-malachite"]], planned) };
+  }
+  const open = tasks.filter((t) => !closed(t.status)).length;
+  const review = count("review");
+  const doing = count("in_progress");
+  const underway = review + doing;
+  const text = !open
+    ? "Nothing left to do"
+    : !underway
+      ? `${open} to do, none started yet`
+      : underway === open
+        ? `All ${open} underway${review ? `, ${review} ${word("review")}` : ""}`
+        : `${underway} of ${open} underway${review ? `, ${review} ${word("review")}` : ""}`;
+  return {
+    text,
+    cells: cells(
+      [
+        [review, "bg-lapis"],
+        [doing, "bg-pyrite"],
+      ],
+      open,
+    ),
+  };
 }
