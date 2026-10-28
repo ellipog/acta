@@ -272,15 +272,17 @@ export function AppearancePanel({ open, onOpenChange }: { open: boolean; onOpenC
                 onValueChange={(icons) => setAppearance({ icons })}
                 options={(
                   [
-                    ["pixel", "Pixel"],
                     ["line", "Line"],
+                    ["pixel", "Pixel"],
                   ] as const
                 ).map(([value, label]) => ({
                   value,
                   label: (
-                    <span className="flex items-center gap-1.5">
-                      <Icon name="board" size="sm" set={value} />
-                      <Icon name="calendar" size="sm" set={value} />
+                    <span className="flex items-center justify-center gap-2 px-2">
+                      <span className="flex items-center gap-1">
+                        <Icon name="board" size="sm" set={value} />
+                        <Icon name="calendar" size="sm" set={value} />
+                      </span>
                       {label}
                     </span>
                   ),

@@ -12,8 +12,8 @@ export type Appearance = {
   contrast: "normal" | "more";
   size: "sm" | "md" | "lg" | "xl";
   font: "geist" | "system" | "mono";
-  // Pixel art, or plain lines
-  icons: "pixel" | "line";
+  // Plain lines, or pixel art
+  icons: "line" | "pixel";
   motion: "full" | "reduced";
 };
 
@@ -24,7 +24,7 @@ export const defaultAppearance: Appearance = {
   contrast: "normal",
   size: "md",
   font: "geist",
-  icons: "pixel",
+  icons: "line",
   motion: "full",
 };
 

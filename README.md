@@ -28,7 +28,7 @@
 | **Settings that follow you** | Put your boards in your own order, and each board keeps your view, columns, sorting and saved filters on every device you sign in on, without waiting on the network. |
 | **My tasks** | Everything assigned to you, from every board in the workspace, in one place. |
 | **Public roadmaps** | Publish any board as a roadmap page. Visitors can vote and send ideas, and you choose which tasks show and how the page looks: its theme, colour, header, links, announcement and the order of its sections. |
-| **Appearance** | Light, dark or your system's mode, an accent of your own, warmer or cooler surfaces, more contrast, larger text, pixel or line icons and less motion. |
+| **Appearance** | Light, dark or your system's mode, an accent of your own, warmer or cooler surfaces, more contrast, larger text, line or pixel icons and less motion. |
 | **Agents and API** | An MCP server lets Claude Code, Cursor and other agents read and work on your boards with keys you control, and an HTTP API lets scripts and other tools do the same. |
 
 Built with Next.js 16 (App Router, Cache Components), React 19, Tailwind CSS 4 and Supabase (auth, Postgres,

@@ -236,21 +236,21 @@ html:root[data-contrast="more"][data-theme="dark"] {
   --font-geist-sans: var(--font-geist-mono), ui-monospace, monospace;
 }
 
-/* Line icons, in place of the pixel ones. Both drawings are in each icon and this picks which shows */
+/* Line icons, or the pixel ones. Both drawings are in each icon and this picks which shows. An icon drawn in one
+   set on purpose, like the previews in Appearance, shows whichever is picked */
 .icon-line {
-  display: none;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
   shape-rendering: geometricPrecision;
 }
-.icon-line.icon-shown,
-:root[data-icons="line"] .icon-line {
-  display: inline;
-}
-:root[data-icons="line"] .icon-px {
+.icon-px,
+:root[data-icons="pixel"] .icon-line:not(.icon-shown) {
   display: none;
+}
+:root[data-icons="pixel"] .icon-px {
+  display: inline;
 }
 
 :root[data-motion="reduced"] *,
