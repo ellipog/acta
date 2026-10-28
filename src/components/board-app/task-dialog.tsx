@@ -32,6 +32,8 @@ import {
 import { cn } from "@/lib/utils";
 import { CustomFieldInput } from "./custom-fields";
 import { fieldOptions, noteFor, patchFor, valueOf, type GroupField } from "./fields";
+import { githubOn, TaskLinks } from "./task-links";
+import { branchName } from "@/lib/github/match";
 
 export function TaskDialog({
   task,
@@ -164,6 +166,21 @@ function TaskBody({
                 </Tooltip>
                 <span className="mx-1 h-4 w-px bg-line" />
               </>
+            ) : null}
+            {githubOn && me.live ? (
+              <Tooltip content="Copy branch name">
+                <button
+                  aria-label="Copy branch name"
+                  onClick={() => {
+                    const name = branchName(task.id, task.title);
+                    navigator.clipboard?.writeText(name).catch(() => {});
+                    toast({ icon: "copy", title: "Branch name copied", description: name, duration: 1800 });
+                  }}
+                  className={nav}
+                >
+                  <Icon name="signpost" size="sm" />
+                </button>
+              </Tooltip>
             ) : null}
             <Tooltip content="Copy link">
               <button
@@ -300,6 +317,8 @@ function TaskBody({
                 />
               </form>
             </section>
+
+            <TaskLinks task={task} />
 
             <section className="mt-6">
               <h3 className="text-xs font-medium text-ink-2">

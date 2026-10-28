@@ -46,7 +46,7 @@ const processors: [string, string, string][] = [
   ["Supabase", "Database, sign-in and file storage", "EU (Frankfurt, Germany)"],
   ["Vercel", "Hosting and delivering the site", "Worldwide, from the region nearest you"],
   ["Google", "Only if you choose to sign in with Google", "Worldwide"],
-  ["GitHub", "Only if you choose to sign in with GitHub", "Worldwide"],
+  ["GitHub", "Only if you sign in with GitHub, or your workspace links its repositories to boards", "Worldwide"],
 ];
 
 export default function PrivacyPage() {

@@ -33,6 +33,22 @@ import { loadClient } from "@/lib/supabase/browser";
 import { supabaseKey, supabaseUrl } from "@/lib/supabase/env";
 import type { DemoAction } from "./demo-state";
 
+// Changes to tasks that sync with GitHub issues wait in the database until the server sends them. A save that
+// could have touched one asks for that, once things settle
+const githubFields = new Set<string>(["title", "status", "labels"]);
+const githubPings = new Map<string, ReturnType<typeof setTimeout>>();
+function pingGitHub(board: string) {
+  if (!process.env.NEXT_PUBLIC_GITHUB_APP_SLUG) return;
+  clearTimeout(githubPings.get(board));
+  githubPings.set(
+    board,
+    setTimeout(() => {
+      githubPings.delete(board);
+      void fetch(`/api/github/flush?board=${board}`, { method: "POST", keepalive: true }).catch(() => {});
+    }, 1500),
+  );
+}
+
 export type SaveStatus = "saved" | "saving" | "offline" | "error";
 export type Visitor = { id: string; name: string; avatar: string | null; tone: string };
 
@@ -248,6 +264,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     for (const [a, b] of result.renamed)
       dispatch({ type: "rebase", current: (s) => renumber(s, a, b), history: (s) => renumber(s, a, b) });
     for (const part of result.saved) sent.current.record(part, result.goal);
+    if (result.saved.some((d) => d.updated.some((u) => u.fields.some((f) => githubFields.has(f))))) pingGitHub(boardId);
     base.current = result.base;
     const saved = result.base;
     if (result.refused.length) {

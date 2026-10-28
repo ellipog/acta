@@ -118,7 +118,7 @@ export function WorkspaceNav({ shell, onNavigate }: { shell: Shell; onNavigate?:
       <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2 text-sm">
         <WorkspaceInbox shell={shell} />
         <MyTasksLink shell={shell} active onNavigate={onNavigate} />
-        <p className="mt-4 mb-1 px-2 font-mono text-[11px] text-ink-3">Boards</p>
+        <p className="mt-4 mb-1 flex h-5 items-center px-2 font-mono text-[11px] text-ink-3">Boards</p>
         {boards.map((b) => {
           const n = counts[b.id] ?? b.count;
           return (

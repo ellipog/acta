@@ -49,7 +49,7 @@ export function AppSkeleton({
             <Link href={`/${shell.workspace.slug}/my-tasks`} className={cn(rows, "hover:bg-sunken hover:text-ink")}>
               <Icon name="user" size="sm" /> My tasks
             </Link>
-            <p className="mt-4 mb-1 px-2 font-mono text-[11px] text-ink-3">Boards</p>
+            <p className="mt-4 mb-1 flex h-5 items-center px-2 font-mono text-[11px] text-ink-3">Boards</p>
             <SkeletonBoards
               workspace={shell.workspace.id}
               slug={shell.workspace.slug}

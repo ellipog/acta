@@ -296,6 +296,7 @@ export type BoardMeta = {
   team: string;
   prefix: string;
   live: boolean;
+  boardId?: string;
   fields?: CustomField[];
   statusNames?: StatusNames;
 };
@@ -342,6 +343,7 @@ export const me = {
   team: demoMeta.team,
   prefix: demoMeta.prefix,
   live: demoMeta.live,
+  board: undefined as string | undefined,
 };
 
 export function setBoardMeta(meta: BoardMeta) {
@@ -351,6 +353,7 @@ export function setBoardMeta(meta: BoardMeta) {
   me.team = meta.team;
   me.prefix = meta.prefix;
   me.live = meta.live;
+  me.board = meta.boardId;
   people.splice(0, people.length, ...meta.people);
   labels.splice(0, labels.length, ...meta.labels);
   projects.splice(0, projects.length, ...meta.projects.map((p) => p.name));

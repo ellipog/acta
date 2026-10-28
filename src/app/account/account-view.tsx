@@ -31,6 +31,35 @@ function Section({ title, children, className }: { title: string; children: Reac
   );
 }
 
+// With GitHub linked, what you do on GitHub shows up on tasks as you rather than as whoever connected it
+function LinkGitHub() {
+  const [state, setState] = useState<"idle" | "busy" | "failed">("idle");
+  return (
+    <div className="mt-4 flex max-w-md flex-col gap-1.5">
+      <Button
+        className="self-start"
+        disabled={state === "busy"}
+        onClick={async () => {
+          setState("busy");
+          const next = encodeURIComponent("/account");
+          const { error } = await (await loadClient()).auth.linkIdentity({
+            provider: "github",
+            options: { redirectTo: `${window.location.origin}/auth/callback?next=${next}` },
+          });
+          if (error) setState("failed");
+        }}
+      >
+        {state === "busy" ? <Spinner /> : <Icon name="github" />} Link GitHub
+      </Button>
+      <p className={cn("text-xs", state === "failed" ? "text-hematite" : "text-ink-3")}>
+        {state === "failed"
+          ? "GitHub couldn’t be linked. Try again in a moment."
+          : "Pull requests and commits you make show up on tasks as you, and you can sign in with GitHub."}
+      </p>
+    </div>
+  );
+}
+
 function PictureField({ user }: { user: CurrentUser }) {
   const [state, act, pending] = useActionState(changePicture, null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -223,6 +252,7 @@ export function AccountView({
             </li>
           ))}
         </ul>
+        {process.env.NEXT_PUBLIC_GITHUB_APP_SLUG && !user.methods.includes("github") ? <LinkGitHub /> : null}
         <p className="mt-4 text-xs text-ink-3">Member since {joined}.</p>
         <Button
           className="mt-5"

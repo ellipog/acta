@@ -38,6 +38,7 @@ import {
 import { removeBoard, saveBoard } from "@/lib/board-actions";
 import { boardIcon } from "@/lib/board-icons";
 import { useBoardEdits } from "@/lib/board-edits";
+import { GitHubSection, type GitHubInfo } from "./github-section";
 import type { Label, Project, Tone } from "@/lib/board-store";
 import type { DitherName } from "@/lib/dither-assets";
 import {
@@ -104,12 +105,14 @@ export function SettingsView({
   members: everyone,
   boards: saved,
   invite,
+  github,
 }: {
   me: Me;
   workspace: WorkspaceSummary;
   members: Member[];
   boards: BoardInfo[];
   invite: string | null;
+  github: GitHubInfo | null;
 }) {
   const manager = isManager(workspace.role);
   const owner = workspace.role === "owner";
@@ -190,6 +193,20 @@ export function SettingsView({
           <p className="text-sm text-ink-2">No boards yet.</p>
         )}
       </Section>
+
+      {github ? (
+        <div id="github" className="scroll-mt-16">
+          <Section title="GitHub" hint="Repositories linked to boards. Name a task, like ACT-12, in a branch or pull request.">
+            <GitHubSection
+              workspace={workspace.id}
+              slug={workspace.slug}
+              boards={boards}
+              info={github}
+              manager={manager}
+            />
+          </Section>
+        </div>
+      ) : null}
 
       <Section title="Leave or delete">
         <div className="flex flex-wrap gap-2">

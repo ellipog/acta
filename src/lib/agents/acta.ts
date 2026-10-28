@@ -1,5 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import { after } from "next/server";
 import {
   formatDue,
   pageFrom,
@@ -19,6 +20,19 @@ import {
 } from "@/lib/board-store";
 import { boardSlugProblem, publicHref, siteUrl, slugify } from "@/lib/slugs";
 import { accessRank, agentDb, type Access, type Agent } from "./keys";
+
+// An agent's changes to tasks that sync with GitHub issues go to GitHub once the answer is on its way
+function sendToGitHub(board: string) {
+  if (!process.env.GITHUB_APP_ID) return;
+  try {
+    after(async () => {
+      const { flushOutbox } = await import("@/lib/github/sync");
+      await flushOutbox(board).catch((e) => console.error("GitHub flush failed", e));
+    });
+  } catch {
+    // Outside a request there's nothing to wait on
+  }
+}
 
 // A mistake the agent can fix. Its message goes back to the agent as is
 export class Problem extends Error {}
@@ -451,6 +465,7 @@ export function actaFor(agent: Agent) {
   async function apply(b: Board, changes: Record<string, unknown>) {
     const { data, error } = await db.rpc("agent_apply", { p_key: agent.hash, p_board: b.id, p_changes: changes });
     if (error) throw dbProblem(error);
+    if (Array.isArray(changes.updated) && changes.updated.length) sendToGitHub(b.id);
     return data as { moved: Record<string, number>; next: number };
   }
 
@@ -478,7 +493,7 @@ export function actaFor(agent: Agent) {
 
   async function detail(b: Board, t: TaskRow) {
     const who = await nameOf(b.workspace_id);
-    const [{ data: comments }, { data: activity }] = await Promise.all([
+    const [{ data: comments }, { data: activity }, { data: links }] = await Promise.all([
       db
         .from("comments")
         .select("*")
@@ -492,7 +507,27 @@ export function actaFor(agent: Agent) {
         .eq("number", t.number)
         .order("created_at", { ascending: false })
         .limit(30),
+      // Before the GitHub migration there's no table, and no links
+      db
+        .from("task_links")
+        .select("kind, ref, url, title, state, closes, extra")
+        .eq("board_id", b.id)
+        .eq("number", t.number)
+        .order("updated_at", { ascending: false })
+        .limit(20),
     ]);
+    const github = (links ?? []).map((l) =>
+      compact({
+        kind: { pr: "pull_request", issue: "issue", branch: "branch", commit: "commit" }[l.kind as string],
+        ref: l.kind === "commit" ? String(l.ref).slice(0, 7) : l.ref,
+        title: l.title ?? undefined,
+        state: l.state ?? undefined,
+        closes_task: l.closes || undefined,
+        checks: (l.extra as { checks?: string } | null)?.checks,
+        review: (l.extra as { review?: string } | null)?.review,
+        url: l.url,
+      }),
+    );
     return {
       ...summary(b, t, who),
       fields: customOut(b, t),
@@ -515,6 +550,7 @@ export function actaFor(agent: Agent) {
       activity: (activity ?? [])
         .reverse()
         .map((a) => compact({ by: who(a.actor), via: a.via, at: a.created_at, text: a.text })),
+      github: github.length ? github : undefined,
       created: t.created_at,
       updated: t.updated_at,
     };
@@ -591,7 +627,7 @@ export function actaFor(agent: Agent) {
         const { count } = await q;
         return [s, count ?? 0] as const;
       };
-      const [list, counts, { count: suggestions }, { count: archived }] = await Promise.all([
+      const [list, counts, { count: suggestions }, { count: archived }, { data: repos }] = await Promise.all([
         people(b.workspace_id),
         Promise.all(taskStatuses.map(count)),
         db.from("suggestions").select("id", { count: "exact", head: true }).eq("board_id", b.id),
@@ -603,6 +639,7 @@ export function actaFor(agent: Agent) {
               .is("deleted_at", null)
               .not("archived_at", "is", null)
           : Promise.resolve({ count: 0 }),
+        db.from("github_repos").select("full_name").eq("board_id", b.id).order("full_name"),
       ]);
       const page = pageFrom(b.name, b.slug, b.page);
       return compact({
@@ -620,6 +657,8 @@ export function actaFor(agent: Agent) {
           ? b.fields.map((f) => compact({ name: f.name, type: f.type, options: f.options }))
           : undefined,
         status_names: b.status_names && Object.keys(b.status_names).length ? b.status_names : undefined,
+        // Branches, pull requests and commits in these that name a task, like ACT-12, link to it and move it along
+        github_repositories: repos?.length ? repos.map((r) => r.full_name) : undefined,
         people: list.map((p) => compact({ name: p.name, role: p.role, you: p.id === agent.userId || undefined })),
         roadmap: compact({
           public: b.roadmap_public,

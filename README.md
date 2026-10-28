@@ -29,6 +29,7 @@
 | **My tasks** | Everything assigned to you, from every board in the workspace, in one place. |
 | **Public roadmaps** | Publish any board as a roadmap page. Visitors can vote and send ideas, and you choose which tasks show and how the page looks: its theme, colour, header, links, announcement and the order of its sections. |
 | **Appearance** | Light, dark or your system's mode, an accent of your own, warmer or cooler surfaces, more contrast, larger text, line or pixel icons and less motion. |
+| **GitHub** | Link repositories to boards. Branches, commits and pull requests that name a task show on it with their checks and review, move it along and mark it done on merge, and issues can sync both ways. |
 | **Agents and API** | An MCP server lets Claude Code, Cursor and other agents read and work on your boards with keys you control, and an HTTP API lets scripts and other tools do the same. |
 
 Built with Next.js 16 (App Router, Cache Components), React 19, Tailwind CSS 4 and Supabase (auth, Postgres,
@@ -106,6 +107,13 @@ work, and the demo board saves to the browser.
 | `SUPABASE_SECRET_KEY` | Secret key, server only. Used for avatar uploads, account deletion and agent keys |
 | `NEXT_PUBLIC_AUTH_PROVIDERS` | Comma-separated sign-in methods: `email`, `google`, `github` |
 | `NEXT_PUBLIC_PUBLIC_ORIGIN` | Optional. The origin public roadmaps are served from, e.g. `https://acta.page` |
+| `GITHUB_APP_ID` | Optional, with the five below. The GitHub App's id |
+| `NEXT_PUBLIC_GITHUB_APP_SLUG` | The app's slug, from its public link `github.com/apps/<slug>` |
+| `GITHUB_APP_PRIVATE_KEY` | The app's private key (PEM). Line breaks may be written as `
+` |
+| `GITHUB_APP_CLIENT_ID` | The app's client id |
+| `GITHUB_APP_CLIENT_SECRET` | The app's client secret |
+| `GITHUB_WEBHOOK_SECRET` | The app's webhook secret, which also signs install links |
 
 ### Supabase
 
@@ -130,6 +138,26 @@ header and footer HTML show in sandboxed frames with no origin of their own, so 
 visitor's session. To build the whole page yourself, `GET /api/public/<workspace>/<board>` returns what the
 published page shows as JSON, open to any origin.
 
+### GitHub
+
+Without the GitHub variables the feature stays hidden. To turn it on, create a GitHub App under **Settings →
+Developer settings → GitHub Apps** with:
+
+- **Callback URL** and **Setup URL**: `<your origin>/api/github/setup`, with **Request user authorization (OAuth)
+  during installation** ticked, so Acta can check who installed it
+- **Webhook URL**: `<your origin>/api/github/webhook`, with a secret
+- **Repository permissions**: Contents, Metadata, Pull requests and Checks read-only, Issues read and write
+- **Events**: Check suite, Create, Issue comment, Issues, Pull request, Pull request review and Push
+
+Owners and admins then connect it under **Workspace settings → GitHub** and link each repository to a board.
+A branch, commit or pull request that names a task, like `act-12-add-csv-export` or “Fixes ACT-12”, links to it.
+Branches and commits move it to in progress, an open pull request to review, and a merged one that names it in its
+title, branch or a closing keyword to done. Each step can be turned off per repository. With **Sync issues** on, the
+repository's issues come over as tasks (only ones with a chosen label, if set), and their title, status and labels
+stay in step both ways, the later edit winning. Changes from GitHub are marked “via GitHub” and made as the member
+who linked that GitHub account under **Account**, or else as whoever connected GitHub. Linking accounts needs
+**Authentication → Manual linking** turned on in Supabase.
+
 ## Deploying
 
 Acta runs on Vercel at `acta.aaenz.no` (`siteHost` in `src/lib/slugs.ts`). `vercel.json` keeps its functions in
@@ -146,7 +174,7 @@ Frankfurt, next to the Supabase project.
 | `bun run dev` | Start the dev server |
 | `bun run build` | Production build |
 | `bun run lint` | ESLint |
-| `bun run test` | Tests in `tests/`: every kind of board edit saved and read back, member permissions, table drag and drop, public page settings and appearance |
+| `bun run test` | Tests in `tests/`: every kind of board edit saved and read back, member permissions, table drag and drop, public page settings, appearance and GitHub matching |
 | `bun run dither` | Re-render the one-bit images in `public/dither` from `assets/source` |
 | `bun run logo` | Re-draw the favicon and app icons from `src/lib/logo.ts` |
 

@@ -115,6 +115,7 @@ export function metaFor(live: LiveBoard): BoardMeta {
     workspace: live.workspace.slug,
     team: live.workspace.name,
     prefix: live.board.prefix,
+    boardId: live.board.id,
     live: true,
   };
 }

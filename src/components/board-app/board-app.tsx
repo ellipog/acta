@@ -1052,7 +1052,7 @@ function Sidebar({
             {mine ? <span className="ml-auto font-mono text-[11px] text-ink-3">{mine}</span> : null}
           </button>
         )}
-        <p className="mt-4 mb-1 flex items-center justify-between px-2 font-mono text-[11px] text-ink-3">
+        <p className="mt-4 mb-1 flex h-5 items-center justify-between px-2 font-mono text-[11px] text-ink-3">
           Boards
           {live && can(live.workspace.role, live.workspace.permissions, "boards") ? <NewBoard live={live} /> : null}
         </p>
