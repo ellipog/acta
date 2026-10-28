@@ -91,7 +91,7 @@ export function OverviewView({ report: r, range, me }: { report: OwnerReport; ra
     const q = new URLSearchParams();
     const to = next.range ?? range;
     if (to !== "30d") q.set("range", to);
-    if (next.me ?? me) q.set("me", "1");
+    if (!(next.me ?? me)) q.set("me", "0");
     const s = q.toString();
     return s ? `/admin?${s}` : "/admin";
   };
@@ -124,11 +124,11 @@ export function OverviewView({ report: r, range, me }: { report: OwnerReport; ra
           scroll={false}
           className={cn(
             "ml-auto flex h-8 items-center gap-2 border px-2.5 text-xs",
-            me ? "border-pyrite bg-pyrite-soft text-pyrite-ink" : "border-line text-ink-3 hover:text-ink",
+            me ? "border-line text-ink-3 hover:text-ink" : "border-pyrite bg-pyrite-soft text-pyrite-ink",
           )}
         >
           <Icon name={me ? "eye" : "eye-off"} size="sm" />
-          {me ? "Including admins" : "Admins left out"}
+          {me ? "Admins counted" : "Admins left out"}
         </Link>
       </nav>
 

@@ -56,7 +56,8 @@ async function Dashboard({ searchParams }: { searchParams: Params }) {
 
   if (!traffic) {
     const range: OwnerRangeId = asked in ownerRanges ? (asked as OwnerRangeId) : "30d";
-    const me = params.me === "1";
+    // Everyone counts, admins too, unless asked to leave them out
+    const me = params.me !== "0";
     const report = await loadOwnerReport(range, me);
     return (
       <Shell traffic={false}>
