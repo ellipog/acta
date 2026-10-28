@@ -118,3 +118,18 @@ export function newer(times: FieldTimes, field: string, side: "github" | "acta",
 export function stamp(times: FieldTimes, field: string, side: "github" | "acta", at: string): FieldTimes {
   return { ...times, [side]: { ...times[side], [field]: at } };
 }
+
+const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/** The board a repository most likely belongs to, by name: the same name, or the board's name as one part of the
+ * repository's, like calcite-app for Calcite */
+export function boardForRepo<B extends { id: string; name: string; slug: string }>(fullName: string, boards: B[]) {
+  const repo = fullName.split("/").pop() ?? fullName;
+  const whole = squash(repo);
+  const parts = repo.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const names = (b: B) => [squash(b.name), squash(b.slug)].filter(Boolean);
+  return (
+    boards.find((b) => names(b).includes(whole)) ??
+    boards.find((b) => names(b).some((n) => n.length >= 3 && parts.includes(n)))
+  );
+}

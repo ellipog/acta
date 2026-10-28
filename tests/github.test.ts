@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import {
+  boardForRepo,
   boardLabels,
   branchName,
   closingNumbers,
@@ -14,6 +15,7 @@ import {
   taskNumbers,
 } from "../src/lib/github/match";
 import { readState, signatureOk, signState } from "../src/lib/github/signature";
+import { githubRef, plainLinkText } from "../src/lib/github-links";
 
 // GitHub without GitHub: that webhooks and install links can't be forged, that pull requests, branches and commits
 // find the right tasks, that automation only ever moves a task forward, and that two-way issue sync lets the later
@@ -121,4 +123,36 @@ test("the later edit to each synced field wins, whichever side made it", () => {
   times = stamp(times, "title", "github", "2026-10-28T10:01:00Z");
   expect(newer(times, "title", "acta", "2026-10-28T10:00:30Z")).toBe(false);
   expect(times.acta?.title).toBe("2026-10-28T10:00:00Z");
+});
+
+test("repositories suggest the board with the same name", () => {
+  const boards = [
+    { id: "1", name: "Calcite", slug: "calcite" },
+    { id: "2", name: "Create Stellar", slug: "create-stellar" },
+    { id: "3", name: "UI", slug: "ui" },
+  ];
+  expect(boardForRepo("ellipog/calcite", boards)?.id).toBe("1");
+  expect(boardForRepo("ellipog/Calcite-App", boards)?.id).toBe("1");
+  expect(boardForRepo("ellipog/create_stellar", boards)?.id).toBe("2");
+  expect(boardForRepo("ellipog/createstellar", boards)?.id).toBe("2");
+  expect(boardForRepo("ellipog/ui", boards)?.id).toBe("3");
+  // Too short to guess from a part of the name
+  expect(boardForRepo("ellipog/ui-kit", boards)).toBeUndefined();
+  expect(boardForRepo("ellipog/dotfiles", boards)).toBeUndefined();
+});
+
+test("GitHub links read as short chips", () => {
+  const at = (u: string) => githubRef(u)?.label;
+  expect(at("https://github.com/ellipog/calcite/commit/1f3fcdc9a8b7")).toBe("calcite@1f3fcdc");
+  expect(at("https://github.com/ellipog/calcite/pull/45")).toBe("calcite#45");
+  expect(at("https://github.com/ellipog/calcite/issues/12")).toBe("calcite#12");
+  expect(at("https://github.com/ellipog/calcite/tree/act-12-export")).toBe("calcite:act-12-export");
+  expect(at("https://github.com/ellipog/calcite/blob/main/src/wire.ts#L40")).toBe("wire.ts:40");
+  expect(at("https://github.com/ellipog/calcite")).toBe("ellipog/calcite");
+  expect(at("https://github.com/ellipog")).toBe("@ellipog");
+  expect(at("https://gitlab.com/ellipog/calcite")).toBeUndefined();
+  expect(at("not a url")).toBeUndefined();
+  expect(plainLinkText("1f3fcdc", "https://github.com/a/b/commit/1f3fcdc")).toBe(true);
+  expect(plainLinkText("#45", "https://github.com/a/b/pull/45")).toBe(true);
+  expect(plainLinkText("the new parser", "https://github.com/a/b/pull/45")).toBe(false);
 });

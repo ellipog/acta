@@ -6,7 +6,7 @@ import { Switch } from "@/components/ui/controls";
 import { Dialog, DialogClose, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 import { toast } from "@/components/ui/toast";
 import {
   availableRepos,
@@ -16,7 +16,7 @@ import {
   updateRepo,
   type AvailableRepo,
 } from "@/lib/github/actions";
-import { repoSettings, type RepoSettings } from "@/lib/github/match";
+import { boardForRepo, repoSettings, type RepoSettings } from "@/lib/github/match";
 
 export type GitHubInfo = {
   installations: { id: number; account: string }[];
@@ -45,7 +45,7 @@ export function GitHubSection({
 }: {
   workspace: string;
   slug: string;
-  boards: { id: string; name: string }[];
+  boards: BoardRef[];
   info: GitHubInfo;
   manager: boolean;
 }) {
@@ -106,7 +106,7 @@ export function GitHubSection({
 
       {manager ? (
         <div className="flex flex-wrap items-center gap-2">
-          <AddRepo workspace={workspace} boards={boardOptions} linked={new Set(info.repos.map((r) => r.id))} />
+          <AddRepo workspace={workspace} boards={boards} linked={new Set(info.repos.map((r) => r.id))} />
           <Button asChild variant="ghost">
             <a href={`/api/github/install?workspace=${encodeURIComponent(slug)}`}>
               <Icon name="plus" /> Another account or more repositories
@@ -118,19 +118,15 @@ export function GitHubSection({
   );
 }
 
-function AddRepo({
-  workspace,
-  boards,
-  linked,
-}: {
-  workspace: string;
-  boards: { value: string; label: string }[];
-  linked: Set<number>;
-}) {
+type BoardRef = { id: string; name: string; slug: string };
+
+function AddRepo({ workspace, boards, linked }: { workspace: string; boards: BoardRef[]; linked: Set<number> }) {
   const [open, setOpen] = useState(false);
   const [repos, setRepos] = useState<AvailableRepo[] | null>(null);
   const [repo, setRepo] = useState<string>();
-  const [board, setBoard] = useState<string | undefined>(boards[0]?.value);
+  const [board, setBoard] = useState<string | undefined>(boards[0]?.id);
+  // Linked from a suggestion, before the page catches up
+  const [just, setJust] = useState<Set<number>>(new Set());
   const [pending, start] = useTransition();
 
   useEffect(() => {
@@ -142,9 +138,23 @@ function AddRepo({
     };
   }, [open, workspace]);
 
-  const options = (repos ?? [])
-    .filter((r) => !linked.has(r.id))
-    .map((r) => ({ value: String(r.id), label: r.fullName, hint: r.private ? "private" : undefined }));
+  const free = (repos ?? []).filter((r) => !linked.has(r.id) && !just.has(r.id));
+  const options = free.map((r) => ({ value: String(r.id), label: r.fullName, hint: r.private ? "private" : undefined }));
+  const boardOptions = boards.map((b) => ({ value: b.id, label: b.name }));
+  const suggested = free
+    .map((r) => ({ repo: r, board: boardForRepo(r.fullName, boards) }))
+    .filter((s): s is { repo: AvailableRepo; board: BoardRef } => Boolean(s.board))
+    .slice(0, 6);
+
+  const link = (repoId: number, boardId: string, then?: () => void) =>
+    start(async () => {
+      const r = await linkRepo(workspace, repoId, boardId);
+      say(r);
+      if (r.ok) {
+        setJust((s) => new Set(s).add(repoId));
+        then?.();
+      }
+    });
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -153,39 +163,59 @@ function AddRepo({
           <Icon name="link" /> Link a repository
         </Button>
       </DialogTrigger>
-      <DialogContent title="Link a repository" description="Its pull requests and branches show up on this board’s tasks.">
+      <DialogContent title="Link a repository" description="Its pull requests and branches show up on the board’s tasks.">
         <div className="flex flex-col gap-4">
+          {suggested.length ? (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs text-ink-2">Same names as your boards</span>
+              <ul className="divide-y divide-line border border-line">
+                {suggested.map(({ repo: r, board: b }) => (
+                  <li key={r.id} className="flex items-center gap-2 py-1.5 pr-1.5 pl-3 text-sm">
+                    <span className="min-w-0 truncate">{r.fullName}</span>
+                    <Icon name="arrow-right" size="sm" className="shrink-0 text-ink-3" />
+                    <span className="min-w-0 flex-1 truncate text-ink-2">{b.name}</span>
+                    <Button size="sm" disabled={pending} onClick={() => link(r.id, b.id)}>
+                      Link
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <label className="flex flex-col gap-1.5 text-xs text-ink-2">
             Repository
-            <Select
+            <Combobox
               value={repo}
-              onValueChange={setRepo}
+              onValueChange={(v) => {
+                setRepo(v);
+                // The board with the same name, when there is one
+                const match = boardForRepo(free.find((r) => String(r.id) === v)?.fullName ?? "", boards);
+                if (match) setBoard(match.id);
+              }}
               options={options}
-              disabled={!repos}
               placeholder={!repos ? "Loading…" : options.length ? "Choose…" : "Nothing left to link"}
+              searchPlaceholder="Find a repository"
+              empty={repos ? "No repository by that name" : "Loading…"}
             />
           </label>
           <label className="flex flex-col gap-1.5 text-xs text-ink-2">
             Board
-            <Select value={board} onValueChange={setBoard} options={boards} />
+            <Combobox
+              value={board}
+              onValueChange={setBoard}
+              options={boardOptions}
+              searchPlaceholder="Find a board"
+              empty="No board by that name"
+            />
           </label>
           <div className="flex justify-end gap-2">
             <DialogClose asChild>
-              <Button variant="ghost">Cancel</Button>
+              <Button variant="ghost">{just.size ? "Done" : "Cancel"}</Button>
             </DialogClose>
             <Button
               variant="primary"
               disabled={!repo || !board || pending}
-              onClick={() =>
-                start(async () => {
-                  const r = await linkRepo(workspace, Number(repo), board!);
-                  say(r);
-                  if (r.ok) {
-                    setOpen(false);
-                    setRepo(undefined);
-                  }
-                })
-              }
+              onClick={() => link(Number(repo), board!, () => setRepo(undefined))}
             >
               Link
             </Button>
@@ -244,23 +274,29 @@ function RepoRow({
         >
           {repo.fullName}
         </a>
-        <Select
-          variant="compact"
-          className="w-40"
-          aria-label="Board"
-          value={board}
-          disabled={!manager}
-          options={boards}
-          onValueChange={(next) => {
-            const before = board;
-            setBoard(next);
-            start(async () => {
-              const r = await updateRepo(workspace, repo.id, { board: next });
-              if (!r.ok) setBoard(before);
-              say(r);
-            });
-          }}
-        />
+        {manager ? (
+          <Combobox
+            variant="ghost"
+            className="h-7 w-44 border-line text-xs"
+            aria-label="Board"
+            value={board}
+            options={boards}
+            searchPlaceholder="Find a board"
+            empty="No board by that name"
+            onValueChange={(next) => {
+              if (next === board) return;
+              const before = board;
+              setBoard(next);
+              start(async () => {
+                const r = await updateRepo(workspace, repo.id, { board: next });
+                if (!r.ok) setBoard(before);
+                say(r);
+              });
+            }}
+          />
+        ) : (
+          <span className="truncate text-xs text-ink-2">{boards.find((b) => b.value === board)?.label}</span>
+        )}
         {manager ? (
           <button
             aria-label={`Unlink ${repo.fullName}`}

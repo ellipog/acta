@@ -1,11 +1,31 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { githubRef, plainLinkText } from "@/lib/github-links";
 import { cn } from "@/lib/utils";
 import { Icon, type IconName } from "./icons";
 import { Tooltip } from "./tooltip";
 
-const inlinePattern = /(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\)|@[A-Za-z]+)/g;
+const inlinePattern =
+  /(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\)|https?:\/\/[^\s<>()[\]]*[^\s<>()[\].,;:!?'"*]|@[A-Za-z]+)/g;
+
+const linkClass = "text-lapis underline decoration-lapis/40 underline-offset-2 hover:decoration-lapis";
+
+// A GitHub link shows as a chip saying what it points at, like calcite#45
+function GitHubChip({ href, label, title }: { href: string; label: React.ReactNode; title?: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={title ?? href}
+      className="inline-flex max-w-full items-center gap-1 border border-line bg-sunken px-1 align-[-0.15em] font-mono text-[0.85em] leading-[1.35] text-ink no-underline hover:border-lapis hover:text-lapis"
+    >
+      <Icon name="github" size="sm" className="text-ink-3" />
+      <span className="truncate">{label}</span>
+    </a>
+  );
+}
 
 function inline(text: string, key: string): React.ReactNode[] {
   return text.split(inlinePattern).map((part, i) => {
@@ -21,9 +41,20 @@ function inline(text: string, key: string): React.ReactNode[] {
     const link = part.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/);
     if (link) {
       const safe = /^(https?:|mailto:|\/)/.test(link[2]) ? link[2] : "#";
+      const ref = githubRef(safe);
+      if (ref) return <GitHubChip key={k} href={safe} label={plainLinkText(link[1], safe) ? ref.label : link[1]} />;
       return (
-        <a key={k} href={safe} target="_blank" rel="noreferrer" className="text-lapis underline decoration-lapis/40 underline-offset-2 hover:decoration-lapis">
+        <a key={k} href={safe} target="_blank" rel="noreferrer" className={linkClass}>
           {link[1]}
+        </a>
+      );
+    }
+    if (/^https?:\/\//.test(part)) {
+      const ref = githubRef(part);
+      if (ref) return <GitHubChip key={k} href={part} label={ref.label} />;
+      return (
+        <a key={k} href={part} target="_blank" rel="noreferrer" className={cn(linkClass, "break-all")}>
+          {part.replace(/^https?:\/\/(www\.)?/, "")}
         </a>
       );
     }
