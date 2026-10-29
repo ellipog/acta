@@ -9,7 +9,7 @@
 
 <p align="center">
   <a href="https://acta.aaenz.no">acta.aaenz.no</a> ·
-  <a href="https://acta.aaenz.no/demo">Try the demo</a> ·
+  <a href="https://acta.aaenz.no/p/aaen-studios/acta">Issue tracker</a> ·
   <a href="https://acta.aaenz.no/docs">Docs</a> ·
   <a href="#agents">Agents and MCP</a> ·
   <a href="#running-it">Run it yourself</a>
