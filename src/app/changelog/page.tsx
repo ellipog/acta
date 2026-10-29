@@ -60,9 +60,11 @@ export default async function ChangelogPage() {
       />
       {weeks.size ? (
         [...weeks].map(([week, tasks]) => (
-          <section key={week} className="mt-12">
+          <section key={week} id={`week-${week}`} className="mt-12 scroll-mt-20">
             <h2 className="font-display text-2xl">
-              Week of <time dateTime={week}>{dayOf(week)}</time>
+              <a href={`#week-${week}`} className="hover:text-lapis">
+                Week of <time dateTime={week}>{dayOf(week)}</time>
+              </a>
             </h2>
             <ul className="mt-4 flex flex-col border-t border-line">
               {tasks.map((t) => {
