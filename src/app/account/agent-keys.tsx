@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { startTransition, useActionState, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -255,7 +256,10 @@ export function AgentKeys({ keys, workspaces }: { keys: AgentKey[]; workspaces: 
     <div>
       <p className="max-w-md text-sm text-ink-2">
         Let AI agents like Claude Code, Codex and Cursor read and update your boards over MCP, and scripts and other
-        tools over the HTTP API at /api/v1. A key acts as you, so it only reaches workspaces you’re in.
+        tools over the HTTP API at /api/v1. A key acts as you, so it only reaches workspaces you’re in.{" "}
+        <Link href="/docs/agents" className="underline underline-offset-2 hover:text-ink">
+          How to set up agents
+        </Link>
       </p>
       {keys.length ? (
         <ul className="mt-5 flex flex-col border border-line">

@@ -10,6 +10,7 @@
 <p align="center">
   <a href="https://acta.aaenz.no">acta.aaenz.no</a> ·
   <a href="https://acta.aaenz.no/demo">Try the demo</a> ·
+  <a href="https://acta.aaenz.no/docs">Docs</a> ·
   <a href="#agents">Agents and MCP</a> ·
   <a href="#running-it">Run it yourself</a>
 </p>
@@ -114,6 +115,8 @@ work, and the demo board saves to the browser.
 | `GITHUB_APP_CLIENT_ID` | The app's client id |
 | `GITHUB_APP_CLIENT_SECRET` | The app's client secret |
 | `GITHUB_WEBHOOK_SECRET` | The app's webhook secret, which also signs install links |
+| `GOOGLE_SITE_VERIFICATION` | Optional. The token Google Search Console gives for the HTML tag method |
+| `BING_SITE_VERIFICATION` | Optional. The token Bing Webmaster Tools gives for its meta tag |
 
 ### Supabase
 
@@ -161,6 +164,15 @@ pull request in `list_tasks`. Changes from GitHub are marked “via GitHub” an
 who linked that GitHub account under **Account**, or else as whoever connected GitHub. Linking accounts needs
 **Allow manual linking** turned on in Supabase, under **Authentication → Sign In / Providers**.
 
+### Search engines
+
+Every page has a title, description and canonical address, and links to Acta show a preview image drawn by
+`opengraph-image.tsx`. Published roadmaps get their own, under their owner's name. `/sitemap.xml` lists the site's
+pages and every published roadmap that has something on it, leaving out ones set to **Hide from search engines**,
+and `/robots.txt` points to it. `/llms.txt` and `/llms-full.txt` describe Acta for AI tools. The docs, comparisons and
+use cases are written in `src/lib/docs.ts`, `src/lib/compare.ts` and `src/lib/use-cases.ts`, and `/changelog` shows
+what's shipped on Acta's own board, with an RSS feed.
+
 ## Deploying
 
 Acta runs on Vercel at `acta.aaenz.no` (`siteHost` in `src/lib/slugs.ts`). `vercel.json` keeps its functions in
@@ -184,7 +196,7 @@ Frankfurt, next to the Supabase project.
 ## Layout
 
 ```
-src/app            routes: landing, /demo, /login, /new, /[workspace]/[board], /p (public roadmaps), /library (unlisted UI kit)
+src/app            routes: landing, /demo, /docs, /compare, /use-cases, /changelog, /login, /new, /[workspace]/[board], /p (public roadmaps), /library (unlisted UI kit)
 src/components     board app (board, table, timeline, roadmap views), landing sections, UI kit
 src/lib            board state and reducer, loading, caching and live sync with Supabase, server actions, slugs
 src/lib/agents     agent keys, the MCP server behind /api/mcp and the HTTP API behind /api/v1

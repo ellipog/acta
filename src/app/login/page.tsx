@@ -6,7 +6,7 @@ import { Dither } from "@/components/ui/dither";
 import { LoginForm } from "./login-form";
 
 export const metadata: Metadata = {
-  title: "Sign in · Acta",
+  title: "Sign in",
   description: "Sign in to Acta, or make an account. No password needed.",
 };
 

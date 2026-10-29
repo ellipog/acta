@@ -26,6 +26,11 @@ export function SectionMark({
   );
 }
 
+// What a section is about in plain words, under its heading
+export function Plain({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <p className={cn("mt-3 font-mono text-xs leading-relaxed text-ink", className)}>{children}</p>;
+}
+
 export function Fig({
   n,
   title,

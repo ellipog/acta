@@ -1,5 +1,5 @@
 import { Strata, type Stratum } from "@/components/strata";
-import { SectionMark } from "./parts";
+import { Plain, SectionMark } from "./parts";
 
 const events: (Stratum & { when: string; who: string; what: string })[] = [
   { when: "Today, 09:41", who: "Mara", what: "moved ACT-42 to In review", tone: "lapis", density: 0.5, thickness: 30, base: "depth-4", texture: 0.25 },
@@ -27,6 +27,7 @@ export function SedimentSection() {
           <div>
             <SectionMark n="IV" rock="Shale" base="depth-4" tone="ink" level={12} />
             <h2 className="mt-4 font-display text-4xl sm:text-5xl">Every change, kept.</h2>
+            <Plain>A full activity history of every task, by people, agents and GitHub.</Plain>
           </div>
           <p className="max-w-md text-ink-2 md:justify-self-end">
             The activity log works like sediment. Each change settles on the one before it: who, what and when.

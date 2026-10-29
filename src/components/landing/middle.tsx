@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dither, DitherFill, DitherShadow } from "@/components/ui/dither";
 import type { DitherName } from "@/lib/dither-assets";
 import { BoardEmbed } from "./board-embed";
-import { Fig, SectionMark } from "./parts";
+import { Fig, Plain, SectionMark } from "./parts";
 
 export function BoardSection() {
   return (
@@ -17,6 +17,7 @@ export function BoardSection() {
           <div className="pb-8">
             <SectionMark n="I" rock="Columnar basalt" base="depth-1" tone="ink" level={50} />
             <h2 className="mt-4 font-display text-4xl sm:text-5xl">Columns that hold.</h2>
+            <Plain>A kanban board, a table and a timeline, all showing the same tasks.</Plain>
             <p className="mt-4 max-w-md text-ink-2">
               Drag a card between columns. Open one to edit it, tick off subtasks, or switch to the table. This is the
               real board, running right here.
@@ -141,6 +142,7 @@ export function FieldsSection() {
           <div>
             <SectionMark n="II" rock="Crystal" base="depth-2" tone="lapis" level={25} />
             <h2 className="mt-4 font-display text-4xl sm:text-5xl">A cabinet of fields.</h2>
+            <Plain>Status, priority, size, dates, labels, projects and custom fields of your own.</Plain>
           </div>
           <p className="max-w-md text-ink-2 md:justify-self-end">
             Every board comes with the same set of fields, and each board keeps its own labels and projects. Each
@@ -190,6 +192,10 @@ export function HandsSection() {
         <div>
           <SectionMark n="III" rock="Sandstone" base="depth-3" tone="pyrite" level={25} />
           <h2 className="mt-4 font-display text-4xl sm:text-5xl">Many hands, one record.</h2>
+          <Plain>
+            Team workspaces with roles and permissions, live updates, and AI agents like Claude Code working
+            alongside you.
+          </Plain>
           <p className="mt-4 max-w-md text-ink-2">
             Keep personal work and team work in separate workspaces. Invite people with a role, and watch the board
             move as they work.

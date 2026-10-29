@@ -43,8 +43,10 @@ function inline(text: string, key: string): React.ReactNode[] {
       const safe = /^(https?:|mailto:|\/)/.test(link[2]) ? link[2] : "#";
       const ref = githubRef(safe);
       if (ref) return <GitHubChip key={k} href={safe} label={plainLinkText(link[1], safe) ? ref.label : link[1]} />;
+      // Links within the site open in place
+      const away = safe.startsWith("/") ? {} : { target: "_blank", rel: "noreferrer" };
       return (
-        <a key={k} href={safe} target="_blank" rel="noreferrer" className={linkClass}>
+        <a key={k} href={safe} {...away} className={linkClass}>
           {link[1]}
         </a>
       );

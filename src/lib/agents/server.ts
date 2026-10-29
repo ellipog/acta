@@ -549,6 +549,10 @@ function addTools(server: Registrar, agent: Agent) {
             .boolean()
             .optional()
             .describe("Put new tasks on the roadmap unless they say otherwise. Applies to people and agents"),
+          hide_from_search: z
+            .boolean()
+            .optional()
+            .describe("Keep the published page out of search engines, for one only shared by link"),
         }),
         annotations: { ...writes, idempotentHint: true },
       },

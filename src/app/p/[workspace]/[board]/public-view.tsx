@@ -56,7 +56,7 @@ function useForcedTheme(theme: "light" | "dark" | null) {
   }, [theme]);
 }
 
-export function PublicView({ data }: { data: PublicRoadmapData }) {
+export function PublicView({ data, home }: { data: PublicRoadmapData; home: string }) {
   const [meta, setMeta] = useState(() => publicMeta(data));
   const [state, setState] = useState(() => publicState(data));
   setBoardMeta(meta);
@@ -202,7 +202,7 @@ export function PublicView({ data }: { data: PublicRoadmapData }) {
         </div>
       </header>
       <main className={cn("@container mx-auto", width)}>
-        <Visitor state={state} dispatch={dispatch} home="/" />
+        <Visitor state={state} dispatch={dispatch} home={home} />
       </main>
     </div>
   );

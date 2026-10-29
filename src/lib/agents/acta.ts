@@ -783,6 +783,7 @@ export function actaFor(agent: Agent) {
           voting: page.voting,
           ideas: page.ideas,
           new_tasks_public: page.newTasksPublic,
+          hide_from_search: page.hideFromSearch || undefined,
           suggestions_waiting: suggestions ?? 0,
         }),
       });
@@ -1574,6 +1575,7 @@ export function actaFor(agent: Agent) {
         voting?: boolean;
         ideas?: boolean;
         new_tasks_public?: boolean;
+        hide_from_search?: boolean;
       },
     ) {
       const b = await board(ref);
@@ -1583,6 +1585,7 @@ export function actaFor(agent: Agent) {
       if (p.voting !== undefined) Object.assign(patch, { voting: p.voting });
       if (p.ideas !== undefined) Object.assign(patch, { ideas: p.ideas, ideasPublic: p.ideas });
       if (p.new_tasks_public !== undefined) Object.assign(patch, { newTasksPublic: p.new_tasks_public });
+      if (p.hide_from_search !== undefined) Object.assign(patch, { hideFromSearch: p.hide_from_search });
       if (Object.keys(patch).length) change.page = { ...b.page, ...patch };
       if (Object.keys(change).length) await apply(b, { board: change });
       const live = (change.roadmap_public as boolean | undefined) ?? b.roadmap_public;
@@ -1602,6 +1605,7 @@ const pageSummary = (page: ReturnType<typeof pageFrom>) => ({
   voting: page.voting,
   ideas: page.ideas,
   new_tasks_public: page.newTasksPublic,
+  hide_from_search: page.hideFromSearch,
 });
 
 export type Acta = ReturnType<typeof actaFor>;

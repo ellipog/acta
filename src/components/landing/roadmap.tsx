@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { DitherFill, DitherShadow, type DitherTone } from "@/components/ui/dither";
 import { actaRoadmapHref, publicPath } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
-import { SectionMark } from "./parts";
+import { Plain, SectionMark } from "./parts";
 
 type Stage = "in_progress" | "todo" | "done";
 type Item = { id: string; title: string; note: string; stage: Stage; votes: number };
@@ -58,6 +58,7 @@ export function RoadmapSection() {
           <div>
             <SectionMark n="V" rock="Quartz" base="depth-4" tone="lapis" level={50} />
             <h2 className="mt-4 font-display text-4xl sm:text-5xl">Build in the open.</h2>
+            <Plain>A public roadmap with voting, ideas from visitors and a changelog of shipped work.</Plain>
           </div>
           <div className="max-w-md md:justify-self-end">
             <p className="text-ink-2">

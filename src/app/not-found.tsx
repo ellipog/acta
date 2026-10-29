@@ -4,7 +4,7 @@ import { Wordmark } from "@/components/wordmark";
 import { Dither } from "@/components/ui/dither";
 
 export const metadata: Metadata = {
-  title: "Not found · Acta",
+  title: "Not found",
   robots: { index: false, follow: false },
 };
 

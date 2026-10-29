@@ -88,6 +88,8 @@ export type PublicPage = {
   zoom: "month" | "quarter" | "year";
   timelineGroup: "stage" | "project";
   newTasksPublic: boolean;
+  // Public, but kept out of search engines and the sitemap, for a page meant only for those with the link
+  hideFromSearch: boolean;
   // The page's own look. "visitor" leaves light or dark to whoever reads it
   theme: "visitor" | "light" | "dark";
   // A colour of the page's own in place of the accent, as #rrggbb, or empty
@@ -142,6 +144,7 @@ export const defaultPage: PublicPage = {
   zoom: "quarter",
   timelineGroup: "stage",
   newTasksPublic: false,
+  hideFromSearch: false,
   theme: "visitor",
   color: "",
   hero: "plate",

@@ -7,7 +7,7 @@ import { getAuth, getWorkspace, lastBoardIn } from "@/lib/workspace";
 import { FirstBoard } from "./first-board";
 
 export const metadata: Metadata = {
-  title: "Acta",
+  title: { absolute: "Acta" },
   robots: { index: false, follow: false },
 };
 

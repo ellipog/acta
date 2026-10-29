@@ -22,6 +22,8 @@ const garamond = EB_Garamond({
   variable: "--font-garamond",
   style: "italic",
   subsets: ["latin"],
+  // Only small captions use it, so it shouldn't hold up the headings and body text
+  preload: false,
 });
 
 const marcellus = Marcellus({
@@ -32,8 +34,16 @@ const marcellus = Marcellus({
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
-  title: "Acta",
-  description: "A project manager built in layers: boards, tables, teams and a public roadmap.",
+  title: { default: "Acta", template: "%s · Acta" },
+  description: "A project manager for teams and their AI agents: boards, tables, a timeline and public roadmaps.",
+  applicationName: "Acta",
+  openGraph: { siteName: "Acta", locale: "en_US", type: "website" },
+  twitter: { card: "summary_large_image" },
+  // Codes from Google Search Console and Bing Webmaster Tools, for when the domain can't be verified through DNS
+  verification: {
+    google: process.env.GOOGLE_SITE_VERIFICATION || undefined,
+    other: process.env.BING_SITE_VERIFICATION ? { "msvalidate.01": process.env.BING_SITE_VERIFICATION } : undefined,
+  },
 };
 
 // Pixel art snaps to whole device pixels (see globals.css), so the page needs the current device pixel ratio

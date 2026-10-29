@@ -4,7 +4,8 @@ import { Fill, LegalPage } from "@/components/legal-page";
 import { operator } from "@/lib/legal";
 
 export const metadata: Metadata = {
-  title: "Terms · Acta",
+  title: "Terms",
+  alternates: { canonical: "/terms" },
   description: "The agreement between you and Acta: accounts, plans, your content, public roadmaps and liability.",
 };
 

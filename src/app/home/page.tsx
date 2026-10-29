@@ -6,7 +6,7 @@ import { AppSkeleton } from "@/components/app-chrome";
 import { getAuth, getWorkspaces } from "@/lib/workspace";
 
 export const metadata: Metadata = {
-  title: "Acta",
+  title: { absolute: "Acta" },
   robots: { index: false, follow: false },
 };
 

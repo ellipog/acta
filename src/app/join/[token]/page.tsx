@@ -11,7 +11,7 @@ import { createClient } from "@/lib/supabase/server";
 import { JoinButton } from "./join-button";
 
 export const metadata: Metadata = {
-  title: "Join a workspace · Acta",
+  title: "Join a workspace",
   robots: { index: false, follow: false },
 };
 

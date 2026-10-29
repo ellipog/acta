@@ -13,7 +13,7 @@ import { OverviewView } from "./overview-view";
 import { ownerRanges, ranges, type OwnerRangeId, type RangeId } from "./report";
 
 export const metadata: Metadata = {
-  title: "Analytics · Acta",
+  title: "Analytics",
   robots: { index: false, follow: false },
 };
 

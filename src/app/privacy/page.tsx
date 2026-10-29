@@ -5,7 +5,8 @@ import { operator } from "@/lib/legal";
 import { siteHost } from "@/lib/slugs";
 
 export const metadata: Metadata = {
-  title: "Privacy policy · Acta",
+  title: "Privacy policy",
+  alternates: { canonical: "/privacy" },
   description: "What Acta collects, why, who handles it and how to get it deleted.",
 };
 

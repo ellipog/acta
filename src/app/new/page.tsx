@@ -9,7 +9,7 @@ import { getSession, getWorkspaces } from "@/lib/workspace";
 import { NewWorkspaceForm } from "./new-workspace-form";
 
 export const metadata: Metadata = {
-  title: "New workspace · Acta",
+  title: "New workspace",
   robots: { index: false, follow: false },
 };
 

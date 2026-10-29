@@ -10,7 +10,7 @@ import { AccountView } from "./account-view";
 import type { AgentKey } from "./agent-keys";
 
 export const metadata: Metadata = {
-  title: "Account · Acta",
+  title: "Account",
 };
 
 export default function AccountPage() {

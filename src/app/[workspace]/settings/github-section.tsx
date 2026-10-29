@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/controls";
@@ -66,7 +67,10 @@ export function GitHubSection({
       <div className="flex flex-col items-start gap-3">
         <p className="text-sm text-ink-2">
           Link repositories to boards. Pull requests, branches and commits that name a task show up on it and move it
-          along, and issues can come over as tasks.
+          along, and issues can come over as tasks.{" "}
+          <Link href="/docs/github" className="underline underline-offset-2 hover:text-ink">
+            How it works
+          </Link>
         </p>
         {manager ? (
           <Button asChild>

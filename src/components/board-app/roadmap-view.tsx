@@ -694,6 +694,12 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
           <Setting label="Address" htmlFor="page-slug">
             <SlugField value={page.slug} onCommit={(slug) => set({ slug })} />
           </Setting>
+          <Toggle
+            label="Hide from search engines"
+            hint="Anyone with the link can still open it."
+            checked={page.hideFromSearch}
+            onChange={(hideFromSearch) => set({ hideFromSearch })}
+          />
         </Group>
 
         <Group title="Main view">

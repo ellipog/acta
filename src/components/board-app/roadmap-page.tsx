@@ -298,7 +298,7 @@ export function Visitor({
       <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {page.showDates && shipped && x.shipped ? (
           <span className="flex items-center gap-1 font-mono text-[11px] text-malachite">
-            <Icon name="check" size="sm" /> {formatShort(x.shipped, today)}
+            <Icon name="check" size="sm" /> <time dateTime={x.shipped}>{formatShort(x.shipped, today)}</time>
           </span>
         ) : page.showDates && x.due ? (
           <span className="flex items-center gap-1 font-mono text-[11px] text-ink-3">
@@ -714,7 +714,9 @@ export function Visitor({
                 <li key={x.id} className={cn("relative pl-5 last:pb-0", compact ? "pb-3" : "pb-5")}>
                   <span className="absolute top-1 -left-[5px] size-[9px] border border-malachite bg-malachite" />
                   {page.showDates && x.shipped && !page.shippedByMonth ? (
-                    <p className="font-mono text-[11px] text-ink-3">{formatShort(x.shipped, null)}</p>
+                    <p className="font-mono text-[11px] text-ink-3">
+                      <time dateTime={x.shipped}>{formatShort(x.shipped, null)}</time>
+                    </p>
                   ) : null}
                   <button
                     onClick={() => setDetail(x.id)}

@@ -55,13 +55,19 @@ export function Hero() {
           <span>Latin, “things done”</span>
           <span className="hidden sm:inline">A project manager, in layers</span>
         </div>
-        <h1 aria-label="Acta" className="mt-6 font-display text-[clamp(5rem,27.6vw,24.6rem)] leading-[0.74] tracking-[0.06em]">
-          <Strata>ACTA</Strata>
+        {/* The wordmark is the picture, and the line under it says in words what Acta is */}
+        <h1 className="mt-6">
+          <span className="block font-display text-[clamp(5rem,27.6vw,24.6rem)] leading-[0.74] tracking-[0.06em]">
+            <Strata>ACTA</Strata>
+          </span>
+          <span className="mt-8 block border-t border-line pt-6 font-display text-3xl leading-tight sm:text-4xl">
+            Project management for teams and their AI agents
+          </span>
         </h1>
-        <div className="mt-8 grid items-end gap-6 border-t border-line pt-6 md:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="mt-5 grid items-end gap-6 md:grid-cols-[minmax(0,1fr)_auto]">
           <p className="max-w-lg text-lg leading-relaxed text-ink-2">
-            A calm project manager. Boards, tables, a timeline and a public roadmap, and nothing
-            you’ll have to dig through.
+            A calm kanban board, table and timeline, with a public roadmap people can vote on. Claude Code, Cursor
+            and other agents work on the same tasks over MCP.
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <Button variant="primary" size="lg" asChild>

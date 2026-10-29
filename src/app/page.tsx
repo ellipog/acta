@@ -1,3 +1,5 @@
+import type { Metadata } from "next";
+import { JsonLd } from "@/components/json-ld";
 import { SiteHeader } from "@/components/site-chrome";
 import { CoreSample, type CoreLayer } from "@/components/core-sample";
 import { Contact } from "@/components/strata";
@@ -6,6 +8,50 @@ import { BoardSection, FieldsSection, HandsSection } from "@/components/landing/
 import { SedimentSection } from "@/components/landing/sediment";
 import { RoadmapSection } from "@/components/landing/roadmap";
 import { BedrockSection } from "@/components/landing/bedrock";
+import { siteUrl } from "@/lib/slugs";
+
+const description =
+  "Kanban boards, tables, timelines and public roadmaps with voting, for teams and the AI agents that work with them over MCP.";
+
+export const metadata: Metadata = {
+  title: { absolute: "Acta: project management for teams and their AI agents" },
+  description,
+  alternates: { canonical: "/" },
+  openGraph: { title: "Acta: project management for teams and their AI agents", description, url: "/" },
+};
+
+// What Acta is, who makes it, and the site, for search engines
+const structured = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": `${siteUrl}/#aaen-studios`,
+      name: "Aaen Studios",
+      url: siteUrl,
+      logo: `${siteUrl}/apple-icon.png`,
+      sameAs: ["https://github.com/ellipog/acta"],
+    },
+    {
+      "@type": "WebSite",
+      "@id": `${siteUrl}/#website`,
+      name: "Acta",
+      url: siteUrl,
+      publisher: { "@id": `${siteUrl}/#aaen-studios` },
+    },
+    {
+      "@type": "SoftwareApplication",
+      name: "Acta",
+      url: siteUrl,
+      description,
+      applicationCategory: "BusinessApplication",
+      operatingSystem: "Web",
+      image: `${siteUrl}/opengraph-image`,
+      offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+      publisher: { "@id": `${siteUrl}/#aaen-studios` },
+    },
+  ],
+};
 
 const core: CoreLayer[] = [
   { id: "surface", label: "Surface", rock: "Surface", base: "page", tone: "pyrite", level: 12 },
@@ -20,6 +66,7 @@ const core: CoreLayer[] = [
 export default function Home() {
   return (
     <>
+      <JsonLd data={structured} />
       <SiteHeader />
       <CoreSample layers={core} />
       <main className="flex-1">

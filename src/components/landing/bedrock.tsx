@@ -5,7 +5,7 @@ import { Dither } from "@/components/ui/dither";
 import { Wordmark } from "@/components/wordmark";
 import { actaRoadmapHref } from "@/lib/slugs";
 import { authReady } from "@/lib/supabase/env";
-import { SectionMark } from "./parts";
+import { Plain, SectionMark } from "./parts";
 
 const TIP = { x: 224, y: 404 };
 const CAVE = { width: 420, height: 760 };
@@ -95,6 +95,17 @@ export function BedrockSection() {
             <br />
             first stone.
           </h2>
+          <Plain className="text-bedrock-ink">
+            Free to start. Then{" "}
+            <Link href="/docs/agents" className="underline decoration-bedrock-2 underline-offset-4 hover:decoration-bedrock-ink">
+              connect your AI agents over MCP
+            </Link>{" "}
+            or{" "}
+            <Link href="/docs/github" className="underline decoration-bedrock-2 underline-offset-4 hover:decoration-bedrock-ink">
+              link GitHub pull requests to tasks
+            </Link>
+            .
+          </Plain>
           <p className="mt-7 max-w-md text-lg leading-relaxed text-bedrock-muted">
             A stalactite grows a few millimetres a century, one drop at a time. A board grows the same way: one
             task, then the next. Start yours.
@@ -139,9 +150,18 @@ export function BedrockSection() {
             <p className="mt-3 max-w-xs text-sm text-bedrock-muted">
               Acta, Latin for “things done.” A project manager, built in layers.
             </p>
-            <nav aria-label="Footer" className="mt-6 flex gap-4 text-xs text-bedrock-muted">
+            <nav aria-label="Footer" className="mt-6 flex flex-wrap gap-x-4 gap-y-2 text-xs text-bedrock-muted">
+              <Link href="/docs" className="hover:text-bedrock-ink">
+                Docs
+              </Link>
               <Link href={actaRoadmapHref} className="hover:text-bedrock-ink">
                 Roadmap
+              </Link>
+              <Link href="/changelog" className="hover:text-bedrock-ink">
+                Changelog
+              </Link>
+              <Link href="/compare" className="hover:text-bedrock-ink">
+                Compare
               </Link>
               <Link href="/privacy" className="hover:text-bedrock-ink">
                 Privacy

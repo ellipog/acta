@@ -5,7 +5,7 @@ import { getAuth, getMyTasks, lastBoardIn } from "@/lib/workspace";
 import { MyTasksFrame, MyTasksView } from "./my-tasks-view";
 
 export const metadata: Metadata = {
-  title: "My tasks · Acta",
+  title: "My tasks",
   robots: { index: false, follow: false },
 };
 

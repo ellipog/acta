@@ -12,7 +12,7 @@ import { SettingsLoading } from "./settings-loading";
 import { SettingsView } from "./settings-view";
 
 export const metadata: Metadata = {
-  title: "Settings · Acta",
+  title: "Settings",
   robots: { index: false, follow: false },
 };
 

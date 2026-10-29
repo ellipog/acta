@@ -15,6 +15,7 @@ export function SiteHeader() {
         <nav className="hidden items-center gap-5 text-sm text-ink-2 md:flex">
           <Link href="/#board" className="hover:text-ink">Product</Link>
           <Link href="/demo" className="hover:text-ink">Demo</Link>
+          <Link href="/docs" className="hover:text-ink">Docs</Link>
           <Link href={actaRoadmapHref} className="hover:text-ink">Roadmap</Link>
         </nav>
         <div className="ml-auto flex items-center gap-1.5">
@@ -38,9 +39,18 @@ export function SiteFooter() {
             Acta, Latin for “things done.” A project manager, built in layers.
           </p>
         </div>
-        <nav aria-label="Legal" className="flex gap-4 text-xs text-ink-3">
+        <nav aria-label="Site" className="flex flex-wrap gap-4 text-xs text-ink-3">
+          <Link href="/docs" className="hover:text-ink">
+            Docs
+          </Link>
           <Link href={actaRoadmapHref} className="hover:text-ink">
             Roadmap
+          </Link>
+          <Link href="/changelog" className="hover:text-ink">
+            Changelog
+          </Link>
+          <Link href="/compare" className="hover:text-ink">
+            Compare
           </Link>
           <Link href="/privacy" className="hover:text-ink">
             Privacy

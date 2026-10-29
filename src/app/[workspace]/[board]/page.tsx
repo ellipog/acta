@@ -8,7 +8,7 @@ export async function generateMetadata({ params }: PageProps<"/[workspace]/[boar
   const { workspace, board } = await params;
   const live = await loadBoard(workspace, board);
   return {
-    title: live ? `${live.board.name} · ${live.workspace.name}` : "Acta",
+    title: { absolute: live ? `${live.board.name} · ${live.workspace.name}` : "Acta" },
     robots: { index: false, follow: false },
   };
 }
