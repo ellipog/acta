@@ -334,6 +334,14 @@ function RepoRow({
             />
           </label>
         ) : null}
+        {settings.issues
+          ? toggle(
+              "Send comments to issues",
+              settings.issueComments,
+              (v) => ({ ...settings, issueComments: v }),
+              "Comments made in Acta show up on the issue too",
+            )
+          : null}
       </div>
     </li>
   );

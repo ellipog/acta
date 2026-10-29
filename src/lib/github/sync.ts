@@ -3,16 +3,19 @@ import { randomUUID } from "node:crypto";
 import { pageFrom, statusTitle, type Label, type StatusCategory } from "@/lib/board-store";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { siteUrl } from "@/lib/slugs";
-import { botLogin, github, githubAll } from "./app";
+import { botLogin, github, githubAll, GitHubError } from "./app";
 import {
   boardLabels,
   closingNumbers,
+  githubTarget,
   issueStatus,
+  linkedEvent,
   newer,
   nextStatus,
   prState,
   repoSettings,
   stamp,
+  targetLabel,
   taskNumbers,
   type DevEvent,
   type FieldTimes,
@@ -297,7 +300,7 @@ async function onPush(r: Repo, p: Payload) {
 
 // Issues
 
-async function claim(r: Repo, issue: Payload) {
+async function claim(r: Repo, issue: { number: number }) {
   const { data } = await db()
     .from("github_deliveries")
     .upsert({ id: `issue:${r.id}:${issue.number}` }, { onConflict: "id", ignoreDuplicates: true })
@@ -525,15 +528,24 @@ export async function handleDelivery(event: string, delivery: string, p: Payload
 
 // Acta to GitHub
 
-/** Sends what changed in Acta on a board's synced issues to GitHub */
+type OutboxRow = {
+  id: number;
+  number: number;
+  fields: string[];
+  created_at: string;
+  comment_id: string | null;
+  github_comment: number | null;
+};
+
+/** Sends what changed in Acta on a board's synced issues to GitHub: titles, statuses, labels and comments */
 export async function flushOutbox(boardId: string) {
-  const { data: rows } = await db()
-    .from("github_outbox")
-    .select("id, number, fields, created_at")
-    .eq("board_id", boardId)
-    .order("id")
-    .limit(200);
-  if (!rows?.length) return;
+  const waiting = (columns: string) =>
+    db().from("github_outbox").select(columns).eq("board_id", boardId).order("id").limit(200);
+  const all = await waiting("id, number, fields, created_at, comment_id, github_comment");
+  // Before the comments migration only fields wait here
+  const { data } = all.error ? await waiting("id, number, fields, created_at") : all;
+  const rows = (data ?? []) as unknown as OutboxRow[];
+  if (!rows.length) return;
   await db()
     .from("github_outbox")
     .delete()
@@ -541,12 +553,30 @@ export async function flushOutbox(boardId: string) {
       "id",
       rows.map((x) => x.id),
     );
+  const repos = new Map<number, Promise<Repo | null>>();
+  const repo = (id: number) => {
+    if (!repos.has(id)) repos.set(id, repoFor(id));
+    return repos.get(id)!;
+  };
+  await sendFields(
+    boardId,
+    rows.filter((x) => !x.comment_id),
+    repo,
+  );
+  await sendComments(
+    boardId,
+    rows.filter((x) => x.comment_id),
+    repo,
+  );
+}
 
+async function sendFields(boardId: string, rows: OutboxRow[], repo: (id: number) => Promise<Repo | null>) {
+  if (!rows.length) return;
   // The latest Acta change to each field of each task
   const byTask = new Map<number, Map<string, string>>();
   for (const row of rows) {
     const fields = byTask.get(row.number) ?? new Map<string, string>();
-    for (const f of row.fields as string[]) fields.set(f, row.created_at as string);
+    for (const f of row.fields) fields.set(f, row.created_at);
     byTask.set(row.number, fields);
   }
 
@@ -561,10 +591,8 @@ export async function flushOutbox(boardId: string) {
     .select("number, title, status, labels")
     .eq("board_id", boardId)
     .in("number", [...byTask.keys()]);
-  const repos = new Map<number, Repo | null>();
   for (const l of links ?? []) {
-    if (!repos.has(l.repo_id)) repos.set(l.repo_id, await repoFor(l.repo_id));
-    const r = repos.get(l.repo_id);
+    const r = await repo(l.repo_id);
     const t = (tasks ?? []).find((x) => x.number === l.number);
     if (!r || !t) continue;
     let times = (l.extra ?? {}) as FieldTimes;
@@ -593,4 +621,287 @@ export async function flushOutbox(boardId: string) {
     }).catch((error) => console.error("GitHub issue update failed", error));
     await db().from("task_links").update({ extra: times }).eq("id", l.id);
   }
+}
+
+// Comments made in Acta on a synced issue's task go to the issue, signed with who wrote them. Edits follow, and a
+// comment deleted in Acta comes off the issue
+async function sendComments(boardId: string, rows: OutboxRow[], repo: (id: number) => Promise<Repo | null>) {
+  if (!rows.length) return;
+  // Only the last thing that happened to each comment matters
+  const last = new Map<string, OutboxRow>();
+  for (const row of rows) last.set(row.comment_id!, row);
+  const ids = [...last.keys()];
+  const [{ data: comments }, { data: sent }, { data: links }] = await Promise.all([
+    db().from("comments").select("id, number, body, author_name, via, profiles (name)").in("id", ids),
+    db().from("github_issue_comments").select("comment_id, repo_id, github_id").in("comment_id", ids),
+    db()
+      .from("task_links")
+      .select("number, ref, repo_id")
+      .eq("board_id", boardId)
+      .eq("kind", "issue")
+      .in("number", [...new Set(rows.map((x) => x.number))]),
+  ]);
+  for (const [id, row] of last) {
+    const was = (sent ?? []).find((x) => x.comment_id === id);
+    const githubId = (was?.github_id as number | undefined) ?? row.github_comment;
+    const issue = (links ?? []).find((l) => l.number === row.number);
+    const repoId = (was?.repo_id as number | undefined) ?? (issue?.repo_id as number | undefined);
+    const r = repoId ? await repo(repoId) : null;
+    if (!r) continue;
+    const path = `/repos/${r.full_name}/issues`;
+    try {
+      if (row.fields.includes("uncomment")) {
+        if (githubId) await github(r.installation_id, `${path}/comments/${githubId}`, { method: "DELETE" }).catch(() => {});
+        await db().from("github_issue_comments").delete().eq("comment_id", id);
+        continue;
+      }
+      const c = (comments ?? []).find((x) => x.id === id);
+      if (!c || !issue || !r.settings.issues || !r.settings.issueComments) continue;
+      const author = (c.profiles as unknown as { name: string | null } | null)?.name;
+      const name = (c.author_name as string | null) ?? author ?? "Someone";
+      const via = c.via ? ` (${c.via})` : "";
+      const body = `${c.body}\n\n<sub>${name}${via} via [Acta](${taskUrl(r, c.number as number)})</sub>`;
+      if (githubId) {
+        await github(r.installation_id, `${path}/comments/${githubId}`, { method: "PATCH", body: JSON.stringify({ body }) });
+        continue;
+      }
+      const made = await github<{ id: number }>(r.installation_id, `${path}/${issue.ref}/comments`, {
+        method: "POST",
+        body: JSON.stringify({ body }),
+      });
+      await db().from("github_issue_comments").upsert({ comment_id: id, repo_id: r.id, github_id: made.id });
+    } catch (error) {
+      console.error("GitHub comment sync failed", error);
+    }
+  }
+}
+
+// By hand: linking a pull request, issue, branch or commit to a task, and opening an issue from one. These talk to
+// GitHub and record the link. The task's own changes go back to the caller, which saves them as whoever asked, a
+// person or an agent's key
+
+/** A mistake the person or agent can fix */
+export class LinkProblem extends Error {}
+
+/** What a link did: a short name for it, and the task's changes for the caller to save */
+export type ByHand = { label: string; url: string; changes: Record<string, unknown> };
+
+async function boardRepos(boardId: string) {
+  const { data } = await db().from("github_repos").select("id").eq("board_id", boardId).order("full_name");
+  const repos = await Promise.all((data ?? []).map((x) => repoFor(x.id as number)));
+  return repos.filter((r): r is Repo => Boolean(r));
+}
+
+async function from404<T>(r: Repo, path: string, what: string) {
+  try {
+    return await github<T>(r.installation_id, path);
+  } catch (error) {
+    if (error instanceof GitHubError && error.status === 404) throw new LinkProblem(`GitHub can’t find ${what}.`);
+    throw error;
+  }
+}
+
+/** Links a pull request, issue, branch or commit to a task by its address on GitHub, and moves the task along as
+ * if it had named the task itself */
+export async function linkByHand(boardId: string, number: number, href: string): Promise<ByHand> {
+  const target = githubTarget(href);
+  if (!target) throw new LinkProblem("That isn’t a link to a pull request, issue, branch or commit on GitHub.");
+  const repos = await boardRepos(boardId);
+  const r = repos.find((x) => x.full_name.toLowerCase() === target.repo.toLowerCase());
+  if (!r)
+    throw new LinkProblem(
+      repos.length
+        ? `${target.repo} isn’t linked to this board. Its repositories: ${repos.map((x) => x.full_name).join(", ")}.`
+        : "No GitHub repository is linked to this board. Link one in the workspace’s settings.",
+    );
+  const [t] = await tasksAmong(r, [number]);
+  if (!t) throw new LinkProblem(`There’s no task ${r.board.prefix}-${number}.`);
+  const base = `/repos/${r.full_name}`;
+  let { kind, ref } = target;
+  let fields: Parameters<typeof link>[4] = { url: href };
+  const closes = new Set<number>();
+
+  if (kind === "issue") {
+    const issue = await from404<Payload>(r, `${base}/issues/${ref}`, `issue #${ref}`);
+    // Pull requests are issues too, as far as GitHub's addresses go
+    if (issue.pull_request) kind = "pr";
+    else {
+      const taken = await issueLink(r, Number(ref));
+      if (taken && taken.number !== number)
+        throw new LinkProblem(`Issue #${ref} already syncs with ${r.board.prefix}-${taken.number}.`);
+      const { data: own } = await db()
+        .from("task_links")
+        .select("ref, repo_id")
+        .eq("board_id", boardId)
+        .eq("number", number)
+        .eq("kind", "issue")
+        .limit(1);
+      if (own?.length && !(own[0].repo_id === r.id && own[0].ref === ref))
+        throw new LinkProblem(`${r.board.prefix}-${number} already syncs with issue #${own[0].ref}. A task follows one issue.`);
+      // So the issue isn't brought over as a task of its own later
+      await claim(r, { number: Number(ref) });
+      const at = new Date().toISOString();
+      fields = {
+        url: issue.html_url,
+        title: issue.title,
+        state: issue.state,
+        author: issue.user?.login,
+        extra: { github: { title: at, status: at, labels: at } } satisfies FieldTimes,
+      };
+    }
+  }
+  if (kind === "pr") {
+    const pr = await from404<Payload>(r, `${base}/pulls/${ref}`, `pull request #${ref}`);
+    fields = {
+      url: pr.html_url,
+      title: pr.title,
+      state: prState(pr as { state: string }),
+      author: pr.user?.login,
+      extra: { branch: pr.head?.ref, draft: Boolean(pr.draft) },
+    };
+    if ([...closingNumbers(pr.body, r.board.prefix), ...closingNumbers(pr.title, r.board.prefix)].includes(number))
+      closes.add(number);
+  }
+  if (kind === "branch") {
+    await from404<Payload>(r, `${base}/branches/${encodeURIComponent(ref)}`, `a branch called ${ref}`);
+    fields = { url: `https://github.com/${r.full_name}/tree/${ref}`, title: ref };
+  }
+  if (kind === "commit") {
+    const c = await from404<Payload>(r, `${base}/commits/${ref}`, `commit ${ref.slice(0, 7)}`);
+    ref = String(c.sha);
+    fields = { url: c.html_url, title: String(c.commit?.message ?? "").split("\n")[0], author: c.author?.login };
+  }
+
+  await link(r, [number], kind, ref, fields, closes);
+  const label = targetLabel({ repo: r.full_name, kind, ref });
+  const event = linkedEvent(kind, fields.state);
+  const to = event ? nextStatus(t.status, event, r.settings) : null;
+  return {
+    label,
+    url: fields.url,
+    changes: {
+      updated: to
+        ? [{ number, fields: { status: to, ...(to === "done" ? { shipped_on: new Date().toISOString().slice(0, 10) } : {}) } }]
+        : [],
+      order: to ? [{ number, position: await columnEnd(r, to) }] : [],
+      activity: [
+        { id: randomUUID(), number, text: `linked ${label}${to ? ` and moved it to ${statusTitle[to]}` : ""}`.slice(0, 300) },
+      ],
+    },
+  };
+}
+
+/** Takes a link off a task, by its address or its id. What happened on GitHub stays as it was */
+export async function unlinkByHand(boardId: string, number: number, which: { url: string } | { id: string }): Promise<ByHand> {
+  let q = db()
+    .from("task_links")
+    .select("id, kind, ref, url, github_repos (full_name)")
+    .eq("board_id", boardId)
+    .eq("number", number);
+  let repo: string | null = null;
+  if ("id" in which) q = q.eq("id", which.id);
+  else {
+    const target = githubTarget(which.url);
+    if (!target) throw new LinkProblem("That isn’t a link to a pull request, issue, branch or commit on GitHub.");
+    repo = target.repo.toLowerCase();
+    // An issue's address can be a pull request's, and a commit's can be cut short
+    if (target.kind === "issue") q = q.in("kind", ["issue", "pr"]).eq("ref", target.ref);
+    else if (target.kind === "commit") q = q.eq("kind", "commit").like("ref", `${target.ref}%`);
+    else q = q.eq("kind", target.kind).eq("ref", target.ref);
+  }
+  const { data } = await q;
+  const name = (l: { github_repos: unknown }) => (l.github_repos as { full_name: string } | null)?.full_name ?? "";
+  const found = (data ?? []).filter((l) => !repo || name(l).toLowerCase() === repo);
+  if (!found.length) throw new LinkProblem("That isn’t linked to this task.");
+  await db()
+    .from("task_links")
+    .delete()
+    .in(
+      "id",
+      found.map((l) => l.id),
+    );
+  const l = found[0];
+  const label = targetLabel({ repo: name(l), kind: l.kind, ref: l.ref });
+  return {
+    label,
+    url: l.url,
+    changes: { activity: [{ id: randomUUID(), number, text: `unlinked ${label}`.slice(0, 300) }] },
+  };
+}
+
+/** Opens a GitHub issue from a task and keeps the two in step from then on */
+export async function openIssueByHand(boardId: string, number: number, repoName?: string): Promise<ByHand> {
+  const repos = (await boardRepos(boardId)).filter((r) => r.settings.issues);
+  if (!repos.length)
+    throw new LinkProblem("None of this board’s repositories sync issues. Turn that on for one in the workspace’s settings.");
+  const wanted = repoName?.trim().toLowerCase();
+  const r = wanted
+    ? repos.find((x) => x.full_name.toLowerCase() === wanted || x.full_name.split("/")[1].toLowerCase() === wanted)
+    : repos.length === 1
+      ? repos[0]
+      : undefined;
+  if (!r)
+    throw new LinkProblem(
+      `${wanted ? `${repoName} doesn’t sync issues with this board.` : "Say which repository."} These do: ${repos.map((x) => x.full_name).join(", ")}.`,
+    );
+  const { data: t } = await db()
+    .from("tasks")
+    .select("number, title, description, labels, status, public")
+    .eq("board_id", boardId)
+    .eq("number", number)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (!t) throw new LinkProblem(`There’s no task ${r.board.prefix}-${number}.`);
+  const { data: had } = await db()
+    .from("task_links")
+    .select("ref")
+    .eq("board_id", boardId)
+    .eq("number", number)
+    .eq("kind", "issue")
+    .limit(1);
+  if (had?.length) throw new LinkProblem(`${r.board.prefix}-${number} already syncs with issue #${had[0].ref}.`);
+
+  // Only labels the repository has, spelled its way
+  const known = await githubAll<{ name: string }>(r.installation_id, `/repos/${r.full_name}/labels`, 300).catch(() => []);
+  const labels = (t.labels as string[])
+    .map((l) => known.find((k) => k.name.toLowerCase() === l.toLowerCase())?.name)
+    .filter((l): l is string => Boolean(l));
+  const id = `${r.board.prefix}-${number}`;
+  const body = [String(t.description ?? "").trim(), `---\n[${id}](${taskUrl(r, number)}) in Acta`].filter(Boolean).join("\n\n");
+  const issue = await github<Payload>(r.installation_id, `/repos/${r.full_name}/issues`, {
+    method: "POST",
+    body: JSON.stringify({ title: t.title, body: body.slice(0, 60000), labels }),
+  });
+  await claim(r, { number: issue.number });
+  const finished = t.status === "done" || t.status === "canceled";
+  if (finished)
+    await github(r.installation_id, `/repos/${r.full_name}/issues/${issue.number}`, {
+      method: "PATCH",
+      body: JSON.stringify({ state: "closed", state_reason: t.status === "done" ? "completed" : "not_planned" }),
+    }).catch(() => {});
+  const at = new Date().toISOString();
+  await link(r, [number], "issue", String(issue.number), {
+    url: issue.html_url,
+    title: issue.title,
+    state: finished ? "closed" : issue.state,
+    author: issue.user?.login,
+    extra: { github: { title: at, status: at, labels: at } } satisfies FieldTimes,
+  });
+  const label = `${r.full_name.split("/")[1]}#${issue.number}`;
+  // A private repository's issue isn't for the public roadmap
+  const hide = r.private && t.public;
+  return {
+    label,
+    url: issue.html_url,
+    changes: {
+      updated: hide ? [{ number, fields: { public: false } }] : [],
+      activity: [
+        {
+          id: randomUUID(),
+          number,
+          text: `opened issue ${label} on GitHub${hide ? " and took the task off the public roadmap, since the repository is private" : ""}`,
+        },
+      ],
+    },
+  };
 }

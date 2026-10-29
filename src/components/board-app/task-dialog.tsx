@@ -41,12 +41,14 @@ export function TaskDialog({
   onClose,
   order = [],
   onOpen,
+  canEdit = true,
 }: {
   task: Task | null;
   dispatch: (a: BoardAction) => void;
   onClose: () => void;
   order?: string[];
   onOpen?: (id: string) => void;
+  canEdit?: boolean;
 }) {
   return (
     <D.Root open={Boolean(task)} onOpenChange={(o) => !o && onClose()}>
@@ -58,7 +60,9 @@ export function TaskDialog({
           aria-describedby={undefined}
           className="fixed inset-x-0 bottom-0 z-50 max-h-[calc(100dvh-1rem)] focus:outline-none sm:inset-auto sm:top-1/2 sm:left-1/2 sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100%-2rem)] sm:max-w-4xl sm:-translate-x-1/2 sm:-translate-y-1/2"
         >
-          {task ? <TaskBody key={task.id} task={task} dispatch={dispatch} onClose={onClose} order={order} onOpen={onOpen} /> : null}
+          {task ? (
+            <TaskBody key={task.id} task={task} dispatch={dispatch} onClose={onClose} order={order} onOpen={onOpen} canEdit={canEdit} />
+          ) : null}
         </D.Content>
       </D.Portal>
     </D.Root>
@@ -71,12 +75,14 @@ function TaskBody({
   onClose,
   order,
   onOpen,
+  canEdit,
 }: {
   task: Task;
   dispatch: (a: BoardAction) => void;
   onClose: () => void;
   order: string[];
   onOpen?: (id: string) => void;
+  canEdit: boolean;
 }) {
   const [title, setTitle] = useState(task.title);
   const [editing, setEditing] = useState(false);
@@ -318,7 +324,7 @@ function TaskBody({
               </form>
             </section>
 
-            <TaskLinks task={task} />
+            <TaskLinks task={task} canEdit={canEdit} />
 
             <section className="mt-6">
               <h3 className="text-xs font-medium text-ink-2">

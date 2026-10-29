@@ -33,8 +33,8 @@ import { loadClient } from "@/lib/supabase/browser";
 import { supabaseKey, supabaseUrl } from "@/lib/supabase/env";
 import type { DemoAction } from "./demo-state";
 
-// Changes to tasks that sync with GitHub issues wait in the database until the server sends them. A save that
-// could have touched one asks for that, once things settle
+// Changes to tasks that sync with GitHub issues, and comments on them, wait in the database until the server sends
+// them. A save that could have touched one asks for that, once things settle
 const githubFields = new Set<string>(["title", "status", "labels"]);
 const githubPings = new Map<string, ReturnType<typeof setTimeout>>();
 function pingGitHub(board: string) {
@@ -264,7 +264,12 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     for (const [a, b] of result.renamed)
       dispatch({ type: "rebase", current: (s) => renumber(s, a, b), history: (s) => renumber(s, a, b) });
     for (const part of result.saved) sent.current.record(part, result.goal);
-    if (result.saved.some((d) => d.updated.some((u) => u.fields.some((f) => githubFields.has(f))))) pingGitHub(boardId);
+    if (
+      result.saved.some(
+        (d) => d.comments.length || d.uncomments.length || d.updated.some((u) => u.fields.some((f) => githubFields.has(f))),
+      )
+    )
+      pingGitHub(boardId);
     base.current = result.base;
     const saved = result.base;
     if (result.refused.length) {

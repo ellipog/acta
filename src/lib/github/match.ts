@@ -14,12 +14,15 @@ export type RepoSettings = {
   issues: boolean;
   // Only issues with this label, so a busy repository doesn't flood the board
   issueLabel?: string;
+  // Comments made in Acta on a synced issue's task go to the issue too
+  issueComments: boolean;
 };
 
 export const defaultRepoSettings: RepoSettings = {
   automation: { start: true, review: true, done: true },
   comment: true,
   issues: false,
+  issueComments: true,
 };
 
 export function repoSettings(raw: unknown): RepoSettings {
@@ -34,6 +37,7 @@ export function repoSettings(raw: unknown): RepoSettings {
     comment: s.comment ?? defaultRepoSettings.comment,
     issues: s.issues ?? defaultRepoSettings.issues,
     issueLabel: typeof s.issueLabel === "string" && s.issueLabel.trim() ? s.issueLabel.trim().slice(0, 50) : undefined,
+    issueComments: s.issueComments ?? defaultRepoSettings.issueComments,
   };
 }
 
@@ -85,6 +89,45 @@ export function nextStatus(current: StatusCategory, event: DevEvent, settings: R
   if (!settings.automation[step[event]]) return null;
   const to = target[event];
   return rank[to] > rank[current] ? to : null;
+}
+
+export type GitHubTarget = { repo: string; kind: "pr" | "issue" | "branch" | "commit"; ref: string };
+
+/** The pull request, issue, branch or commit a github.com address points at, or null for anything else */
+export function githubTarget(href: string): GitHubTarget | null {
+  let url: URL;
+  try {
+    url = new URL(href.trim());
+  } catch {
+    return null;
+  }
+  if (url.hostname !== "github.com" && url.hostname !== "www.github.com") return null;
+  const [owner, name, kind, ...rest] = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  if (!owner || !name || !rest.length) return null;
+  const repo = `${owner}/${name.replace(/\.git$/, "")}`;
+  if (kind === "pull" && /^\d+$/.test(rest[0])) return { repo, kind: "pr", ref: rest[0] };
+  if (kind === "issues" && /^\d+$/.test(rest[0])) return { repo, kind: "issue", ref: rest[0] };
+  if (kind === "commit" && /^[0-9a-f]{7,40}$/i.test(rest[0])) return { repo, kind: "commit", ref: rest[0].toLowerCase() };
+  if (kind === "tree") return { repo, kind: "branch", ref: rest.join("/") };
+  return null;
+}
+
+/** A short name for a link, like calcite#45, calcite@1f3fcdc or calcite:act-12-csv */
+export function targetLabel(t: GitHubTarget) {
+  const name = t.repo.split("/")[1];
+  if (t.kind === "commit") return `${name}@${t.ref.slice(0, 7)}`;
+  if (t.kind === "branch") return `${name}:${t.ref}`;
+  return `${name}#${t.ref}`;
+}
+
+/** The event a pull request, branch or commit linked by hand stands for, to move its task along */
+export function linkedEvent(kind: GitHubTarget["kind"], state?: string | null): DevEvent | null {
+  if (kind === "branch" || kind === "commit") return "started";
+  if (kind !== "pr") return null;
+  if (state === "merged") return "merged";
+  if (state === "open") return "ready";
+  if (state === "draft") return "started";
+  return null;
 }
 
 /** A pull request's state, as the task shows it */

@@ -6,7 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getAuth } from "@/lib/workspace";
 import { asApp, githubAll, githubReady } from "./app";
 import { repoSettings, type RepoSettings } from "./match";
-import { importIssues } from "./sync";
+import { flushOutbox, importIssues, linkByHand, LinkProblem, openIssueByHand, unlinkByHand, type ByHand } from "./sync";
 
 // Linking a workspace's repositories to its boards. Only owners and admins may, and the server writes the links,
 // since people only read them
@@ -122,4 +122,49 @@ export async function disconnectGitHub(workspace: string, installation: number):
   await db.from("github_installations").delete().eq("id", installation);
   refresh();
   return { ok: true, message: "Disconnected from GitHub." };
+}
+
+// Linking GitHub work to one task by hand, and opening an issue from one. Anyone who may edit the board may, and
+// the task's changes are saved as them
+
+type HandResult = Result & { url?: string };
+
+async function editing(board: string) {
+  if (!githubReady || !isUuid(board)) return null;
+  const auth = await getAuth();
+  if (!auth) return null;
+  // Row security only shows the board to its members
+  const { data: b } = await auth.supabase.from("boards").select("workspace_id").eq("id", board).maybeSingle();
+  if (!b) return null;
+  const { data: ok } = await auth.supabase.rpc("can", { ws: b.workspace_id, what: "edit" });
+  return ok ? auth : null;
+}
+
+async function byHand(board: string, run: () => Promise<ByHand>, said: (done: ByHand) => string): Promise<HandResult> {
+  const auth = await editing(board);
+  if (!auth) return { ok: false, message: "You can’t edit tasks on this board." };
+  try {
+    const done = await run();
+    const { error } = await auth.supabase.rpc("apply_board_changes", { p_board: board, p_changes: done.changes });
+    if (error) console.error("Saving a GitHub link failed", error);
+    after(() => flushOutbox(board).catch((e) => console.error("GitHub flush failed", e)));
+    return { ok: true, message: said(done), url: done.url };
+  } catch (error) {
+    if (error instanceof LinkProblem) return { ok: false, message: error.message };
+    console.error("GitHub by hand failed", error);
+    return { ok: false, message: "GitHub didn’t answer. Try again." };
+  }
+}
+
+export async function linkToTask(board: string, number: number, url: string) {
+  return byHand(board, () => linkByHand(board, number, url), (d) => `Linked ${d.label}.`);
+}
+
+export async function unlinkFromTask(board: string, number: number, link: string) {
+  if (!isUuid(link)) return { ok: false, message: "That isn’t linked to this task." };
+  return byHand(board, () => unlinkByHand(board, number, { id: link }), (d) => `Unlinked ${d.label}.`);
+}
+
+export async function openIssueFromTask(board: string, number: number, repo?: string) {
+  return byHand(board, () => openIssueByHand(board, number, repo), (d) => `Opened ${d.label}.`);
 }

@@ -6,12 +6,15 @@ import {
   branchName,
   closingNumbers,
   defaultRepoSettings,
+  githubTarget,
   issueStatus,
+  linkedEvent,
   newer,
   nextStatus,
   prState,
   repoSettings,
   stamp,
+  targetLabel,
   taskNumbers,
 } from "../src/lib/github/match";
 import { readState, signatureOk, signState } from "../src/lib/github/signature";
@@ -155,4 +158,49 @@ test("GitHub links read as short chips", () => {
   expect(plainLinkText("1f3fcdc", "https://github.com/a/b/commit/1f3fcdc")).toBe(true);
   expect(plainLinkText("#45", "https://github.com/a/b/pull/45")).toBe(true);
   expect(plainLinkText("the new parser", "https://github.com/a/b/pull/45")).toBe(false);
+});
+
+test("work linked by hand is read from its address on GitHub", () => {
+  expect(githubTarget("https://github.com/aaen/calcite/pull/45/files")).toEqual({ repo: "aaen/calcite", kind: "pr", ref: "45" });
+  expect(githubTarget("https://github.com/aaen/calcite/issues/7#issuecomment-1")).toEqual({
+    repo: "aaen/calcite",
+    kind: "issue",
+    ref: "7",
+  });
+  expect(githubTarget("https://github.com/aaen/calcite/tree/act-12/csv-export")).toEqual({
+    repo: "aaen/calcite",
+    kind: "branch",
+    ref: "act-12/csv-export",
+  });
+  expect(githubTarget("https://github.com/aaen/calcite/commit/1F3FCDC9")).toEqual({
+    repo: "aaen/calcite",
+    kind: "commit",
+    ref: "1f3fcdc9",
+  });
+  expect(githubTarget("https://github.com/aaen/calcite")).toBeNull();
+  expect(githubTarget("https://github.com/aaen/calcite/blob/main/README.md")).toBeNull();
+  expect(githubTarget("https://gitlab.com/aaen/calcite/pull/45")).toBeNull();
+  expect(githubTarget("not a link")).toBeNull();
+});
+
+test("links get short names", () => {
+  expect(targetLabel({ repo: "aaen/calcite", kind: "pr", ref: "45" })).toBe("calcite#45");
+  expect(targetLabel({ repo: "aaen/calcite", kind: "commit", ref: "1f3fcdc9e8" })).toBe("calcite@1f3fcdc");
+  expect(targetLabel({ repo: "aaen/calcite", kind: "branch", ref: "act-12-csv" })).toBe("calcite:act-12-csv");
+});
+
+test("a link made by hand moves the task like one that named it", () => {
+  expect(linkedEvent("pr", "open")).toBe("ready");
+  expect(linkedEvent("pr", "draft")).toBe("started");
+  expect(linkedEvent("pr", "merged")).toBe("merged");
+  expect(linkedEvent("pr", "closed")).toBeNull();
+  expect(linkedEvent("branch")).toBe("started");
+  expect(linkedEvent("commit")).toBe("started");
+  // An issue syncs with the task rather than moving it
+  expect(linkedEvent("issue", "open")).toBeNull();
+});
+
+test("comments go to synced issues unless a repository turns that off", () => {
+  expect(repoSettings({}).issueComments).toBe(true);
+  expect(repoSettings({ issueComments: false }).issueComments).toBe(false);
 });

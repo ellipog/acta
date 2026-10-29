@@ -18,7 +18,9 @@ import {
   type Subtask,
   type Tone,
 } from "@/lib/board-store";
+import { branchName, repoSettings } from "@/lib/github/match";
 import { boardSlugProblem, publicHref, siteUrl, slugify } from "@/lib/slugs";
+import { can as allows, type Permissions, type Role } from "@/lib/live";
 import { accessRank, agentDb, type Access, type Agent } from "./keys";
 
 // An agent's changes to tasks that sync with GitHub issues go to GitHub once the answer is on its way
@@ -42,7 +44,6 @@ export const taskStatuses = ["todo", "in_progress", "review", "done", "canceled"
 export const sortKeys = ["priority", "due", "start", "created", "updated", "size", "title", "votes"] as const;
 const tones: Tone[] = ["lapis", "pyrite", "malachite", "hematite"];
 
-type Role = "owner" | "admin" | "member";
 type Place = { id: string; slug: string; name: string; role: Role };
 type Person = { id: string; name: string; role: Role };
 
@@ -128,6 +129,26 @@ export type TaskPatch = TaskInput & {
   after?: string;
 };
 
+export const githubFilters = ["open_pull_request", "checks_failing", "no_pull_request"] as const;
+type GitHubFilter = (typeof githubFilters)[number];
+
+type PullRequest = { board_id: string; number: number; ref: string; state: string | null; extra: { checks?: string; review?: string } };
+const openPull = (l: PullRequest) => l.state === "open" || l.state === "draft";
+const failing = (l: PullRequest) => openPull(l) && (l.extra?.checks === "failure" || l.extra?.checks === "timed_out");
+
+// A task's pull request at a glance: the open one if there is one, else the latest
+function pullSummary(list: PullRequest[] | undefined) {
+  if (!list?.length) return undefined;
+  const main = list.find(openPull) ?? list[0];
+  return compact({
+    pull_request: `#${main.ref}`,
+    state: main.state ?? undefined,
+    checks: main.extra?.checks,
+    review: main.extra?.review,
+    more: list.length > 1 ? list.length - 1 : undefined,
+  });
+}
+
 export type Filters = {
   status?: StatusCategory[];
   assignee?: string;
@@ -136,6 +157,8 @@ export type Filters = {
   query?: string;
   deleted?: boolean;
   archived?: boolean;
+  // Tasks by what GitHub says about their pull requests
+  github?: GitHubFilter;
   limit?: number;
 };
 
@@ -462,14 +485,39 @@ export function actaFor(agent: Agent) {
     };
   }
 
+  // GitHub is written to before the task's changes are saved, so whether the key's person may edit is asked first
+  async function byHand<T>(b: Board, run: (g: typeof import("@/lib/github/sync")) => Promise<T>) {
+    if (!can("write")) throw new Problem("This key can only read.");
+    const [{ githubReady }, g, { data: m }] = await Promise.all([
+      import("@/lib/github/app"),
+      import("@/lib/github/sync"),
+      db.from("members").select("role, permissions").eq("workspace_id", b.workspace_id).eq("user_id", agent.userId).maybeSingle(),
+    ]);
+    if (!githubReady) throw new Problem("GitHub isn’t set up on this Acta.");
+    if (!m || !allows(m.role as Role, m.permissions as Permissions | null, "edit"))
+      throw new Problem(`You can’t edit tasks in ${b.workspace.slug}.`);
+    try {
+      return await run(g);
+    } catch (error) {
+      if (error instanceof g.LinkProblem) throw new Problem(error.message);
+      throw error;
+    }
+  }
+
+  const moved = (done: { changes: Record<string, unknown> }) => {
+    const [first] = (done.changes.updated ?? []) as { fields: { status?: StatusCategory } }[];
+    return { moved_to: first?.fields.status };
+  };
+
   async function apply(b: Board, changes: Record<string, unknown>) {
     const { data, error } = await db.rpc("agent_apply", { p_key: agent.hash, p_board: b.id, p_changes: changes });
     if (error) throw dbProblem(error);
-    if (Array.isArray(changes.updated) && changes.updated.length) sendToGitHub(b.id);
+    const some = (k: string) => Array.isArray(changes[k]) && (changes[k] as unknown[]).length > 0;
+    if (some("updated") || some("comments")) sendToGitHub(b.id);
     return data as { moved: Record<string, number>; next: number };
   }
 
-  function summary(b: Spot, t: TaskRow, who: (id: string | null) => string | undefined) {
+  function summary(b: Spot, t: TaskRow, who: (id: string | null) => string | undefined, pulls?: PullRequest[]) {
     const done = t.subtasks.filter((s) => s.done).length;
     return compact({
       id: taskId(b, t.number),
@@ -488,12 +536,56 @@ export function actaFor(agent: Agent) {
       shipped: t.shipped_on,
       archived: t.archived_at,
       deleted: t.deleted_at,
+      github: pullSummary(pulls),
     });
+  }
+
+  // The pull requests on some boards' tasks, by board and task. Nothing before the GitHub migration
+  async function pullRequests(boards: string[], numbers?: number[]) {
+    const out = new Map<string, PullRequest[]>();
+    if (!boards.length || numbers?.length === 0) return out;
+    let q = db
+      .from("task_links")
+      .select("board_id, number, ref, state, extra")
+      .in("board_id", boards)
+      .eq("kind", "pr")
+      .order("updated_at", { ascending: false })
+      .limit(5000);
+    if (numbers) q = q.in("number", numbers);
+    const { data, error } = await q;
+    if (error) return out;
+    for (const l of (data ?? []) as PullRequest[]) {
+      const key = `${l.board_id}:${l.number}`;
+      out.set(key, [...(out.get(key) ?? []), l]);
+    }
+    return out;
+  }
+
+  // A filter on tasks by their pull requests, as a PostgREST "or", or null when no task can match
+  async function byPulls(boards: string[], which: GitHubFilter) {
+    const pulls = await pullRequests(boards);
+    const keep = (list: PullRequest[]) =>
+      which === "open_pull_request" ? list.some(openPull) : which === "checks_failing" ? list.some(failing) : true;
+    const numbers = new Map<string, number[]>();
+    for (const [key, list] of pulls) {
+      if (!keep(list)) continue;
+      const [board, n] = key.split(":");
+      numbers.set(board, [...(numbers.get(board) ?? []), Number(n)]);
+    }
+    if (which !== "no_pull_request") {
+      const parts = [...numbers].map(([board, ns]) => `and(board_id.eq.${board},number.in.(${ns.join(",")}))`);
+      return parts.length ? parts.join(",") : null;
+    }
+    const without = boards.filter((id) => !numbers.has(id));
+    return [
+      ...[...numbers].map(([board, ns]) => `and(board_id.eq.${board},number.not.in.(${ns.join(",")}))`),
+      ...(without.length ? [`board_id.in.(${without.join(",")})`] : []),
+    ].join(",");
   }
 
   async function detail(b: Board, t: TaskRow) {
     const who = await nameOf(b.workspace_id);
-    const [{ data: comments }, { data: activity }, { data: links }] = await Promise.all([
+    const [{ data: comments }, { data: activity }, { data: links }, { count: repos }] = await Promise.all([
       db
         .from("comments")
         .select("*")
@@ -515,7 +607,9 @@ export function actaFor(agent: Agent) {
         .eq("number", t.number)
         .order("updated_at", { ascending: false })
         .limit(20),
+      db.from("github_repos").select("id", { count: "exact", head: true }).eq("board_id", b.id),
     ]);
+    const issue = (links ?? []).find((l) => l.kind === "issue");
     const github = (links ?? []).map((l) =>
       compact({
         kind: { pr: "pull_request", issue: "issue", branch: "branch", commit: "commit" }[l.kind as string],
@@ -551,6 +645,11 @@ export function actaFor(agent: Agent) {
         .reverse()
         .map((a) => compact({ by: who(a.actor), via: a.via, at: a.created_at, text: a.text })),
       github: github.length ? github : undefined,
+      // On a board linked to GitHub, the branch to work on it in, which links it and moves it along by itself
+      branch: repos ? branchName(taskId(b, t.number), t.title) : undefined,
+      syncs_with_issue: issue
+        ? `${issue.url}. Title, status, labels and new comments here go to the issue, and its changes come back`
+        : undefined,
       created: t.created_at,
       updated: t.updated_at,
     };
@@ -639,7 +738,7 @@ export function actaFor(agent: Agent) {
               .is("deleted_at", null)
               .not("archived_at", "is", null)
           : Promise.resolve({ count: 0 }),
-        db.from("github_repos").select("full_name").eq("board_id", b.id).order("full_name"),
+        db.from("github_repos").select("full_name, settings").eq("board_id", b.id).order("full_name"),
       ]);
       const page = pageFrom(b.name, b.slug, b.page);
       return compact({
@@ -658,7 +757,23 @@ export function actaFor(agent: Agent) {
           : undefined,
         status_names: b.status_names && Object.keys(b.status_names).length ? b.status_names : undefined,
         // Branches, pull requests and commits in these that name a task, like ACT-12, link to it and move it along
-        github_repositories: repos?.length ? repos.map((r) => r.full_name) : undefined,
+        github_repositories: repos?.length
+          ? repos.map((r) => {
+              const s = repoSettings(r.settings);
+              return compact({
+                repository: r.full_name,
+                moves_tasks: [
+                  s.automation.start && "branch or commit → in_progress",
+                  s.automation.review && "pull request opened → review",
+                  s.automation.done && "merged → done",
+                ].filter(Boolean),
+                comments_on_pull_requests: s.comment,
+                issues: s.issues
+                  ? compact({ sync: true, only_with_label: s.issueLabel, comments_go_to_github: s.issueComments })
+                  : undefined,
+              });
+            })
+          : undefined,
         people: list.map((p) => compact({ name: p.name, role: p.role, you: p.id === agent.userId || undefined })),
         roadmap: compact({
           public: b.roadmap_public,
@@ -694,6 +809,11 @@ export function actaFor(agent: Agent) {
       if (f.label) q = q.contains("labels", pickLabels(b, [f.label]));
       if (f.project) q = q.eq("project", pickProject(b, f.project)!);
       q = search(q, f.query);
+      if (f.github) {
+        const only = await byPulls([b.id], f.github);
+        if (only === null) return { board: b.ref, tasks: [], shown: 0, total: 0 };
+        q = q.or(only);
+      }
       const { data, count, error } = await (f.deleted
         ? q.order("deleted_at", { ascending: false })
         : q.order("position").order("number")
@@ -702,9 +822,13 @@ export function actaFor(agent: Agent) {
       const who = await nameOf(b.workspace_id);
       const rows = (data ?? []) as unknown as TaskRow[];
       if (!f.deleted) rows.sort((a, c) => statusRank[a.status] - statusRank[c.status]);
+      const pulls = await pullRequests(
+        [b.id],
+        rows.map((t) => t.number),
+      );
       return {
         board: b.ref,
-        tasks: rows.map((t) => summary(b, t, who)),
+        tasks: rows.map((t) => summary(b, t, who, pulls.get(`${b.id}:${t.number}`))),
         shown: rows.length,
         total: count ?? rows.length,
       };
@@ -1042,7 +1166,34 @@ export function actaFor(agent: Agent) {
         throw new Problem("This key can only edit comments it wrote. Add a new comment instead.");
       const { error } = await db.rpc("agent_edit_comment", { p_key: agent.hash, p_comment: id, p_body: body.trim() });
       if (error) throw dbProblem(error);
+      sendToGitHub(b.id);
       return { edited: id, task: taskId(b, c.number), url: taskUrl(b, c.number) };
+    },
+
+    // Pull requests, issues, branches and commits linked by hand, and issues opened from tasks. GitHub's answer
+    // decides what's linked, and the task's changes are saved as this key, like any other
+    async linkGitHub(ref: string, task: string, url: string) {
+      const b = await board(ref);
+      const t = await row(b, task);
+      const done = await byHand(b, (g) => g.linkByHand(b.id, t.number, url));
+      await apply(b, done.changes);
+      return compact({ task: taskId(b, t.number), linked: done.label, github: done.url, ...moved(done), url: taskUrl(b, t.number) });
+    },
+
+    async unlinkGitHub(ref: string, task: string, url: string) {
+      const b = await board(ref);
+      const t = await row(b, task);
+      const done = await byHand(b, (g) => g.unlinkByHand(b.id, t.number, { url }));
+      await apply(b, done.changes);
+      return { task: taskId(b, t.number), unlinked: done.label, url: taskUrl(b, t.number) };
+    },
+
+    async openGitHubIssue(ref: string, task: string, repo?: string) {
+      const b = await board(ref);
+      const t = await row(b, task);
+      const done = await byHand(b, (g) => g.openIssueByHand(b.id, t.number, repo));
+      await apply(b, done.changes);
+      return { task: taskId(b, t.number), issue: done.label, github: done.url, url: taskUrl(b, t.number) };
     },
 
     async restoreTask(ref: string, task: string) {
@@ -1129,14 +1280,27 @@ export function actaFor(agent: Agent) {
       if (await archiveReady(db)) q = q.is("archived_at", null);
       if (assignee !== undefined) q = assignee ? q.eq("assignee", assignee) : q.is("assignee", null);
       q = search(q, f.query, prefix ? [prefix] : undefined);
+      if (f.github) {
+        const only = await byPulls(ids, f.github);
+        if (only === null) return { tasks: [], shown: 0, total: 0 };
+        q = q.or(only);
+      }
       const { data, count, error } = await q.order("updated_at", { ascending: false }).limit(limit);
       if (error) throw dbProblem(error);
       const who = (uid: string | null) => (uid ? (names.get(uid) ?? "Former member") : undefined);
       const rows = (data ?? []) as unknown as (TaskRow & { board_id: string })[];
+      const pulls = await pullRequests(
+        [...new Set(rows.map((t) => t.board_id))],
+        [...new Set(rows.map((t) => t.number))],
+      );
       return {
         tasks: rows.map((t) => {
           const spot = spots.get(t.board_id)!;
-          return { board: spot.ref, ...summary(spot, t, who), url: taskUrl(spot, t.number) };
+          return {
+            board: spot.ref,
+            ...summary(spot, t, who, pulls.get(`${t.board_id}:${t.number}`)),
+            url: taskUrl(spot, t.number),
+          };
         }),
         shown: rows.length,
         total: count ?? rows.length,

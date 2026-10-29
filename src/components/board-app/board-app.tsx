@@ -831,6 +831,7 @@ export function BoardApp({
               .flat()
               .filter((id) => state.tasks[id] && visible(state.tasks[id]))}
             onOpen={setOpenId}
+            canEdit={canEdit}
           />
         ) : null}
         {full ? <Shortcuts open={help} onOpenChange={setHelp} /> : null}

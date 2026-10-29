@@ -726,7 +726,7 @@ export type IconName = keyof typeof art | "arrow-left" | "arrow-down" | "arrow-u
 export const iconNames = Object.keys(drawings).sort() as IconName[];
 
 // The line set, for people who'd rather not have pixel art. Drawn on a 24 unit grid with a 2 unit stroke and shown
-// in the same box as the pixel drawing, so switching between them never moves anything. Brand marks stay as they are
+// in the same box as the pixel drawing, so switching between them never moves anything. Google's mark stays as it is
 const circle = (x: number, y: number, r = 1) => `M${x + r} ${y}a${r} ${r} 0 1 1-${2 * r} 0a${r} ${r} 0 1 1 ${2 * r} 0z`;
 
 const lines: Partial<Record<IconName, string>> = {
@@ -798,6 +798,8 @@ const lines: Partial<Record<IconName, string>> = {
   "sign-out": "M10 4H4v16h6M15 8l4 4-4 4M19 12H9",
   chart: "M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3",
   shield: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z",
+  github:
+    "M9 21v-3.5c-3.5.7-4.5-1.5-5-2.5M15 21v-3.5a3 3 0 0 0-1-2.5c3 0 6-1.5 6-5.5a4.5 4.5 0 0 0-1.2-3.2 4 4 0 0 0-.1-3.3S17.5 3 15.5 4.4a10 10 0 0 0-7 0C6.5 3 5.3 3 5.3 3a4 4 0 0 0-.1 3.3A4.5 4.5 0 0 0 4 9.5c0 4 3 5.5 6 5.5a3 3 0 0 0-1 2.5",
 };
 
 const scales = { sm: 1.5, md: 2, lg: 3, xl: 5 };

@@ -2,7 +2,8 @@ import "server-only";
 import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { boardIcons } from "@/lib/board-icons";
-import { actaFor, Problem, sortKeys, taskStatuses } from "./acta";
+import { githubReady } from "@/lib/github/app";
+import { actaFor, githubFilters, Problem, sortKeys, taskStatuses } from "./acta";
 import type { Agent } from "./keys";
 
 const instructions = `Acta is a project manager. Work lives on boards, named "workspace/board". Each task has an id made of the board's prefix and a number, like ACT-12. A task moves todo → in_progress → review → done. Work that was dropped, such as a GitHub issue closed as not planned, goes to canceled.
@@ -11,9 +12,10 @@ How to work with it:
 1. Find the board for the project you're in. Look for a line like "Acta board: workspace/board" in AGENTS.md, CLAUDE.md or the README. If there isn't one, call list_boards, ask the person which board to use, and offer to add that line. search_tasks looks across every board at once, for example for what's assigned to "me".
 2. Before starting something, check list_tasks for a task that already covers it. Create one if there's none.
 3. When you start a task, move it to in_progress and assign it to "me". Tick subtasks as you finish them. Keep one progress comment per task and update it with edit_comment, adding a new comment only for a milestone, a blocker or a question.
-4. When the work is ready for someone to look at, such as an open pull request, move it to review and comment with the link. Move it to done once it's merged or shipped. If get_board lists github_repositories, name the task id in the branch (like act-12-add-csv-export) or the pull request title, and say "Fixes ACT-12" in its description: Acta then links it, moves the task along and marks it done on merge by itself.
-5. If you delete a task by mistake, restore_task brings it back. To tidy finished work away without deleting it, archive it; list_tasks with archived: true finds it again.
-6. When bringing work over from another tracker, keep its history: give create_tasks each task's created date, a shipped date for finished work, and its comments with their original author and time.
+4. When the work is ready for someone to look at, such as an open pull request, move it to review and comment with the link. Move it to done once it's merged or shipped.
+5. If get_board lists github_repositories, work in the branch get_task gives (like act-12-add-csv-export) and say "Fixes ACT-12" in the pull request's description. Acta then links it, moves the task along and marks it done on merge by itself, so leave those moves to it and don't comment the link. For work that didn't name the task, link_github links it by its address. Where a repository's issues sync, they arrive as tasks on their own: don't create tasks for them, and open_github_issue turns a task into an issue.
+6. If you delete a task by mistake, restore_task brings it back. To tidy finished work away without deleting it, archive it; list_tasks with archived: true finds it again.
+7. When bringing work over from another tracker, keep its history: give create_tasks each task's created date, a shipped date for finished work, and its comments with their original author and time.
 
 Write titles as short imperatives ("Add CSV export") and descriptions in Markdown. Everything you do shows up live on the board, credited to the person who made this key and marked with the key's name. When you mention a task to the person, include its url.`;
 
@@ -171,7 +173,7 @@ function addTools(server: Registrar, agent: Agent) {
     {
       title: "List tasks",
       description:
-        "Tasks on a board, in board order, as short summaries. Shows open tasks (todo, in_progress, review) unless you pass status. Use get_task for a task's description, subtasks and comments.",
+        "Tasks on a board, in board order, as short summaries, with their pull request's state, checks and review on boards linked to GitHub. Shows open tasks (todo, in_progress, review) unless you pass status. Use get_task for a task's description, subtasks and comments.",
       inputSchema: z.object({
         board,
         status: z
@@ -184,6 +186,10 @@ function addTools(server: Registrar, agent: Agent) {
         query: z.string().optional().describe("Words to find in titles and descriptions, or a task id"),
         deleted: z.boolean().optional().describe("Show deleted tasks instead, newest first, to find one to restore"),
         archived: z.boolean().optional().describe("Show archived tasks instead, in every status unless you pass status"),
+        github: z
+          .enum(githubFilters)
+          .optional()
+          .describe("On boards linked to GitHub, only tasks with an open pull request, with failing checks, or with none"),
         limit: z.number().int().min(1).max(200).optional().describe("Defaults to 50"),
       }),
       annotations: reads,
@@ -201,6 +207,10 @@ function addTools(server: Registrar, agent: Agent) {
         query: z.string().optional().describe("Words to find in titles and descriptions, or a task id like ACT-12"),
         assignee: z.string().optional().describe('"me", or a person\'s name'),
         status: z.array(status).optional().describe("Only these statuses"),
+        github: z
+          .enum(githubFilters)
+          .optional()
+          .describe("On boards linked to GitHub, only tasks with an open pull request, with failing checks, or with none"),
         limit: z.number().int().min(1).max(200).optional().describe("Defaults to 50"),
       }),
       annotations: reads,
@@ -212,7 +222,8 @@ function addTools(server: Registrar, agent: Agent) {
     "get_task",
     {
       title: "Get a task",
-      description: "Everything about one task: description, subtasks, comments, recent activity and its link.",
+      description:
+        "Everything about one task: description, subtasks, comments, recent activity and its link. On boards linked to GitHub, also its pull requests, issue, branches and commits, and the branch name to work in.",
       inputSchema: z.object({ board, task }),
       annotations: reads,
     },
@@ -398,6 +409,51 @@ function addTools(server: Registrar, agent: Agent) {
       },
       run(({ board, task }) => acta.deleteTask(board, task)),
     );
+
+    if (githubReady) {
+      const url = z.string().url().describe("Its address on github.com, like https://github.com/acme/app/pull/45");
+      server.registerTool(
+        "link_github",
+        {
+          title: "Link GitHub work to a task",
+          description:
+            "Links a pull request, issue, branch or commit to a task by its address, for work that doesn't name the task id. The repository must be linked to the board (see get_board). A pull request, branch or commit moves the task along as if it had named it. Linking an issue makes the task sync with it.",
+          inputSchema: z.object({ board, task, url }),
+          annotations: { ...writes, idempotentHint: true, openWorldHint: true },
+        },
+        run(({ board, task, url }) => acta.linkGitHub(board, task, url)),
+      );
+
+      server.registerTool(
+        "unlink_github",
+        {
+          title: "Unlink GitHub work from a task",
+          description: "Takes a linked pull request, issue, branch or commit off a task. Nothing changes on GitHub.",
+          inputSchema: z.object({ board, task, url }),
+          annotations: { ...writes, idempotentHint: true },
+        },
+        run(({ board, task, url }) => acta.unlinkGitHub(board, task, url)),
+      );
+
+      server.registerTool(
+        "open_github_issue",
+        {
+          title: "Open a GitHub issue from a task",
+          description:
+            "Opens an issue with the task's title, description and labels in a repository whose issues sync with the board, and keeps the two in step from then on. Returns the issue's address.",
+          inputSchema: z.object({
+            board,
+            task,
+            repository: z
+              .string()
+              .optional()
+              .describe('Like "acme/app". Leave it out when only one of the board’s repositories syncs issues'),
+          }),
+          annotations: { ...writes, openWorldHint: true },
+        },
+        run(({ board, task, repository }) => acta.openGitHubIssue(board, task, repository)),
+      );
+    }
   }
 
   if (acta.can("manage")) {

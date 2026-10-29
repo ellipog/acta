@@ -154,7 +154,10 @@ A branch, commit or pull request that names a task, like `act-12-add-csv-export`
 Branches and commits move it to in progress, an open pull request to review, and a merged one that names it in its
 title, branch or a closing keyword to done. Each step can be turned off per repository. With **Sync issues** on, the
 repository's issues come over as tasks (only ones with a chosen label, if set), and their title, status and labels
-stay in step both ways, the later edit winning. Changes from GitHub are marked “via GitHub” and made as the member
+stay in step both ways, the later edit winning. Comments made in Acta on those tasks go to the issue too, unless
+**Send comments to issues** is off. In a task, anyone who can edit can paste a link to work that didn't name it, or
+open an issue from the task. Agents can do the same with `link_github` and `open_github_issue`, and see each task's
+pull request in `list_tasks`. Changes from GitHub are marked “via GitHub” and made as the member
 who linked that GitHub account under **Account**, or else as whoever connected GitHub. Linking accounts needs
 **Allow manual linking** turned on in Supabase, under **Authentication → Sign In / Providers**.
 
