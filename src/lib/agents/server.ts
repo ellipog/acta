@@ -15,7 +15,7 @@ How to work with it:
 4. When the work is ready for someone to look at, such as an open pull request, move it to review and comment with the link. Move it to done once it's merged or shipped.
 5. If get_board lists github_repositories, work in the branch get_task gives (like act-12-add-csv-export) and say "Fixes ACT-12" in the pull request's description. Acta then links it, moves the task along and marks it done on merge by itself, so leave those moves to it and don't comment the link. For work that didn't name the task, link_github links it by its address. Where a repository's issues sync, they arrive as tasks on their own: don't create tasks for them, and open_github_issue turns a task into an issue.
 6. If you delete a task by mistake, restore_task brings it back. To tidy finished work away without deleting it, archive it; list_tasks with archived: true finds it again.
-7. When bringing work over from another tracker, keep its history: give create_tasks each task's created date, a shipped date for finished work, and its comments with their original author and time.
+7. When bringing work over from another tracker, keep its history: give create_tasks each task's created time, the time finished or dropped work closed, a shipped date for finished work, and its comments with their original author and time.
 
 Write titles as short imperatives ("Add CSV export") and descriptions in Markdown. Everything you do shows up live on the board, credited to the person who made this key and marked with the key's name. When you mention a task to the person, include its url.`;
 
@@ -267,7 +267,7 @@ function addTools(server: Registrar, agent: Agent) {
       {
         title: "Create tasks",
         description:
-          "Adds one or more tasks to a board, at the bottom of their column. Labels, project and assignee must match the board (see get_board). Tasks go on the public roadmap when public is true, or when it's left out and the board's new_tasks_public setting is on. To bring work over from another tracker, pass created, shipped and comments so its history stays. Returns the new ids and links.",
+          "Adds one or more tasks to a board, at the bottom of their column. Labels, project and assignee must match the board (see get_board). Tasks go on the public roadmap when public is true, or when it's left out and the board's new_tasks_public setting is on. To bring work over from another tracker, pass created, closed, shipped and comments so its history stays. Returns the new ids and links.",
         inputSchema: z.object({
           board,
           tasks: z
@@ -289,7 +289,14 @@ function addTools(server: Registrar, agent: Agent) {
                   .describe("Show it on the public roadmap. Defaults to the board's new_tasks_public setting"),
                 subtasks: z.array(z.string().min(1).max(200)).max(50).optional().describe("Checklist items"),
                 created: moment.optional().describe("When the task was first made, if somewhere else. Defaults to now"),
-                shipped: date.optional().describe("When a done task shipped, YYYY-MM-DD. Defaults to today for done tasks"),
+                closed: moment
+                  .optional()
+                  .describe(
+                    "When a done or canceled task was closed, if somewhere else, ideally to the minute. With it the board can say how long the work took. Defaults to now for tasks made today, and to unknown for older ones",
+                  ),
+                shipped: date
+                  .optional()
+                  .describe("When a done task shipped, YYYY-MM-DD. Defaults to the day it closed, or today"),
                 comments: z
                   .array(z.object(comment))
                   .max(100)

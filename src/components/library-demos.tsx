@@ -736,6 +736,11 @@ Votes need a **rate limit** per user, or one person can push an item to the top.
 - Store \`voted_at\` so it can decay
 - *Maybe* a cooldown
 
+| Limit | Per | Now |
+| --- | --- | ---: |
+| Votes | item | 1 |
+| Ideas | day | 10 |
+
 > Votes are a signal, not a contract.`;
 
 export function WritingDemo() {

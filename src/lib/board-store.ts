@@ -31,6 +31,11 @@ export type Task = {
   votes?: number;
   voted?: boolean;
   shipped?: string;
+  // When it was made, and when it last moved to done or canceled, as ISO times. The database stamps both, so
+  // they're never sent with a save. closed goes when the task opens again, and is missing when it isn't known,
+  // like for work brought over from another tracker without one
+  opened?: string;
+  closed?: string;
   // When it was put away. Archived tasks leave the board without being deleted
   archived?: string;
   origin?: string;
@@ -82,6 +87,8 @@ export type PublicPage = {
   ideasPublic: boolean;
   showShipped: boolean;
   showDates: boolean;
+  // How long shipped work took, from when it was made to when it was done
+  showTimeTaken: boolean;
   showProgress: boolean;
   showTeam: boolean;
   sort: "votes" | "date";
@@ -110,6 +117,7 @@ export type PublicPage = {
   showSearch: boolean;
   showNotes: boolean;
   showProjects: boolean;
+  showLabels: boolean;
   // How many shipped items the changelog lists, 0 for all of them
   shippedLimit: number;
   shippedByMonth: boolean;
@@ -138,6 +146,7 @@ export const defaultPage: PublicPage = {
   ideasPublic: true,
   showShipped: true,
   showDates: true,
+  showTimeTaken: false,
   showProgress: true,
   showTeam: false,
   sort: "votes",
@@ -160,6 +169,7 @@ export const defaultPage: PublicPage = {
   showSearch: true,
   showNotes: true,
   showProjects: true,
+  showLabels: false,
   shippedLimit: 0,
   shippedByMonth: false,
   footer: "",
@@ -907,6 +917,9 @@ function patchTask(state: BoardState, id: string, change: Partial<Task>, note?: 
   if (to && to !== prev.status) {
     if (to === "done") task.shipped = isoToday();
     else if (prev.status === "done") task.shipped = undefined;
+    // What the database will stamp, shown until its own time comes back
+    if (!closed(to)) task.closed = undefined;
+    else if (!closed(prev.status)) task.closed = new Date().toISOString();
   }
   if (note) task = log(task, note);
   let columns = state.columns;
@@ -956,6 +969,7 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
     case "add": {
       const id = nextTaskId(state);
       const status = action.patch?.status ?? action.status;
+      const now = new Date().toISOString();
       const task: Task = {
         id,
         title: action.title.slice(0, limits.title),
@@ -968,6 +982,8 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
         ...(state.roadmap.page.newTasksPublic ? { public: true } : {}),
         ...fitTask(action.patch ?? {}),
         status,
+        opened: now,
+        closed: closed(status) ? now : undefined,
       };
       return {
         ...state,

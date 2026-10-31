@@ -15,6 +15,7 @@ type ActivityRow = { id: string; number: number; actor: string; text: string; cr
 type IdeaRow = { id: string; title: string; details: string | null; by_name: string; created_at: string };
 
 const statuses = ["backlog", "todo", "in_progress", "review", "done", "canceled"];
+const closedStatus = (s: string) => s === "done" || s === "canceled";
 
 /** The permissions a request needs, as apply_board_changes checks them */
 export function required(w: Partial<Wire>): Permission[] {
@@ -141,6 +142,8 @@ export class FakeBoardServer {
         deleted_at: null,
         created_at: this.now(),
       };
+      // As the tasks_stamp_closed trigger does: a task made closed closed when it was made
+      row.closed_at = closedStatus(row.status) ? row.created_at : null;
       this.check(row);
       this.tasks.set(n, row);
       this.board.next_number = Math.max(this.board.next_number, n + 1);
@@ -150,6 +153,9 @@ export class FakeBoardServer {
       const row = this.tasks.get(num(u.number));
       if (!row) continue;
       const next = { ...row, ...(u.fields as Partial<Row>) };
+      // Closing stamps the time, reopening clears it, and done to canceled keeps it
+      if (!closedStatus(next.status)) next.closed_at = null;
+      else if (!closedStatus(row.status)) next.closed_at = this.now();
       this.check(next);
       this.tasks.set(next.number, next);
     }

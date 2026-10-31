@@ -208,15 +208,18 @@ describe("every edit reaches the database", () => {
       archived: "2026-11-10T00:00:00.000Z",
       origin: "44444444-4444-4444-8444-444444444444",
       custom: { f1: "Text", f2: 3, f3: ["A", "B"] },
+      opened: "2026-11-01T09:00:00.000Z",
+      closed: "2026-11-09T15:00:00.000Z",
     } satisfies Required<Task>;
-    // Comments, activity and votes have tables of their own, and the id and origin are fixed when it's made
-    const elsewhere = ["id", "comments", "thread", "activity", "votes", "voted", "origin"];
+    // Comments, activity and votes have tables of their own, the id and origin are fixed when it's made, and the
+    // database stamps when it opened and closed
+    const elsewhere = ["id", "comments", "thread", "activity", "votes", "voted", "origin", "opened", "closed"];
     expect(Object.keys(full).sort()).toEqual([...syncedFields, ...elsewhere].sort());
 
     server = new FakeBoardServer();
     const base = server.load();
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { id, comments, thread, activity, votes, voted, ...fields } = full;
+    const { id, comments, thread, activity, votes, voted, opened, closed, ...fields } = full;
     const ui = run(base, { type: "add", status: "review", title: full.title, patch: fields });
     await saves(base, ui);
     const back = server.load().tasks["ACT-1"];

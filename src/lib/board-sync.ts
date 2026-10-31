@@ -32,6 +32,9 @@ export type TaskRow = {
   archived_at?: string | null;
   // Missing until the custom fields migration runs
   custom?: Record<string, CustomValue> | null;
+  created_at?: string;
+  // Missing until the closed times migration runs
+  closed_at?: string | null;
   vote_count: number;
   position: number;
   origin: string | null;
@@ -137,8 +140,16 @@ function wireValue(task: Task, f: SyncedField) {
   return v ?? null;
 }
 
-export function fromRow(row: TaskRow): Pick<Task, SyncedField | "votes"> {
+// Times the database stamps on a task by itself. They come back with every row, but are never sent
+export const stampedFields = ["opened", "closed"] as const;
+
+// The database writes times its own way, so they're read as ISO for the app to compare
+const iso = (at?: string | null) => (at ? new Date(at).toISOString() : undefined);
+
+export function fromRow(row: TaskRow): Pick<Task, SyncedField | "votes" | (typeof stampedFields)[number]> {
   return {
+    opened: iso(row.created_at),
+    closed: iso(row.closed_at),
     title: row.title,
     status: row.status,
     priority: row.priority,
@@ -333,6 +344,8 @@ export function absorb(target: BoardState, source: BoardState, d: Diff): BoardSt
     const t = edit(id);
     if (!t) continue;
     for (const f of changed) (t as Record<string, unknown>)[f] = source.tasks[id]?.[f];
+    // The closed time follows the status. Kept with it, the database's own time can replace it when it comes back
+    if (changed.includes("status")) t.closed = source.tasks[id]?.closed;
   }
   for (const id of d.voted) {
     const t = edit(id);
@@ -468,8 +481,11 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
           },
         };
       const changed: Partial<Task> = {};
-      for (const f of [...syncedFields, "votes"] as (SyncedField | "votes")[])
+      for (const f of [...syncedFields, ...stampedFields, "votes"] as (keyof typeof incoming)[]) {
+        // A row without the column, like one from before the closed times migration, says nothing about it
+        if ((f === "closed" && !("closed_at" in ev.row)) || (f === "opened" && !ev.row.created_at)) continue;
         if (!same(prev[f], incoming[f])) (changed as Record<string, unknown>)[f] = incoming[f];
+      }
       if (Object.keys(changed).length) return { kind: "task", id, fields: changed, position: ev.row.position };
       // Only the position changed, so someone reordered the column
       return Math.round(ev.row.position) === base.columns[prev.status].indexOf(id)
@@ -722,7 +738,9 @@ export class SentLog {
   /** The change without what only repeats an older save of this tab's */
   screen(c: Change, now = Date.now()): Change {
     if (c.kind === "task" && c.fields) {
-      const kept = Object.entries(c.fields).filter(([f, v]) => !this.stale(`${c.id}:${f}`, v, now));
+      const fresh = Object.entries(c.fields).filter(([f, v]) => !this.stale(`${c.id}:${f}`, v, now));
+      // The closed time belongs to the status it came with, so it goes when that does
+      const kept = "status" in c.fields && !fresh.some(([f]) => f === "status") ? fresh.filter(([f]) => f !== "closed") : fresh;
       if (kept.length === Object.keys(c.fields).length) return c;
       return kept.length ? { ...c, fields: Object.fromEntries(kept) as Partial<Task> } : { kind: "none" };
     }

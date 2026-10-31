@@ -9,6 +9,10 @@ export type PublicTask = {
   title: string;
   status: StatusCategory;
   project: string | null;
+  // These three are empty unless the page shows them, and missing before the closed times migration
+  labels?: string[];
+  opened?: string | null;
+  closed?: string | null;
   start_on: string | null;
   due_on: string | null;
   shipped_on: string | null;
@@ -67,7 +71,7 @@ export function publicState(data: PublicRoadmapData): BoardState {
       status: t.status,
       priority: "none",
       project: t.project ?? undefined,
-      labels: [],
+      labels: t.labels ?? [],
       start: t.start_on ?? undefined,
       due: t.due_on ?? undefined,
       assignee: t.assignee?.id,
@@ -83,6 +87,8 @@ export function publicState(data: PublicRoadmapData): BoardState {
       votes: t.votes,
       voted: t.voted,
       shipped: t.shipped_on ?? undefined,
+      opened: t.opened ?? undefined,
+      closed: t.closed ?? undefined,
     };
     columns[t.status].push(id);
   }

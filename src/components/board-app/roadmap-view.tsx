@@ -42,6 +42,7 @@ import {
 import { boardSlugProblem, publicHref, publicPath, SLUG_MAX, slugify } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
+import { RoadmapKeys } from "./roadmap-keys";
 import {
   accentOf,
   accentVars,
@@ -76,11 +77,16 @@ export function PublicRoadmap({
   dispatch,
   visible,
   onOpen,
+  boardId,
+  canManage = true,
 }: {
   state: BoardState;
   dispatch: (a: DemoAction) => void;
   visible: (t: Task) => boolean;
   onOpen: (id: string) => void;
+  // A live board's id, for its roadmap API keys. The demo has none
+  boardId?: string;
+  canManage?: boolean;
 }) {
   const [mode, setMode] = useState<Mode>("manage");
   const isPublic = state.roadmap.public;
@@ -164,7 +170,7 @@ export function PublicRoadmap({
             <Manage state={state} dispatch={dispatch} visible={visible} onOpen={onOpen} />
           </div>
         ) : mode === "customize" ? (
-          <Customize state={state} dispatch={dispatch} />
+          <Customize state={state} dispatch={dispatch} boardId={boardId} canManage={canManage} />
         ) : (
           <div className="h-full overflow-y-auto bg-sunken/40 p-3 @xl:p-6">
             <Frame url={url}>
@@ -645,7 +651,17 @@ function LinkRow({
   );
 }
 
-function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoAction) => void }) {
+function Customize({
+  state,
+  dispatch,
+  boardId,
+  canManage,
+}: {
+  state: BoardState;
+  dispatch: (a: DemoAction) => void;
+  boardId?: string;
+  canManage: boolean;
+}) {
   const page = state.roadmap.page;
   const [device, setDevice] = useState<"desktop" | "phone">("desktop");
   const set = (patch: Partial<PublicPage>) => dispatch({ type: "page", patch });
@@ -1171,6 +1187,12 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
             onChange={(showDates) => set({ showDates })}
           />
           <Toggle
+            label="Time to ship"
+            hint="How long shipped work took, from when it was added to when it was done."
+            checked={page.showTimeTaken}
+            onChange={(showTimeTaken) => set({ showTimeTaken })}
+          />
+          <Toggle
             label="Progress"
             hint="Subtasks done, as a meter."
             checked={page.showProgress}
@@ -1193,6 +1215,12 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
             hint="Which project each item is part of."
             checked={page.showProjects}
             onChange={(showProjects) => set({ showProjects })}
+          />
+          <Toggle
+            label="Labels"
+            hint="Each item’s labels, like Bug or Feature."
+            checked={page.showLabels}
+            onChange={(showLabels) => set({ showLabels })}
           />
           <Toggle
             label="Search"
@@ -1285,6 +1313,12 @@ function Customize({ state, dispatch }: { state: BoardState; dispatch: (a: DemoA
             <span className="font-mono">/api/public/{me.workspace}/{page.slug}</span>.
           </p>
         </Group>
+
+        {boardId ? (
+          <Group title="API">
+            <RoadmapKeys boardId={boardId} canManage={canManage} isPublic={state.roadmap.public} />
+          </Group>
+        ) : null}
 
         <Group
           title="Your brand"

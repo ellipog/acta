@@ -16,7 +16,7 @@ import { DialogContent } from "@/components/ui/dialog";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
 import { useNow } from "@/lib/hooks";
-import { MONTHS } from "@/lib/dates";
+import { MONTHS, duration, timeToClose } from "@/lib/dates";
 import type { DitherName } from "@/lib/dither-assets";
 import {
   me,
@@ -263,6 +263,11 @@ export function Visitor({
   });
   const announcementHref = safeHref(page.announcementLink);
   const art = page.hero !== "plain" && arts.includes(page.art as DitherName) ? (page.art as DitherName) : null;
+  // "Took 6 hours", for shipped work whose open and close times are both known
+  const tookFor = (x: Task) => {
+    const ms = page.showTimeTaken ? timeToClose(x) : null;
+    return ms === null ? null : `Took ${duration(ms)}`;
+  };
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -294,18 +299,28 @@ export function Visitor({
   const meta = (x: Task) => {
     const person = personById(x.assignee);
     const shipped = stageOf(x) === "shipped";
+    const took = shipped ? tookFor(x) : null;
     return (
       <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {page.showDates && shipped && x.shipped ? (
           <span className="flex items-center gap-1 font-mono text-[11px] text-malachite">
             <Icon name="check" size="sm" /> <time dateTime={x.shipped}>{formatShort(x.shipped, today)}</time>
           </span>
-        ) : page.showDates && x.due ? (
+        ) : null}
+        {took ? <span className="font-mono text-[11px] text-ink-3">{took}</span> : null}
+        {page.showDates && !(shipped && x.shipped) && x.due ? (
           <span className="flex items-center gap-1 font-mono text-[11px] text-ink-3">
             <Icon name="flag" size="sm" /> {formatShort(x.due, today)}
           </span>
         ) : null}
         {page.showProjects && x.project ? <ProjectMark project={x.project} /> : null}
+        {page.showLabels
+          ? x.labels.map((l) => (
+              <span key={l} className="border border-line px-1.5 text-[11px] leading-[18px] text-ink-2">
+                {l}
+              </span>
+            ))
+          : null}
         {page.showProgress && !shipped ? <Progress task={x} accent={accent} /> : null}
         {page.showTeam && person ? (
           <span className="flex items-center gap-1.5 text-[11px] text-ink-3">
@@ -710,28 +725,34 @@ export function Visitor({
           <div key={g.month || "all"}>
             {g.month ? <p className="mt-5 font-mono text-[11px] tracking-[0.1em] text-ink-3 uppercase">{g.month}</p> : null}
             <ol className={cn("relative ml-1.5 border-l border-line-strong", g.month ? "mt-2" : "mt-4")}>
-              {g.rows.map((x) => (
-                <li key={x.id} className={cn("relative pl-5 last:pb-0", compact ? "pb-3" : "pb-5")}>
-                  <span className="absolute top-1 -left-[5px] size-[9px] border border-malachite bg-malachite" />
-                  {page.showDates && x.shipped && !page.shippedByMonth ? (
-                    <p className="font-mono text-[11px] text-ink-3">
-                      <time dateTime={x.shipped}>{formatShort(x.shipped, null)}</time>
-                    </p>
-                  ) : null}
-                  <button
-                    onClick={() => setDetail(x.id)}
-                    className="mt-0.5 flex items-center gap-2 text-left text-sm hover:underline"
-                  >
-                    {x.title}
-                    {page.showProjects && x.project ? <ProjectMark project={x.project} /> : null}
-                  </button>
-                  {page.voting ? (
-                    <p className="mt-0.5 font-mono text-[11px] text-ink-3">
-                      {x.votes ?? 0} {x.votes === 1 ? "person" : "people"} asked for this
-                    </p>
-                  ) : null}
-                </li>
-              ))}
+              {g.rows.map((x) => {
+                const date = page.showDates && x.shipped && !page.shippedByMonth ? x.shipped : null;
+                const took = tookFor(x);
+                return (
+                  <li key={x.id} className={cn("relative pl-5 last:pb-0", compact ? "pb-3" : "pb-5")}>
+                    <span className="absolute top-1 -left-[5px] size-[9px] border border-malachite bg-malachite" />
+                    {date || took ? (
+                      <p className="font-mono text-[11px] text-ink-3">
+                        {date ? <time dateTime={date}>{formatShort(date, null)}</time> : null}
+                        {date && took ? " · " : null}
+                        {took}
+                      </p>
+                    ) : null}
+                    <button
+                      onClick={() => setDetail(x.id)}
+                      className="mt-0.5 flex items-center gap-2 text-left text-sm hover:underline"
+                    >
+                      {x.title}
+                      {page.showProjects && x.project ? <ProjectMark project={x.project} /> : null}
+                    </button>
+                    {page.voting ? (
+                      <p className="mt-0.5 font-mono text-[11px] text-ink-3">
+                        {x.votes ?? 0} {x.votes === 1 ? "person" : "people"} asked for this
+                      </p>
+                    ) : null}
+                  </li>
+                );
+              })}
             </ol>
           </div>
         ))}

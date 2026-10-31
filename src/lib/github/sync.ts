@@ -347,6 +347,8 @@ async function createFromIssues(r: Repo, issues: Payload[], withComments: boolea
         shipped_on: status === "done" ? String(issue.closed_at ?? new Date().toISOString()).slice(0, 10) : null,
         position,
         created_at: issue.created_at,
+        // So the board knows how long it was open. Kept only for closed tasks
+        closed_at: status === "done" || status === "canceled" ? (issue.closed_at ?? null) : null,
       });
       activity.push({
         id: randomUUID(),

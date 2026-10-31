@@ -29,6 +29,7 @@ import {
   type BoardAction,
   type Task,
 } from "@/lib/board-store";
+import { duration, timeToClose } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import { CustomFieldInput } from "./custom-fields";
 import { fieldOptions, noteFor, patchFor, valueOf, type GroupField } from "./fields";
@@ -104,6 +105,9 @@ function TaskBody({
   const thread = task.thread ?? [];
   const earlier = Math.max(0, task.comments - thread.length);
   const activity = [...task.activity].reverse();
+  // Only the latest activity is loaded, so its first entry is the creation only on a task without much history
+  const opened = task.opened ? Date.parse(task.opened) : task.activity[0]?.at;
+  const took = timeToClose(task);
 
   useEffect(() => {
     if (!onOpen) return;
@@ -484,7 +488,21 @@ function TaskBody({
               </label>
             </Prop>
             <p className="font-mono text-[11px] leading-relaxed text-ink-3">
-              Created {timeAgo(task.activity[0]?.at ?? now, now)}
+              <span title={opened ? fullTime(opened) : undefined}>Created {timeAgo(opened ?? now, now)}</span>
+              {task.closed ? (
+                <>
+                  <br />
+                  <span title={fullTime(Date.parse(task.closed))}>
+                    {task.status === "canceled" ? "Canceled" : "Closed"} {timeAgo(Date.parse(task.closed), now)}
+                  </span>
+                  {took !== null ? (
+                    <>
+                      <br />
+                      <span>Took {duration(took)}</span>
+                    </>
+                  ) : null}
+                </>
+              ) : null}
               <br />
               Updated {timeAgo(task.activity.at(-1)?.at ?? now, now)}
             </p>
@@ -519,6 +537,8 @@ function TaskBody({
     </div>
   );
 }
+
+const fullTime = (at: number) => new Date(at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
 function Prop({ label, children }: { label: string; children: React.ReactNode }) {
   return (

@@ -817,7 +817,14 @@ export function BoardApp({
                 onClearFilters={clearFilters}
               />
             ) : (
-              <PublicRoadmap state={state} dispatch={dispatch} visible={onRoadmap} onOpen={setOpenId} />
+              <PublicRoadmap
+                state={state}
+                dispatch={dispatch}
+                visible={onRoadmap}
+                onOpen={setOpenId}
+                boardId={liveId}
+                canManage={allowed("roadmap")}
+              />
             )}
           </main>
         </div>

@@ -18,6 +18,7 @@ import {
   type Subtask,
   type Tone,
 } from "@/lib/board-store";
+import { duration } from "@/lib/dates";
 import { branchName, repoSettings } from "@/lib/github/match";
 import { boardSlugProblem, publicHref, siteUrl, slugify } from "@/lib/slugs";
 import { can as allows, type Permissions, type Role } from "@/lib/live";
@@ -86,6 +87,8 @@ type TaskRow = {
   deleted_at: string | null;
   archived_at?: string | null;
   custom?: Record<string, CustomValue> | null;
+  // Missing until the closed times migration has run
+  closed_at?: string | null;
 };
 
 export type TaskInput = {
@@ -110,6 +113,7 @@ export type CommentInput = { body: string; author?: string; at?: string };
 export type NewTask = TaskInput & {
   subtasks?: string[];
   created?: string;
+  closed?: string;
   shipped?: string;
   comments?: CommentInput[];
 };
@@ -651,6 +655,8 @@ export function actaFor(agent: Agent) {
         ? `${issue.url}. Title, status, labels and new comments here go to the issue, and its changes come back`
         : undefined,
       created: t.created_at,
+      closed: t.closed_at ?? undefined,
+      time_to_close: t.closed_at ? duration(Date.parse(t.closed_at) - Date.parse(t.created_at)) : undefined,
       updated: t.updated_at,
     };
   }
@@ -854,6 +860,12 @@ export function actaFor(agent: Agent) {
         if (t.shipped && status !== "done")
           throw new Problem(`Task ${i + 1} has a shipped date, so its status should be done.`);
         const at = moment(t.created, "created");
+        const closed = moment(t.closed, "closed");
+        if (closed && status !== "done" && status !== "canceled")
+          throw new Problem(`Task ${i + 1} has a closed time, so its status should be done or canceled.`);
+        // Within the same day, the database keeps the closed time from coming before the created one
+        if (closed && closed.slice(0, 10) < (at ?? today()).slice(0, 10))
+          throw new Problem(`Task ${i + 1} closed before it was created. Check its created and closed times.`);
         if (!sizes.has(status)) sizes.set(status, await columnSize(b, status));
         const position = sizes.get(status)!;
         sizes.set(status, position + 1);
@@ -873,9 +885,11 @@ export function actaFor(agent: Agent) {
           subtasks: (t.subtasks ?? []).map((s) => ({ id: `s${randomUUID().slice(0, 8)}`, title: s, done: false })),
           public: t.public ?? newPublic,
           ...(t.fields ? { custom: customIn(b, {}, t.fields).next } : {}),
-          shipped_on: status === "done" ? (day(t.shipped, "shipped") ?? today()) : null,
+          shipped_on: status === "done" ? (day(t.shipped, "shipped") ?? closed?.slice(0, 10) ?? today()) : null,
           position,
           created_at: at,
+          // The database keeps it only for agents, and only between when the task was made and now
+          ...(closed ? { closed_at: closed } : {}),
         });
         activity.push({ id: randomUUID(), number, text: "created the task", created_at: at });
         for (const c of t.comments ?? []) comments.push(commentRow(number, c));

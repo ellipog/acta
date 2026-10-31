@@ -70,17 +70,120 @@ function inline(text: string, key: string): React.ReactNode[] {
   });
 }
 
+type Align = "left" | "center" | "right" | undefined;
+export type MarkdownTable = { head: string[]; align: Align[]; rows: string[][] };
+
+// A table row's cells. The pipes at either end are optional, and \| is a pipe inside a cell
+const cells = (line: string) =>
+  line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/(?<!\\)\|$/, "")
+    .split(/(?<!\\)\|/)
+    .map((c) => c.trim().replace(/\\\|/g, "|"));
+
+const delimiter = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+// Where a table starts in some lines: a header row of cells, then a row of dashes with as many cells
+function tableAt(lines: string[], i: number) {
+  const head = lines[i];
+  const rule = lines[i + 1];
+  if (!head?.includes("|") || !rule || !delimiter.test(rule)) return false;
+  return cells(head).length === cells(rule).length;
+}
+
+/** Splits a block into tables and the text around them, so a table can follow a line of text with no gap */
+export function splitTables(block: string): string[] {
+  const lines = block.split("\n");
+  const parts: string[] = [];
+  let text: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!tableAt(lines, i)) {
+      text.push(lines[i]);
+      continue;
+    }
+    if (text.length) parts.push(text.join("\n"));
+    text = [];
+    let end = i + 2;
+    while (end < lines.length && lines[end].includes("|")) end++;
+    parts.push(lines.slice(i, end).join("\n"));
+    i = end - 1;
+  }
+  if (text.length) parts.push(text.join("\n"));
+  return parts;
+}
+
+/** A GitHub-style table, or null when the block isn't one */
+export function parseTable(block: string): MarkdownTable | null {
+  const lines = block.split("\n");
+  if (!tableAt(lines, 0)) return null;
+  const head = cells(lines[0]);
+  const align = cells(lines[1]).map((c): Align => {
+    const left = c.startsWith(":");
+    const right = c.endsWith(":");
+    return left && right ? "center" : right ? "right" : left ? "left" : undefined;
+  });
+  // Rows keep to the header's width, like GitHub's: short ones get empty cells and long ones lose the extra
+  const rows = lines.slice(2).map((l) => {
+    const row = cells(l).slice(0, head.length);
+    return [...row, ...Array<string>(head.length - row.length).fill("")];
+  });
+  return { head, align, rows };
+}
+
+const alignClass = { left: "text-left", center: "text-center", right: "text-right tabular-nums" };
+
+function Table({ table, id }: { table: MarkdownTable; id: string }) {
+  return (
+    <div className="overflow-x-auto border border-line">
+      <table className="w-full border-collapse text-[13px] leading-snug">
+        <thead className="bg-sunken">
+          <tr>
+            {table.head.map((h, i) => (
+              <th
+                key={i}
+                scope="col"
+                className={cn(
+                  "border-b border-line px-2.5 py-1.5 font-medium whitespace-nowrap text-ink",
+                  alignClass[table.align[i] ?? "left"],
+                )}
+              >
+                {inline(h, `${id}-h${i}`)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.map((row, r) => (
+            <tr key={r} className="border-b border-line last:border-0">
+              {row.map((c, i) => (
+                <td key={i} className={cn("px-2.5 py-1.5 align-top", alignClass[table.align[i] ?? "left"])}>
+                  {inline(c, `${id}-${r}-${i}`)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function Markdown({ source, className }: { source: string; className?: string }) {
   const blocks = source
     .trim()
     .split(/(```[\s\S]*?```)/)
-    .flatMap((part, i) => (i % 2 ? [part] : part.replace(/^(#{1,3}\s.+)$/gm, "\n$1\n").split(/\n{2,}/)))
+    .flatMap((part, i) =>
+      i % 2 ? [part] : part.replace(/^(#{1,3}\s.+)$/gm, "\n$1\n").split(/\n{2,}/).flatMap(splitTables),
+    )
     .map((b) => b.trim())
     .filter(Boolean);
   return (
     <div className={cn("space-y-2.5 text-sm leading-relaxed text-ink-2", className)}>
       {blocks.map((block, b) => {
         const lines = block.split("\n");
+        const table = !block.startsWith("```") && parseTable(block);
+        if (table) return <Table key={b} table={table} id={`${b}`} />;
         if (lines.every((l) => /^\s*[-*]\s/.test(l)))
           return (
             <ul key={b} className="space-y-1">

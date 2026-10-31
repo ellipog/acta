@@ -14,6 +14,7 @@ export type DocPage = {
 
 const mcp = `${siteUrl}/api/mcp`;
 const api = `${siteUrl}/api/v1`;
+const roadmapApi = `${siteUrl}/api/roadmap/v1`;
 
 export const docPages: DocPage[] = [
   {
@@ -196,7 +197,94 @@ curl ${api}/create_tasks \\
 - **404**: there's no tool by that name.
 - **405**: a tool that changes things was called with GET.
 
-CORS is open, since every call needs a key.`,
+CORS is open, since every call needs a key.
+
+## Public roadmaps
+
+To build a public roadmap into your own site, with its votes and ideas, use the [roadmap API](${siteUrl}/docs/roadmap-api). Its keys reach only what the public page shows, so they can sit in a web page's code. The keys here act as you and can change anything you can, so keep them on a server.`,
+  },
+  {
+    slug: "roadmap-api",
+    nav: "Roadmap API",
+    title: "The public roadmap API",
+    description: "Build a board's public roadmap into your own site: list its tasks and ideas, and let visitors vote and send ideas, with a publishable key.",
+    body: `The roadmap API puts a board's [public roadmap](${siteUrl}/docs/roadmaps) into your own site, app or widget. It lists the roadmap's tasks and ideas, and lets your visitors vote and send ideas, at \`${roadmapApi}\`.
+
+It holds only what the public page shows: tasks marked public, and only the details the page's **Customize** settings show. It's apart from the [HTTP API](${siteUrl}/docs/api), whose keys act as a person and can change anything they can.
+
+## Keys
+
+Open the board's **Public** view, then **Customize → API**, and make a key. Anyone who can change the public roadmap can make keys for it, and a board can have up to 10.
+
+A roadmap key is publishable: it starts with \`acta_pk_\` and can sit in a web page's code where anyone can read it, as it reaches only what the page shows anyway. **Rotate** swaps it for a new one when it's been passed around too far, and **Revoke** stops it working at once.
+
+Send it as a bearer token, an \`X-Acta-Key\` header, or \`?key=\`:
+
+\`\`\`bash
+curl ${roadmapApi}/tasks -H "Authorization: Bearer acta_pk_..."
+\`\`\`
+
+The roadmap has to be public. While it's private, calls answer 404.
+
+## Sites
+
+By default any site can call a key from a browser. List your own sites on the key, like \`https://yourco.com\`, and browsers on other sites are turned away. Calls from servers, which send no Origin, still work.
+
+## Reading
+
+| Call | What it gives |
+| --- | --- |
+| \`GET /\` | The board, its page's title, stages, links and settings, and how many tasks are in each stage |
+| \`GET /tasks\` | The roadmap's tasks |
+| \`GET /tasks/ACT-12\` | One task, by its id or number |
+| \`GET /ideas\` | The ideas visitors sent, where the page shows them |
+
+\`GET /tasks\` takes these, all optional:
+
+- \`stage\`: \`planned\`, \`progress\` or \`shipped\`, or several with commas.
+- \`project\` and \`label\`: only tasks with that project or label.
+- \`q\`: words in the title or description.
+- \`sort\`: \`position\`, the page's own order, or \`votes\`, \`newest\`, \`shipped\` or \`due\`.
+- \`limit\`, up to 200 and 100 by default, and \`offset\`, to page through them. The answer's \`total\` counts every match.
+
+\`GET /ideas\` takes \`sort\`: \`top\` or \`new\`.
+
+Each task has its id, title, description in Markdown, status, stage and the stage's name on the page. Its project, labels, dates, subtask progress, votes and who's on it come where the page shows them. With **Time to ship** on, shipped tasks also have \`opened\`, \`closed\` and \`time_to_close\`, both in seconds and as words like “3 days”.
+
+## Votes and ideas
+
+Votes and ideas work as they do on the page, and only where it takes them. Each needs a \`visitor\`: your site's own id for the person, 8 to 64 letters, numbers and hyphens, kept the same for them each time so they count once. A signed-in user's id works well, and a random one kept in their browser works too. Acta keeps it only as a hash, and apart from the visitors of the page itself.
+
+\`\`\`bash
+curl ${roadmapApi}/tasks/ACT-12/vote \\
+  -H "Authorization: Bearer acta_pk_..." -H "Content-Type: application/json" \\
+  -d '{"visitor": "user-48213", "on": true}'
+\`\`\`
+
+| Call | Body |
+| --- | --- |
+| \`POST /tasks/ACT-12/vote\` | \`visitor\`, and \`on\`: \`false\` takes the vote back |
+| \`POST /ideas\` | \`visitor\`, a \`title\` of up to 200 characters, and \`details\` of up to 2,000 |
+| \`POST /ideas/<id>/vote\` | \`visitor\` and \`on\` |
+
+Votes answer with the new count. Each visitor can send 10 ideas a day, and each board takes 300. Send \`visitor\` with a read too, and each task and idea says whether they've voted for it.
+
+## Limits
+
+Each key takes 240 reads and 30 votes or ideas a minute from each address. Past that, calls answer 429 with a \`Retry-After\` header in seconds. Reads without a visitor can be kept for 30 seconds.
+
+## Answers and errors
+
+- **200**: the answer as JSON. **201**: a new idea.
+- **400**: a mistake the caller can fix, with an \`error\` saying what to change.
+- **401**: the key is missing, or was rotated or revoked.
+- **403**: a site the key doesn't list, or a roadmap that doesn't take ideas.
+- **404**: no such task or idea, a roadmap that isn't public, or one that doesn't take votes.
+- **429**: too many calls. Wait for \`Retry-After\`.
+
+## Without a key
+
+Every public roadmap also has a read-only feed at \`/api/public/<workspace>/<board>\`, open to anyone, with all of the page's tasks and ideas in one answer.`,
   },
   {
     slug: "github",
@@ -259,11 +347,15 @@ Visitors can vote on what you're planning and send ideas of their own. You revie
 
 ## Make it yours
 
-Choose the page's title, introduction, theme, colour, header style, links, a call to action, an announcement bar, and the order of its sections. Show or hide dates, progress, who's on it, notes and projects. Advanced pages can add their own CSS and header and footer HTML.
+Choose the page's title, introduction, theme, colour, header style, links, a call to action, an announcement bar, and the order of its sections. Show or hide dates, progress, who's on it, notes, projects and labels. Advanced pages can add their own CSS and header and footer HTML.
 
 ## Shipped work and feeds
 
-Finished tasks move to the shipped list with their dates, so the page doubles as a changelog. While the page shows its shipped work, it also has an RSS feed at \`/p/<workspace>/<board>/rss.xml\`.
+Finished tasks move to the shipped list with their dates, so the page doubles as a changelog. Turn on **Time to ship** and each one also says how long it took, from when the task was made to when it was done. While the page shows its shipped work, it also has an RSS feed at \`/p/<workspace>/<board>/rss.xml\`.
+
+## Build it into your site
+
+The [roadmap API](${siteUrl}/docs/roadmap-api) lists the roadmap's tasks and ideas for your own site or app, and lets your visitors vote and send ideas from there.
 
 ## Search engines
 
