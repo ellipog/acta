@@ -29,6 +29,7 @@ export function seed(db: FakeSupabase) {
   db.applied = [];
   db.rounds = 0;
   db.refuse = null;
+  db.behind = false;
   const w = { id: "dddddddd-0000-4000-8000-000000000001", slug: "aaen", name: "Aaen" };
   const tasks: Record<string, unknown>[] = [];
   let n = 1;

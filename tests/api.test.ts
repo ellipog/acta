@@ -9,8 +9,9 @@ mock.module("@/lib/supabase/admin", () => ({ createAdminClient: () => fakeSupaba
 const { actaTools } = await import("@/lib/agents/server");
 const { fromQuery } = await import("@/lib/agents/api");
 
-// The HTTP API serves the MCP server's tools. These check a key sees the tools its access allows and that
-// arguments sent in a query string come out as the types the tools expect
+// The HTTP API serves the MCP server's tools. These check a key sees the tools its access allows, that the tools
+// are made once rather than for every request, and that arguments sent in a query string come out as the types the
+// tools expect
 
 const agent = (access: "read" | "write" | "manage") => ({
   keyId: "k",
@@ -35,6 +36,19 @@ test("a key sees the tools its access allows", () => {
 
 test("every tool describes its input as JSON schema", () => {
   for (const t of actaTools(agent("manage"))) expect(z.toJSONSchema(t.input, { io: "input" }).type).toBe("object");
+});
+
+test("tools and their JSON Schemas are made once for the whole process, not for each request", () => {
+  const named = (access: "read" | "write" | "manage", name: string) =>
+    actaTools(agent(access)).find((t) => t.name === name)!;
+  // Two keys, as two requests would have, share one tool
+  expect(named("write", "update_tasks").input).toBe(named("manage", "update_tasks").input);
+  expect(named("write", "update_tasks").inputJson()).toBe(named("manage", "update_tasks").inputJson());
+  // What the MCP SDK asks each server for when it lists the tools or runs one
+  const schema = named("read", "list_tasks").input["~standard"].jsonSchema;
+  const once = schema.input({ target: "draft-2020-12" });
+  expect(schema.input({ target: "draft-2020-12" })).toBe(once);
+  expect(once).toEqual(z.toJSONSchema(named("read", "list_tasks").input, { target: "draft-2020-12", io: "input" }));
 });
 
 test("query strings become the types each tool expects", () => {

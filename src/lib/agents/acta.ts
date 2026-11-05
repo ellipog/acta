@@ -142,11 +142,12 @@ export const githubFilters = ["open_pull_request", "checks_failing", "no_pull_re
 type GitHubFilter = (typeof githubFilters)[number];
 
 type PullRequest = { board_id: string; number: number; ref: string; state: string | null; extra: { checks?: string; review?: string } };
-const openPull = (l: PullRequest) => l.state === "open" || l.state === "draft";
-const failing = (l: PullRequest) => openPull(l) && (l.extra?.checks === "failure" || l.extra?.checks === "timed_out");
+type Pull = Pick<PullRequest, "ref" | "state" | "extra">;
+const openPull = (l: Pull) => l.state === "open" || l.state === "draft";
+const failing = (l: Pull) => openPull(l) && (l.extra?.checks === "failure" || l.extra?.checks === "timed_out");
 
 // A task's pull request at a glance: the open one if there is one, else the latest
-function pullSummary(list: PullRequest[] | undefined) {
+function pullSummary(list: Pull[] | undefined) {
   if (!list?.length) return undefined;
   const main = list.find(openPull) ?? list[0];
   return compact({
@@ -220,6 +221,19 @@ async function customReady(db: ReturnType<typeof agentDb>) {
   custom = { ok: !error, at: Date.now() };
   return custom.ok;
 }
+
+// And for GitHub's links, so a list of tasks can bring each one's pull requests along
+let links: { ok: boolean; at: number } | null = null;
+async function linksReady(db: ReturnType<typeof agentDb>) {
+  if (links && (links.ok || Date.now() - links.at < 60_000)) return links.ok;
+  const { error } = await db.from("task_links").select("id").limit(1);
+  links = { ok: !error, at: Date.now() };
+  return links.ok;
+}
+
+// What a list of tasks embeds for each one's pull requests. Where it's used, the list keeps only the links that are
+// pull requests and puts the latest first
+const pullsEmbed = "task_links (ref, state, extra)";
 
 // A task's own field values as an agent sees them, by field name
 function customOut(b: BoardRow, t: TaskRow) {
@@ -345,26 +359,31 @@ export function actaFor(agent: Agent) {
         .filter((w) => w.id && (!agent.workspaces || agent.workspaces.includes(w.id)));
     })());
 
+  // Each workspace's people, oldest member first. Several are read in one go, then kept for each workspace
   const crowd = new Map<string, Promise<Person[]>>();
-  const people = (workspaceId: string) => {
-    if (!crowd.has(workspaceId))
-      crowd.set(
-        workspaceId,
-        (async () => {
-          const { data } = await db
-            .from("members")
-            .select("user_id, role, created_at, profiles (name)")
-            .eq("workspace_id", workspaceId)
-            .order("created_at");
-          return (data ?? []).map((m) => ({
+  const peopleIn = (workspaceIds: string[]) => {
+    const unread = [...new Set(workspaceIds)].filter((id) => !crowd.has(id));
+    if (unread.length) {
+      const read = (async () => {
+        const { data } = await db
+          .from("members")
+          .select("workspace_id, user_id, role, created_at, profiles (name)")
+          .in("workspace_id", unread)
+          .order("created_at");
+        const by = new Map<string, Person[]>(unread.map((id) => [id, []]));
+        for (const m of data ?? [])
+          by.get(m.workspace_id as string)?.push({
             id: m.user_id as string,
             name: (m.profiles as unknown as { name: string | null } | null)?.name || "Member",
             role: m.role as Role,
-          }));
-        })(),
-      );
-    return crowd.get(workspaceId)!;
+          });
+        return by;
+      })();
+      for (const id of unread) crowd.set(id, read.then((by) => by.get(id) ?? []));
+    }
+    return Promise.all(workspaceIds.map((id) => crowd.get(id)!));
   };
+  const people = async (workspaceId: string) => (await peopleIn([workspaceId]))[0];
 
   async function nameOf(workspaceId: string) {
     const list = await people(workspaceId);
@@ -385,25 +404,30 @@ export function actaFor(agent: Agent) {
   // Boards read in this request, by "workspace/board". Saving something that changes a board's own row forgets them
   const boards = new Map<string, Promise<Board>>();
 
-  // withPeople starts reading the workspace's people as soon as the workspace is known, for tools that name them
+  // The board is found by its workspace's slug, so it's read at the same time as the workspaces this key reaches,
+  // which still decide whether it can be used. withPeople starts reading the workspace's people as soon as the
+  // workspace is known, for tools that name them
   async function board(ref: string, withPeople = false): Promise<Board> {
     const where = boardRef(ref);
     const key = `${where.workspace}/${where.board}`;
     let cached = boards.get(key);
     if (!cached) {
       cached = (async () => {
-        const ws = await place(where.workspace);
+        const [ws, { data }] = await Promise.all([
+          place(where.workspace),
+          db
+            .from("boards")
+            // Whole, since the newer columns only exist once their migration has run
+            .select("*, workspaces!inner (slug)")
+            .eq("workspaces.slug", where.workspace)
+            .eq("slug", where.board)
+            .maybeSingle(),
+        ]);
         if (withPeople) people(ws.id).catch(() => {});
-        const { data } = await db
-          .from("boards")
-          // Whole, since the newer columns only exist once their migration has run
-          .select("*")
-          .eq("workspace_id", ws.id)
-          .eq("slug", where.board)
-          .maybeSingle();
-        if (!data)
+        if (!data || data.workspace_id !== ws.id)
           throw new Problem(`There’s no board “${where.board}” in ${ws.slug}. Call list_boards to see the boards.`);
-        const row = data as unknown as BoardRow;
+        const row = data as unknown as BoardRow & { workspaces?: unknown };
+        delete row.workspaces;
         return { ...row, workspace: ws, ref: `${ws.slug}/${row.slug}` };
       })();
       boards.set(key, cached);
@@ -575,8 +599,19 @@ export function actaFor(agent: Agent) {
     sendToGitHub(boardId);
   };
 
-  async function apply(b: Board, changes: Record<string, unknown>) {
-    const { data, error } = await db.rpc("agent_apply", { p_key: agent.hash, p_board: b.id, p_changes: changes });
+  // live names tasks the save needs to find there and not deleted. The database checks them as it saves, so they
+  // aren't read first. If the save fails they're read after all, so a missing or deleted one is reported as it
+  // always was. Then a save the check turned down, or one the database couldn't take because it doesn't check yet,
+  // goes again without it, which is what saving after reading always did. A save with live has to be one that's
+  // safe to send twice, like comments and activity, whose ids make a second copy a no-op
+  async function apply(b: Board, changes: Record<string, unknown>, live?: number[]) {
+    const save = (check: boolean) =>
+      db.rpc("agent_apply", { p_key: agent.hash, p_board: b.id, p_changes: changes, ...(check ? { p_live: live } : {}) });
+    let { data, error } = await save(Boolean(live));
+    if (error && live) {
+      for (const n of live) await row(b, n);
+      if (error.code === "P0002" || error.code === "PGRST202") ({ data, error } = await save(false));
+    }
     if (error) throw dbProblem(error);
     const some = (k: string) => Array.isArray(changes[k]) && (changes[k] as unknown[]).length > 0;
     // New tasks move the board's next number on, and roadmap changes are the board's own
@@ -592,7 +627,7 @@ export function actaFor(agent: Agent) {
     return data as { moved: Record<string, number>; next: number };
   }
 
-  function summary(b: Spot, t: TaskRow, who: (id: string | null) => string | undefined, pulls?: PullRequest[]) {
+  function summary(b: Spot, t: TaskRow, who: (id: string | null) => string | undefined, pulls?: Pull[]) {
     const done = t.subtasks.filter((s) => s.done).length;
     return compact({
       id: taskId(b, t.number),
@@ -821,19 +856,18 @@ export function actaFor(agent: Agent) {
     return changed(b, saved(t, plan.fields), plan.notes, plan.place, who);
   }
 
-  // The pull requests on some boards' tasks, by board and task. Nothing before the GitHub migration
-  async function pullRequests(boards: string[], numbers?: number[]) {
+  // The pull requests on some boards' tasks, by board and task, for filtering by them. Nothing before the GitHub
+  // migration
+  async function pullRequests(boards: string[]) {
     const out = new Map<string, PullRequest[]>();
-    if (!boards.length || numbers?.length === 0) return out;
-    let q = db
+    if (!boards.length) return out;
+    const { data, error } = await db
       .from("task_links")
       .select("board_id, number, ref, state, extra")
       .in("board_id", boards)
       .eq("kind", "pr")
       .order("updated_at", { ascending: false })
       .limit(5000);
-    if (numbers) q = q.in("number", numbers);
-    const { data, error } = await q;
     if (error) return out;
     for (const l of (data ?? []) as PullRequest[]) {
       const key = `${l.board_id}:${l.number}`;
@@ -862,6 +896,36 @@ export function actaFor(agent: Agent) {
       ...[...numbers].map(([board, ns]) => `and(board_id.eq.${board},number.not.in.(${ns.join(",")}))`),
       ...(without.length ? [`board_id.in.(${without.join(",")})`] : []),
     ].join(",");
+  }
+
+  // The tasks on some boards that aren't deleted, by board and status, with the archived ones counted apart. One
+  // request for every board. Null until the database has agent_task_counts
+  async function taskCounts(ids: string[]) {
+    const { data, error } = await db.rpc("agent_task_counts", { p_boards: ids });
+    if (error) return null;
+    const out = new Map(ids.map((id) => [id, { by: {} as Partial<Record<StatusCategory, number>>, archived: 0 }]));
+    for (const r of (data ?? []) as { board_id: string; status: StatusCategory; archived: boolean; tasks: number }[]) {
+      const c = out.get(r.board_id);
+      if (!c) continue;
+      if (r.archived) c.archived += Number(r.tasks);
+      else c.by[r.status] = (c.by[r.status] ?? 0) + Number(r.tasks);
+    }
+    return out;
+  }
+
+  // Counting a request at a time, as before agent_task_counts: one board's tasks in some statuses, or its archive.
+  // An archived task isn't counted by status
+  async function countOne(boardId: string, statuses: StatusCategory[] | "archived") {
+    const ready = await archiveReady(db);
+    if (statuses === "archived" && !ready) return 0;
+    let q = db.from("tasks").select("number", { count: "exact", head: true }).eq("board_id", boardId).is("deleted_at", null);
+    if (statuses === "archived") q = q.not("archived_at", "is", null);
+    else {
+      q = q.in("status", statuses);
+      if (ready) q = q.is("archived_at", null);
+    }
+    const { count } = await q;
+    return count ?? 0;
   }
 
   // What get_task shows around a task, read by its number so it can go at the same time as the task itself
@@ -963,21 +1027,14 @@ export function actaFor(agent: Agent) {
               .order("created_at")
           : Promise.resolve({ data: [] as never[] }),
       ]);
-      const ready = await archiveReady(db);
-      const open = await Promise.all(
-        (boards ?? []).map(async (b) => {
-          let q = db
-            .from("tasks")
-            .select("number", { count: "exact", head: true })
-            .eq("board_id", b.id)
-            .in("status", openStatuses)
-            .is("deleted_at", null);
-          if (ready) q = q.is("archived_at", null);
-          const { count } = await q;
-          return [b.id, count ?? 0] as const;
-        }),
+      const ids = (boards ?? []).map((b) => b.id as string);
+      const all = ids.length ? await taskCounts(ids) : null;
+      // Until the database has agent_task_counts, a request for each board
+      const counts = new Map(
+        all
+          ? ids.map((id) => [id, openStatuses.reduce((sum, s) => sum + (all.get(id)?.by[s] ?? 0), 0)] as const)
+          : await Promise.all(ids.map(async (id) => [id, await countOne(id, openStatuses)] as const)),
       );
-      const counts = new Map(open);
       return {
         you: me?.name ?? undefined,
         key: { name: agent.name, access: agent.access, limited_to_some_workspaces: agent.workspaces ? true : undefined },
@@ -1002,32 +1059,19 @@ export function actaFor(agent: Agent) {
 
     async board(ref: string) {
       const b = await board(ref);
-      const ready = await archiveReady(db);
-      const count = async (s: StatusCategory) => {
-        let q = db
-          .from("tasks")
-          .select("number", { count: "exact", head: true })
-          .eq("board_id", b.id)
-          .eq("status", s)
-          .is("deleted_at", null);
-        if (ready) q = q.is("archived_at", null);
-        const { count } = await q;
-        return [s, count ?? 0] as const;
-      };
-      const [list, counts, { count: suggestions }, { count: archived }, { data: repos }] = await Promise.all([
+      const [list, counted, { count: suggestions }, { data: repos }] = await Promise.all([
         people(b.workspace_id),
-        Promise.all(taskStatuses.map(count)),
+        taskCounts([b.id]),
         db.from("suggestions").select("id", { count: "exact", head: true }).eq("board_id", b.id),
-        ready
-          ? db
-              .from("tasks")
-              .select("number", { count: "exact", head: true })
-              .eq("board_id", b.id)
-              .is("deleted_at", null)
-              .not("archived_at", "is", null)
-          : Promise.resolve({ count: 0 }),
         db.from("github_repos").select("full_name, settings").eq("board_id", b.id).order("full_name"),
       ]);
+      // Until the database has agent_task_counts, a request for each status and one for the archive
+      const [counts, archived] = counted
+        ? [taskStatuses.map((s) => [s, counted.get(b.id)?.by[s] ?? 0] as const), counted.get(b.id)?.archived ?? 0]
+        : await Promise.all([
+            Promise.all(taskStatuses.map(async (s) => [s, await countOne(b.id, [s])] as const)),
+            countOne(b.id, "archived"),
+          ]);
       const page = pageFrom(b.name, b.slug, b.page);
       return compact({
         board: b.ref,
@@ -1080,8 +1124,13 @@ export function actaFor(agent: Agent) {
     async tasks(ref: string, f: Filters) {
       const b = await board(ref, true);
       const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
-      const ready = await archiveReady(db);
-      let q = db.from("tasks").select(await fields(), { count: "exact" }).eq("board_id", b.id);
+      const [ready, linked] = await Promise.all([archiveReady(db), linksReady(db)]);
+      // Each task's pull requests come along with it rather than in a read after the list
+      let q = db
+        .from("tasks")
+        .select(`${await fields()}${linked ? `, ${pullsEmbed}` : ""}`, { count: "exact" })
+        .eq("board_id", b.id);
+      if (linked) q = q.eq("task_links.kind", "pr").order("updated_at", { referencedTable: "task_links", ascending: false });
       if (f.deleted) {
         q = q.not("deleted_at", "is", null);
         if (f.status?.length) q = q.in("status", f.status);
@@ -1109,15 +1158,11 @@ export function actaFor(agent: Agent) {
       ).limit(limit);
       if (error) throw dbProblem(error);
       const who = await nameOf(b.workspace_id);
-      const rows = (data ?? []) as unknown as TaskRow[];
+      const rows = (data ?? []) as unknown as (TaskRow & { task_links?: Pull[] })[];
       if (!f.deleted) rows.sort((a, c) => statusRank[a.status] - statusRank[c.status]);
-      const pulls = await pullRequests(
-        [b.id],
-        rows.map((t) => t.number),
-      );
       return {
         board: b.ref,
-        tasks: rows.map((t) => summary(b, t, who, pulls.get(`${b.id}:${t.number}`))),
+        tasks: rows.map((t) => summary(b, t, who, t.task_links)),
         shown: rows.length,
         total: count ?? rows.length,
       };
@@ -1134,8 +1179,14 @@ export function actaFor(agent: Agent) {
 
     async createTasks(ref: string, list: NewTask[]) {
       const b = await board(ref);
-      // Where each column ends, as the tasks made so far leave it
-      const ends = new Map<StatusCategory, number>();
+      // Read together: where each column the tasks go to ends, and the workspace's people if any task is assigned.
+      // Then each column's end moves on as the tasks made so far leave it
+      const statuses = [...new Set(list.map((t) => t.status ?? "todo"))];
+      const [filled] = await Promise.all([
+        Promise.all(statuses.map(async (s) => [s, await columnEnd(b, s)] as const)),
+        list.some((t) => t.assignee) ? people(b.workspace_id) : undefined,
+      ]);
+      const ends = new Map<StatusCategory, number>(filled);
       const created: Record<string, unknown>[] = [];
       const newPublic = pageFrom(b.name, b.slug, b.page).newTasksPublic;
       const activity: Record<string, unknown>[] = [];
@@ -1153,7 +1204,6 @@ export function actaFor(agent: Agent) {
         // Within the same day, the database keeps the closed time from coming before the created one
         if (closed && closed.slice(0, 10) < (at ?? today()).slice(0, 10))
           throw new Problem(`Task ${i + 1} closed before it was created. Check its created and closed times.`);
-        if (!ends.has(status)) ends.set(status, await columnEnd(b, status));
         const position = ends.get(status)!;
         ends.set(status, position + 1);
         const number = b.next_number + i;
@@ -1196,13 +1246,25 @@ export function actaFor(agent: Agent) {
 
     async comment(ref: string, task: string, c: CommentInput) {
       const b = await board(ref);
-      const t = await row(b, task);
-      const made = commentRow(t.number, c);
-      await apply(b, {
-        comments: [made],
-        activity: [{ id: randomUUID(), number: t.number, text: "commented", created_at: made.created_at }],
-      });
-      return { comment: made.id, task: taskId(b, t.number), url: taskUrl(b, t.number) };
+      const n = numberOf(b, task);
+      let made: ReturnType<typeof commentRow>;
+      try {
+        made = commentRow(n, c);
+      } catch (error) {
+        // A task that isn't there or was deleted is still the first thing reported
+        if (error instanceof Problem) await row(b, n);
+        throw error;
+      }
+      // The save checks the task is there and not deleted, rather than reading it first
+      await apply(
+        b,
+        {
+          comments: [made],
+          activity: [{ id: randomUUID(), number: n, text: "commented", created_at: made.created_at }],
+        },
+        [n],
+      );
+      return { comment: made.id, task: taskId(b, n), url: taskUrl(b, n) };
     },
 
     // Changes several tasks as if one after another, in a handful of round trips: the tasks are read at once, each
@@ -1383,25 +1445,21 @@ export function actaFor(agent: Agent) {
     async activity(ref: string, f: { since?: string; limit?: number }) {
       const b = await board(ref);
       const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
-      let q = db.from("activity").select("number, actor, text, created_at, via").eq("board_id", b.id);
+      // Each line brings its task's title, and the people who did them are read at the same time
+      let q = db.from("activity").select("number, actor, text, created_at, via, tasks (title)").eq("board_id", b.id);
       const since = moment(f.since, "since");
       if (since) q = q.gt("created_at", since);
-      const { data, error } = await q.order("created_at", { ascending: false }).limit(limit);
-      if (error) throw dbProblem(error);
-      const numbers = [...new Set((data ?? []).map((a) => a.number as number))];
-      const [who, { data: titles }] = await Promise.all([
+      const [{ data, error }, who] = await Promise.all([
+        q.order("created_at", { ascending: false }).limit(limit),
         nameOf(b.workspace_id),
-        numbers.length
-          ? db.from("tasks").select("number, title").eq("board_id", b.id).in("number", numbers)
-          : Promise.resolve({ data: [] as { number: number; title: string }[] }),
       ]);
-      const titleOf = new Map((titles ?? []).map((t) => [t.number as number, t.title as string]));
+      if (error) throw dbProblem(error);
       return {
         board: b.ref,
         activity: (data ?? []).map((a) =>
           compact({
             task: taskId(b, a.number),
-            title: titleOf.get(a.number),
+            title: (a.tasks as unknown as { title: string } | null)?.title,
             by: who(a.actor),
             via: a.via,
             at: a.created_at,
@@ -1412,14 +1470,13 @@ export function actaFor(agent: Agent) {
     },
 
     async editComment(ref: string, id: string, body: string) {
-      const b = await board(ref);
+      // The comment is read by its id while the board is, and only counts if it turns out to be on that board
+      const [b, { data: found }] = await Promise.all([
+        board(ref),
+        db.from("comments").select("id, board_id, number, agent_key").eq("id", id).maybeSingle(),
+      ]);
       if (!body.trim()) throw new Problem("A comment can’t be empty.");
-      const { data: c } = await db
-        .from("comments")
-        .select("id, number, agent_key")
-        .eq("board_id", b.id)
-        .eq("id", id)
-        .maybeSingle();
+      const c = found?.board_id === b.id ? found : null;
       if (!c) throw new Problem(`There’s no comment ${id} on ${b.ref}. get_task lists a task’s comments with their ids.`);
       if (c.agent_key !== agent.keyId)
         throw new Problem("This key can only edit comments it wrote. Add a new comment instead.");
@@ -1487,8 +1544,8 @@ export function actaFor(agent: Agent) {
 
     async searchAll(f: Omit<Filters, "label" | "project" | "deleted">) {
       const list = await workspaces();
-      // Everyone in these workspaces, read while the boards are
-      const crowds = Promise.all(list.map((w) => people(w.id)));
+      // Everyone in these workspaces, in one read while the boards are
+      const crowds = peopleIn(list.map((w) => w.id));
       crowds.catch(() => {});
       const { data: boards } = list.length
         ? await db
@@ -1533,13 +1590,16 @@ export function actaFor(agent: Agent) {
       const ids = [...spots].filter(([, s]) => !prefix || s.prefix === prefix).map(([id]) => id);
       if (!ids.length) return { tasks: [], shown: 0, total: 0 };
       const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
+      const [ready, linked] = await Promise.all([archiveReady(db), linksReady(db)]);
+      // Each task's pull requests come along with it, as in list_tasks
       let q = db
         .from("tasks")
-        .select(`board_id, ${await fields()}`, { count: "exact" })
+        .select(`board_id, ${await fields()}${linked ? `, ${pullsEmbed}` : ""}`, { count: "exact" })
         .in("board_id", ids)
         .is("deleted_at", null)
         .in("status", f.status?.length ? f.status : openStatuses);
-      if (await archiveReady(db)) q = q.is("archived_at", null);
+      if (linked) q = q.eq("task_links.kind", "pr").order("updated_at", { referencedTable: "task_links", ascending: false });
+      if (ready) q = q.is("archived_at", null);
       if (assignee !== undefined) q = assignee ? q.eq("assignee", assignee) : q.is("assignee", null);
       q = search(q, f.query, prefix ? [prefix] : undefined);
       if (f.github) {
@@ -1550,17 +1610,13 @@ export function actaFor(agent: Agent) {
       const { data, count, error } = await q.order("updated_at", { ascending: false }).limit(limit);
       if (error) throw dbProblem(error);
       const who = (uid: string | null) => (uid ? (names.get(uid) ?? "Former member") : undefined);
-      const rows = (data ?? []) as unknown as (TaskRow & { board_id: string })[];
-      const pulls = await pullRequests(
-        [...new Set(rows.map((t) => t.board_id))],
-        [...new Set(rows.map((t) => t.number))],
-      );
+      const rows = (data ?? []) as unknown as (TaskRow & { board_id: string; task_links?: Pull[] })[];
       return {
         tasks: rows.map((t) => {
           const spot = spots.get(t.board_id)!;
           return {
             board: spot.ref,
-            ...summary(spot, t, who, pulls.get(`${t.board_id}:${t.number}`)),
+            ...summary(spot, t, who, t.task_links),
             url: taskUrl(spot, t.number),
           };
         }),

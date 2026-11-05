@@ -2,7 +2,7 @@ import { createMcpHandler } from "@modelcontextprotocol/server";
 import { agentFor, type Agent } from "@/lib/agents/keys";
 import { actaServer } from "@/lib/agents/server";
 
-// Stateless: every request builds a server for the key that sent it
+// Stateless: every request builds a server for the key that sent it, out of tools made once for the whole process
 const mcp = createMcpHandler(({ authInfo }) => actaServer(authInfo?.extra?.agent as Agent));
 
 async function handle(request: Request) {

@@ -2,7 +2,7 @@ import "server-only";
 import * as z from "zod";
 import { Problem } from "./acta";
 import { agentFor, type Agent } from "./keys";
-import { actaTools, type Tool } from "./server";
+import { actaTool, actaTools, type Tool } from "./server";
 
 // The HTTP API: the MCP server's tools as plain JSON over HTTP, for scripts, forms, automations and anything else
 // that wants to plug into Acta. It takes the same keys and goes through the same code, so a key can do exactly as
@@ -37,7 +37,7 @@ export async function index(request: Request) {
       description: t.description,
       method: t.readOnly ? ["GET", "POST"] : ["POST"],
       url: `/api/v1/${t.name}`,
-      input: z.toJSONSchema(t.input, { io: "input" }),
+      input: t.inputJson(),
     })),
   });
 }
@@ -77,12 +77,10 @@ async function input(request: Request, tool: Tool) {
 }
 
 function find(agent: Agent, name: string) {
-  const tool = actaTools(agent).find((t) => t.name === name);
-  if (tool) return tool;
-  const exists = actaTools({ ...agent, access: "manage" }).some((t) => t.name === name);
-  return exists
-    ? problem(403, `This key can’t use ${name}. Make a key with more access under Account → Agents.`)
-    : problem(404, `There’s no tool called ${name}. GET /api/v1 lists them.`);
+  const tool = actaTool(agent, name);
+  if (tool === "forbidden")
+    return problem(403, `This key can’t use ${name}. Make a key with more access under Account → Agents.`);
+  return tool ?? problem(404, `There’s no tool called ${name}. GET /api/v1 lists them.`);
 }
 
 export async function call(request: Request, name: string) {
