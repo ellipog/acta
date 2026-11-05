@@ -14,9 +14,9 @@ export function needs(action: DemoAction, state?: BoardState): Permission[] {
     case "suggest":
     case "voteSuggestion":
       return ["comment"];
-    // The cards left behind move up, which is an edit too
+    // The cards left behind keep their positions, so nothing else is saved
     case "delete":
-      return ["edit", "delete"];
+      return ["delete"];
     case "roadmap":
     case "page":
     case "declineSuggestion":

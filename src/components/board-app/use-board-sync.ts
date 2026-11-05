@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/toast";
 import { fetchBoardState, roadmapChanged } from "@/lib/actions";
 import { rememberBoard } from "@/lib/board-cache";
-import { defaultPage, type BoardState, type StatusCategory } from "@/lib/board-store";
+import { defaultPage, type BoardState } from "@/lib/board-store";
 import { revert, saveChanges } from "@/lib/board-save";
 import {
   absorb,
@@ -88,8 +88,6 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retry = useRef(0);
   const token = useRef<string | null>(null);
-  const saves = useRef(0);
-  const columnTimers = useRef(new Map<StatusCategory, ReturnType<typeof setTimeout>>());
   // What this tab saved lately, so the echo of an older save can't undo a newer one
   const sent = useRef(new SentLog());
   const router = useRouter();
@@ -139,40 +137,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     };
   }, [live?.members, prefix]);
 
-  const receiveLater = useRef<(ev: RemoteEvent) => void>(() => {});
-
-  // Someone reordered a column. A reorder arrives as one event per moved card, so this waits for
-  // them to settle and reads the column's saved order
-  const readColumn = useCallback(
-    (status: StatusCategory) => {
-      clearTimeout(columnTimers.current.get(status));
-      columnTimers.current.set(
-        status,
-        setTimeout(async () => {
-          if (!boardId) return;
-          const supabase = await loadClient();
-          for (let tries = 0; tries < 5; tries++) {
-            const saved = saves.current;
-            const { data } = await supabase
-              .from("tasks")
-              .select("number")
-              .eq("board_id", boardId)
-              .eq("status", status)
-              .is("deleted_at", null)
-              .order("position")
-              .order("number");
-            if (!data) return;
-            // A save of ours went out meanwhile, so this order may already be out of date
-            if (!inflight.current && saves.current === saved)
-              return receiveLater.current({ table: "order", status, numbers: data.map((r) => r.number as number) });
-            await new Promise((done) => setTimeout(done, 300));
-          }
-        }, 150),
-      );
-    },
-    [boardId],
-  );
-
+  // Someone else's change, applied to what's saved and to what's on screen. A card someone moved comes with its new
+  // position and goes where that says, among the cards here, so a move is one change however long the column
   const receive = useCallback(
     (ev: RemoteEvent) => {
       if (!base.current) return;
@@ -183,7 +149,6 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       const before = base.current;
       const change = sent.current.screen(resolve(before, ev, ctx));
       if (change.kind === "none") return;
-      if (change.kind === "reorder") return readColumn(change.status);
       if (change.kind === "task" && change.add && latest.current.tasks[change.id] && !before.tasks[change.id]) {
         const from = change.id;
         const to = taskKey(prefix, Math.max(latest.current.next, Number(from.split("-").pop()) + 1));
@@ -192,17 +157,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       base.current = apply(before, change);
       dispatch({ type: "rebase", current: (b) => apply(b, change, before), history: (b) => apply(b, change) });
     },
-    [ctx, dispatch, prefix, readColumn],
+    [ctx, dispatch, prefix],
   );
-
-  useEffect(() => {
-    receiveLater.current = receive;
-  }, [receive]);
-
-  useEffect(() => {
-    const timers = columnTimers.current;
-    return () => timers.forEach(clearTimeout);
-  }, []);
 
   // Reads the whole board again, keeping changes that haven't saved yet. For after a dropped connection
   const resync = useCallback(async () => {
@@ -264,7 +220,6 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       return;
     }
     inflight.current = true;
-    saves.current++;
     setStatus("saving");
     const supabase = await loadClient();
     const result = await saveChanges(

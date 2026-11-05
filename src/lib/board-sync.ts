@@ -1,15 +1,16 @@
-import type {
-  Activity,
-  BoardState,
-  Comment,
-  CustomValue,
-  Priority,
-  PublicPage,
-  Size,
-  StatusCategory,
-  Subtask,
-  Suggestion,
-  Task,
+import {
+  slotIn,
+  type Activity,
+  type BoardState,
+  type Comment,
+  type CustomValue,
+  type Priority,
+  type PublicPage,
+  type Size,
+  type StatusCategory,
+  type Subtask,
+  type Suggestion,
+  type Task,
 } from "./board-store";
 
 export type TaskRow = {
@@ -130,7 +131,6 @@ export const taskKey = (prefix: string, n: number) => `${prefix}-${n}`;
 export const taskNumber = (id: string) => Number(id.slice(id.lastIndexOf("-") + 1));
 
 const same = (a: unknown, b: unknown) => a === b || JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-const sameList = (a: string[], b: string[]) => a === b || (a.length === b.length && a.every((x, i) => x === b[i]));
 const isUuid = (id?: string) => !!id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
 function wireValue(task: Task, f: SyncedField) {
@@ -146,7 +146,9 @@ export const stampedFields = ["opened", "closed"] as const;
 // The database writes times its own way, so they're read as ISO for the app to compare
 const iso = (at?: string | null) => (at ? new Date(at).toISOString() : undefined);
 
-export function fromRow(row: TaskRow): Pick<Task, SyncedField | "votes" | (typeof stampedFields)[number]> {
+export function fromRow(
+  row: TaskRow,
+): Pick<Task, SyncedField | "votes" | "position" | (typeof stampedFields)[number]> {
   return {
     opened: iso(row.created_at),
     closed: iso(row.closed_at),
@@ -166,6 +168,7 @@ export function fromRow(row: TaskRow): Pick<Task, SyncedField | "votes" | (typeo
     archived: row.archived_at ?? undefined,
     custom: row.custom && Object.keys(row.custom).length ? row.custom : undefined,
     votes: row.vote_count,
+    position: row.position,
   };
 }
 
@@ -173,7 +176,8 @@ export type Diff = {
   created: string[];
   updated: { id: string; fields: SyncedField[] }[];
   deleted: string[];
-  columns: StatusCategory[];
+  // Tasks that took a new position, in their column or a new one. New tasks bring theirs with them
+  placed: string[];
   comments: { task: string; comment: Comment }[];
   uncomments: { task: string; id: string }[];
   activity: { task: string; entry: Activity }[];
@@ -193,7 +197,7 @@ export function emptyDiff(d: Diff) {
     !d.created.length &&
     !d.updated.length &&
     !d.deleted.length &&
-    !d.columns.length &&
+    !d.placed.length &&
     !d.comments.length &&
     !d.uncomments.length &&
     !d.activity.length &&
@@ -218,7 +222,7 @@ export function diffBoards(base: BoardState, next: BoardState): Diff {
     created: [],
     updated: [],
     deleted: [],
-    columns: [],
+    placed: [],
     comments: [],
     uncomments: [],
     activity: [],
@@ -243,6 +247,7 @@ export function diffBoards(base: BoardState, next: BoardState): Diff {
       const changed = syncedFields.filter((f) => !same(a[f], b[f]));
       if (changed.length) d.updated.push({ id, fields: changed });
       if (Boolean(a.voted) !== Boolean(b.voted)) (b.voted ? d.voted : d.unvoted).push(id);
+      if (a.position !== b.position && Number.isFinite(b.position)) d.placed.push(id);
     }
     const before = byId(a?.thread);
     const after = byId(b.thread);
@@ -254,9 +259,6 @@ export function diffBoards(base: BoardState, next: BoardState): Diff {
     for (const aid of was.keys()) if (!now.has(aid)) d.unactivity.push({ task: id, id: aid });
   }
   for (const id of Object.keys(base.tasks)) if (!next.tasks[id]) d.deleted.push(id);
-
-  for (const s of Object.keys(next.columns) as StatusCategory[])
-    if (!sameList(base.columns[s] ?? [], next.columns[s])) d.columns.push(s);
 
   const was = new Map(base.roadmap.suggestions.map((s) => [s.id, s]));
   const now = new Map(next.roadmap.suggestions.map((s) => [s.id, s]));
@@ -274,21 +276,21 @@ export function diffBoards(base: BoardState, next: BoardState): Diff {
 
 export function toWire(d: Diff, state: BoardState) {
   const n = taskNumber;
+  // Every task the app makes is given a position. Its place in the column stands in, should one ever be missing
   const positionOf = (id: string) => {
     const t = state.tasks[id];
-    return t ? state.columns[t.status].indexOf(id) : 0;
+    return Number.isFinite(t?.position) ? t.position! : t ? Math.max(0, state.columns[t.status].indexOf(id)) : 0;
   };
   const created = d.created.map((id) => {
     const t = state.tasks[id];
     const row: Record<string, unknown> = {
       number: n(id),
-      position: Math.max(0, positionOf(id)),
+      position: positionOf(id),
       origin: t.origin ?? null,
     };
     for (const f of syncedFields) row[wireName[f]] = wireValue(t, f);
     return row;
   });
-  const createdSet = new Set(d.created);
   return {
     created,
     updated: d.updated.map(({ id, fields: changed }) => ({
@@ -296,9 +298,8 @@ export function toWire(d: Diff, state: BoardState) {
       fields: Object.fromEntries(changed.map((f) => [wireName[f], wireValue(state.tasks[id], f)])),
     })),
     deleted: d.deleted.map(n),
-    order: d.columns.flatMap((s) =>
-      state.columns[s].flatMap((id, i) => (createdSet.has(id) ? [] : [{ number: n(id), position: i }])),
-    ),
+    // Only the cards that moved. The rest of the column keeps the positions it has
+    order: d.placed.map((id) => ({ number: n(id), position: positionOf(id) })),
     voted: d.voted.map(n),
     unvoted: d.unvoted.map(n),
     comments: d.comments.map(({ task, comment }) => ({ id: comment.id, number: n(task), body: comment.body })),
@@ -347,6 +348,10 @@ export function absorb(target: BoardState, source: BoardState, d: Diff): BoardSt
     // The closed time follows the status. Kept with it, the database's own time can replace it when it comes back
     if (changed.includes("status")) t.closed = source.tasks[id]?.closed;
   }
+  for (const id of d.placed) {
+    const t = edit(id);
+    if (t) t.position = source.tasks[id]?.position ?? t.position;
+  }
   for (const id of d.voted) {
     const t = edit(id);
     if (t && !d.created.includes(id)) {
@@ -385,15 +390,15 @@ export function absorb(target: BoardState, source: BoardState, d: Diff): BoardSt
     if (t) t.activity = t.activity.filter((a) => a.id !== id);
   }
 
+  // Columns are kept in order by position, so each card these changes moved goes where its position says, among
+  // the others in the places they have here
   const columns = { ...target.columns };
-  for (const s of Object.keys(columns) as StatusCategory[]) {
-    columns[s] = d.columns.includes(s)
-      ? source.columns[s].filter((id) => tasks[id])
-      : columns[s].filter((id) => tasks[id] && tasks[id].status === s);
-  }
-  for (const id of [...d.created, ...d.updated.filter((u) => u.fields.includes("status")).map((u) => u.id)]) {
+  for (const s of Object.keys(columns) as StatusCategory[])
+    columns[s] = columns[s].filter((id) => tasks[id] && tasks[id].status === s);
+  const moved = new Set([...d.created, ...d.placed, ...d.updated.filter((u) => u.fields.includes("status")).map((u) => u.id)]);
+  for (const id of moved) {
     const t = tasks[id];
-    if (t && !columns[t.status].includes(id)) columns[t.status] = [...columns[t.status], id];
+    if (t) columns[t.status] = slotIn(columns[t.status] ?? [], tasks, id);
   }
 
   const sourceSuggestions = new Map(source.roadmap.suggestions.map((s) => [s.id, s]));
@@ -432,7 +437,7 @@ export function renumber(state: BoardState, from: string, to: string): BoardStat
 }
 
 export type Change =
-  | { kind: "task"; id: string; remove?: boolean; add?: Task; fields?: Partial<Task>; position: number }
+  | { kind: "task"; id: string; remove?: boolean; add?: Task; fields?: Partial<Task> }
   | { kind: "comment"; task: string; comment: Comment }
   | { kind: "uncomment"; id: string }
   | { kind: "activity"; task: string; entry: Activity }
@@ -440,8 +445,6 @@ export type Change =
   | { kind: "suggestion"; suggestion: Suggestion }
   | { kind: "unsuggestion"; id: string }
   | { kind: "board"; public?: boolean; page?: PublicPage; next?: number }
-  | { kind: "reorder"; status: StatusCategory }
-  | { kind: "column"; status: StatusCategory; ids: string[] }
   | { kind: "none" };
 
 export type RemoteEvent =
@@ -449,8 +452,7 @@ export type RemoteEvent =
   | { table: "comments"; row?: CommentRow; old?: { id: string } }
   | { table: "activity"; row?: ActivityRow; old?: { id: string } }
   | { table: "suggestions"; row?: SuggestionRow; old?: { id: string } }
-  | { table: "boards"; row: BoardRow }
-  | { table: "order"; status: StatusCategory; numbers: number[] };
+  | { table: "boards"; row: BoardRow };
 
 export type Context = {
   prefix: string;
@@ -463,13 +465,12 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
     case "tasks": {
       const id = taskKey(ctx.prefix, ev.row.number);
       const prev = base.tasks[id];
-      if (ev.row.deleted_at) return prev ? { kind: "task", id, remove: true, position: 0 } : { kind: "none" };
+      if (ev.row.deleted_at) return prev ? { kind: "task", id, remove: true } : { kind: "none" };
       const incoming = fromRow(ev.row);
       if (!prev)
         return {
           kind: "task",
           id,
-          position: ev.row.position,
           add: {
             id,
             ...incoming,
@@ -481,16 +482,13 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
           },
         };
       const changed: Partial<Task> = {};
-      for (const f of [...syncedFields, ...stampedFields, "votes"] as (keyof typeof incoming)[]) {
+      // The position is one field like the others: a card someone moved comes with its new one
+      for (const f of [...syncedFields, ...stampedFields, "votes", "position"] as (keyof typeof incoming)[]) {
         // A row without the column, like one from before the closed times migration, says nothing about it
         if ((f === "closed" && !("closed_at" in ev.row)) || (f === "opened" && !ev.row.created_at)) continue;
         if (!same(prev[f], incoming[f])) (changed as Record<string, unknown>)[f] = incoming[f];
       }
-      if (Object.keys(changed).length) return { kind: "task", id, fields: changed, position: ev.row.position };
-      // Only the position changed, so someone reordered the column
-      return Math.round(ev.row.position) === base.columns[prev.status].indexOf(id)
-        ? { kind: "none" }
-        : { kind: "reorder", status: prev.status };
+      return Object.keys(changed).length ? { kind: "task", id, fields: changed } : { kind: "none" };
     }
     case "comments":
       if (ev.row)
@@ -540,26 +538,13 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
       return ev.old ? { kind: "unsuggestion", id: ev.old.id } : { kind: "none" };
     case "boards":
       return { kind: "board", public: ev.row.roadmap_public, page: ctx.page(ev.row.page), next: ev.row.next_number };
-    case "order":
-      return { kind: "column", status: ev.status, ids: ev.numbers.map((n) => taskKey(ctx.prefix, n)) };
   }
 }
 
 export function apply(state: BoardState, c: Change, pending?: BoardState): BoardState {
   switch (c.kind) {
     case "none":
-    case "reorder":
       return state;
-    case "column": {
-      const ids = state.columns[c.status];
-      // A reorder you haven't saved yet wins over one from someone else
-      if (pending && !sameList(pending.columns[c.status], ids)) return state;
-      const here = new Set(ids);
-      const order = c.ids.filter((id) => here.has(id));
-      const known = new Set(order);
-      const column = [...order, ...ids.filter((id) => !known.has(id))];
-      return sameList(column, ids) ? state : { ...state, columns: { ...state.columns, [c.status]: column } };
-    }
     case "task": {
       const prev = state.tasks[c.id];
       if (c.remove) {
@@ -574,29 +559,29 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
       }
       if (c.add) {
         if (prev) return state;
-        const column = [...(state.columns[c.add.status] ?? [])];
-        column.splice(Math.max(0, Math.min(Math.round(c.position), column.length)), 0, c.id);
+        const tasks = { ...state.tasks, [c.id]: c.add };
         return {
           ...state,
           next: Math.max(state.next, taskNumber(c.id) + 1),
-          tasks: { ...state.tasks, [c.id]: c.add },
-          columns: { ...state.columns, [c.add.status]: column },
+          tasks,
+          columns: { ...state.columns, [c.add.status]: slotIn(state.columns[c.add.status] ?? [], tasks, c.id) },
         };
       }
       if (!prev || !c.fields) return state;
+      // A field changed here and not saved yet, like a card you just moved, keeps your value over theirs
       const base = pending?.tasks[c.id];
       const patch = Object.fromEntries(
         Object.entries(c.fields).filter(([f]) => !base || same(prev[f as keyof Task], base[f as keyof Task])),
       ) as Partial<Task>;
       if (!Object.keys(patch).length) return state;
       const task = { ...prev, ...patch };
+      const tasks = { ...state.tasks, [c.id]: task };
       let columns = state.columns;
-      if (patch.status && patch.status !== prev.status) {
-        const to = [...(columns[patch.status] ?? [])].filter((x) => x !== c.id);
-        to.splice(Math.max(0, Math.min(Math.round(c.position), to.length)), 0, c.id);
-        columns = { ...columns, [prev.status]: columns[prev.status].filter((x) => x !== c.id), [patch.status]: to };
+      if (task.status !== prev.status || task.position !== prev.position) {
+        columns = { ...columns, [prev.status]: columns[prev.status].filter((x) => x !== c.id) };
+        columns[task.status] = slotIn(columns[task.status] ?? [], tasks, c.id);
       }
-      return { ...state, tasks: { ...state.tasks, [c.id]: task }, columns };
+      return { ...state, tasks, columns };
     }
     case "comment": {
       const t = state.tasks[c.task];
@@ -720,6 +705,8 @@ export class SentLog {
   record(d: Diff, state: BoardState, now = Date.now()) {
     for (const id of d.created) for (const f of syncedFields) this.push(`${id}:${f}`, state.tasks[id]?.[f], now);
     for (const u of d.updated) for (const f of u.fields) this.push(`${u.id}:${f}`, state.tasks[u.id]?.[f], now);
+    // A card dragged twice in quick succession mustn't jump back to where the first drag left it
+    for (const id of [...d.created, ...d.placed]) this.push(`${id}:position`, state.tasks[id]?.position, now);
     if (d.roadmapPublic) this.push("board:public", state.roadmap.public, now);
     if (d.page) this.push("board:page", state.roadmap.page, now);
   }
@@ -736,8 +723,11 @@ export class SentLog {
   screen(c: Change, now = Date.now()): Change {
     if (c.kind === "task" && c.fields) {
       const fresh = Object.entries(c.fields).filter(([f, v]) => !this.stale(`${c.id}:${f}`, v, now));
-      // The closed time belongs to the status it came with, so it goes when that does
-      const kept = "status" in c.fields && !fresh.some(([f]) => f === "status") ? fresh.filter(([f]) => f !== "closed") : fresh;
+      // The closed time and the position belong to the status they came with, so they go when that does
+      const kept =
+        "status" in c.fields && !fresh.some(([f]) => f === "status")
+          ? fresh.filter(([f]) => f !== "closed" && f !== "position")
+          : fresh;
       if (kept.length === Object.keys(c.fields).length) return c;
       return kept.length ? { ...c, fields: Object.fromEntries(kept) as Partial<Task> } : { kind: "none" };
     }

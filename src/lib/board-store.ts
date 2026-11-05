@@ -41,6 +41,9 @@ export type Task = {
   origin?: string;
   // Values for the board's own fields, by field id
   custom?: Record<string, CustomValue>;
+  // Where it sits in its column. Columns list their tasks by position, then by number, as the database orders
+  // them. The board's own tasks always have one; the demo's get one when they're first moved
+  position?: number;
 };
 
 // Fields a board adds to its tasks, beyond the ones every board has
@@ -890,6 +893,156 @@ export function fitTask<T extends Partial<Task>>(patch: T): T {
   return out;
 }
 
+// Where cards sit. A card that moves takes a position between its new neighbours, so a move saves that one card
+// however long the column is, and everyone watching hears of one change. Positions only have to keep the order,
+// so they stop being whole numbers as cards move: a card dropped between two others takes the middle of the gap,
+// and one dropped at the top or bottom goes one past the card there. A column is numbered afresh, 0, 1, 2 and on,
+// only when two neighbours are too close for another card to fit between them
+
+// The narrowest gap kept between two positions, as a share of their size. A double could go much finer, but this
+// already lets a card go between the same two neighbours about 30 times before the column is numbered again
+const FINEST = 1e-9;
+
+const numberOf = (id: string) => Number(id.slice(id.lastIndexOf("-") + 1));
+const finite = (p?: number): p is number => p !== undefined && Number.isFinite(p);
+
+export type Placing = { number: number; position?: number; moved?: boolean };
+
+/** Whether one card sits above another: by position, then by number for two that share one. A card without a
+ * position sits below those with one */
+function above(a: Placing, b: Placing) {
+  const x = finite(a.position) ? a.position : Infinity;
+  const y = finite(b.position) ? b.position : Infinity;
+  return x < y || (x === y && a.number < b.number);
+}
+
+/** Whether task `a` sits above task `b` in a column */
+const sitsAbove = (a: Task, b: Task) =>
+  above({ number: numberOf(a.id), position: a.position }, { number: numberOf(b.id), position: b.position });
+
+/** A column with one of its tasks put where its position says, taken out of wherever it was */
+export function slotIn(ids: string[], tasks: Record<string, Task>, id: string): string[] {
+  const rest = ids.filter((x) => x !== id);
+  const t = tasks[id];
+  if (!t) return rest;
+  const at = rest.findIndex((x) => tasks[x] && sitsAbove(t, tasks[x]));
+  rest.splice(at < 0 ? rest.length : at, 0, id);
+  return rest;
+}
+
+/** `count` positions in order, strictly between `lo` and `hi`. A missing end is open, so cards there go one past
+ * the card at the top or bottom. Null when they don't fit */
+export function positionsBetween(lo: number | undefined, hi: number | undefined, count: number): number[] | null {
+  const out: number[] = [];
+  if (lo === undefined && hi === undefined) for (let i = 0; i < count; i++) out.push(i);
+  else if (hi === undefined) for (let i = 1; i <= count; i++) out.push(lo! + i);
+  else if (lo === undefined) for (let i = count; i >= 1; i--) out.push(hi - i);
+  else {
+    const step = (hi - lo) / (count + 1);
+    if (!(step > FINEST * Math.max(1, Math.abs(lo), Math.abs(hi)))) return null;
+    for (let i = 1; i <= count; i++) out.push(lo + step * i);
+  }
+  // Far enough from zero, adding a little rounds back onto the number it was added to
+  const ordered = out.every((p, i) => Number.isFinite(p) && p > (i ? out[i - 1] : (lo ?? -Infinity)) && p < (hi ?? Infinity));
+  return ordered ? out : null;
+}
+
+/**
+ * Positions for a column's cards, listed top to bottom, so that ordering by position gives that order. As many
+ * cards keep their position as can: the longest run of them that's already in order, leaving out any marked as
+ * moved. The others go between the neighbours that stay, though cards that already fit there keep theirs. When
+ * some won't fit, the whole column is numbered again
+ */
+export function positionsFor(cards: Placing[]): number[] {
+  const n = cards.length;
+  // The longest run in order, by patience sorting: tails[k] ends the best run of k + 1 cards found so far, and
+  // ahead links each card to the one before it in its run
+  const tails: number[] = [];
+  const ahead = new Array<number>(n).fill(-1);
+  for (let i = 0; i < n; i++) {
+    if (cards[i].moved || !finite(cards[i].position)) continue;
+    let lo = 0;
+    let hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (above(cards[tails[mid]], cards[i])) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo) ahead[i] = tails[lo - 1];
+    tails[lo] = i;
+  }
+  const keep = new Array<boolean>(n).fill(false);
+  for (let i = tails.length ? tails[tails.length - 1] : -1; i !== -1; i = ahead[i]) keep[i] = true;
+
+  const out = cards.map((c) => c.position!);
+  for (let i = 0; i < n; ) {
+    if (keep[i]) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < n && !keep[j]) j++;
+    // The cards from i up to j sit between two that stay, or an end of the column
+    const lo = i > 0 ? cards[i - 1] : undefined;
+    const hi = j < n ? cards[j] : undefined;
+    const run = cards.slice(i, j);
+    const fits =
+      run.every((c, k) => finite(c.position) && (k ? above(run[k - 1], c) : !lo || above(lo, c))) &&
+      (!hi || above(run[run.length - 1], hi));
+    if (!fits) {
+      const between = positionsBetween(lo?.position, hi?.position, run.length);
+      if (!between) return cards.map((_, k) => k);
+      between.forEach((p, k) => (out[i + k] = p));
+    }
+    i = j;
+  }
+  return out;
+}
+
+/** What to save to put a column in the order its cards are listed: only the cards whose position changes */
+export function movesFor(cards: Placing[]): { number: number; position: number }[] {
+  const next = positionsFor(cards);
+  return cards.flatMap((c, i) => (next[i] === c.position ? [] : [{ number: c.number, position: next[i] }]));
+}
+
+function inOrder(cards: Placing[]) {
+  let last: Placing | undefined;
+  for (const c of cards) {
+    if (!finite(c.position)) continue;
+    if (last && !above(last, c)) return false;
+    last = c;
+  }
+  return true;
+}
+
+/**
+ * Gives the cards an action moved a position that fits where they now sit. A card has moved when it's new to its
+ * column, or it's the one a move names. A column that only lost cards is still in order, so it's left as it is,
+ * and so are the demo's cards until one of their column's is moved
+ */
+function placeMoved(before: BoardState, after: BoardState, moved?: string): BoardState {
+  if (after === before) return after;
+  let tasks = after.tasks;
+  for (const s of Object.keys(after.columns) as StatusCategory[]) {
+    const ids = after.columns[s];
+    if (ids === before.columns[s]) continue;
+    const was = new Set(before.columns[s] ?? []);
+    const cards = ids.map((id) => ({
+      number: numberOf(id),
+      position: tasks[id]?.position,
+      moved: id === moved || !was.has(id),
+    }));
+    if (!cards.some((c) => c.moved) && inOrder(cards)) continue;
+    const next = positionsFor(cards);
+    ids.forEach((id, i) => {
+      if (next[i] === cards[i].position || !tasks[id]) return;
+      if (tasks === after.tasks) tasks = { ...tasks };
+      tasks[id] = { ...tasks[id], position: next[i] };
+    });
+  }
+  return tasks === after.tasks ? after : { ...after, tasks };
+}
+
 export type BoardAction =
   | { type: "columns"; columns: BoardState["columns"] }
   // Puts a task in a column, before another task or at the end, changing whatever else the patch says on the way
@@ -950,6 +1103,12 @@ function patchTask(state: BoardState, id: string, change: Partial<Task>, note?: 
 }
 
 export function boardReducer(state: BoardState, action: BoardAction): BoardState {
+  const next = reduce(state, action);
+  // A board put back whole keeps the positions it came with
+  return action.type === "reset" ? next : placeMoved(state, next, action.type === "move" ? action.id : undefined);
+}
+
+function reduce(state: BoardState, action: BoardAction): BoardState {
   switch (action.type) {
     case "columns":
       return { ...state, columns: action.columns };

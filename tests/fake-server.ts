@@ -54,6 +54,8 @@ export class FakeBoardServer {
   ideas: IdeaRow[] = [];
   ideaVotes: { id: string; voter: string }[] = [];
   requests: Wire[] = [];
+  // Tasks written, one for each row a statement wrote, as the live feed sends one change for each
+  writes: number[] = [];
   // Set to refuse some requests, as a check constraint or a dropped connection would
   refuse: ((changes: Wire) => Err | null) | null = null;
   private clock = Date.UTC(2026, 9, 27, 9);
@@ -83,10 +85,12 @@ export class FakeBoardServer {
       ideas: this.ideas,
       ideaVotes: this.ideaVotes,
     });
+    const written = this.writes.length;
     try {
       return { data: this.apply(changes), error: null };
     } catch (e) {
       // One failed part undoes the whole request, like a transaction
+      this.writes.length = written;
       this.board = saved.board;
       this.tasks = new Map(saved.tasks);
       this.comments = saved.comments;
@@ -146,28 +150,39 @@ export class FakeBoardServer {
       row.closed_at = closedStatus(row.status) ? row.created_at : null;
       this.check(row);
       this.tasks.set(n, row);
+      this.writes.push(n);
       this.board.next_number = Math.max(this.board.next_number, n + 1);
     }
 
+    // A task that changes and moves is written once, with its new position
+    const places = new Map(c.order.map((o) => [o.number, o.position]));
     for (const u of c.updated) {
       const row = this.tasks.get(num(u.number));
       if (!row) continue;
-      const next = { ...row, ...(u.fields as Partial<Row>) };
+      const next = { ...row, ...(u.fields as Partial<Row>), position: places.get(u.number) ?? row.position };
       // Closing stamps the time, reopening clears it, and done to canceled keeps it
       if (!closedStatus(next.status)) next.closed_at = null;
       else if (!closedStatus(row.status)) next.closed_at = this.now();
       this.check(next);
       this.tasks.set(next.number, next);
+      this.writes.push(next.number);
     }
 
     for (const n of c.deleted) {
       const row = this.tasks.get(n);
-      if (row && !row.deleted_at) row.deleted_at = this.now();
+      if (row && !row.deleted_at) {
+        row.deleted_at = this.now();
+        this.writes.push(n);
+      }
     }
 
+    // Rows already where they're asked to be are left alone
     for (const o of c.order) {
       const row = this.tasks.get(num(o.number));
-      if (row) row.position = o.position;
+      if (row && row.position !== o.position) {
+        row.position = o.position;
+        this.writes.push(row.number);
+      }
     }
 
     for (const n of c.voted) {

@@ -1,4 +1,4 @@
-import type { BoardState, StatusCategory, Task } from "./board-store";
+import { slotIn, type BoardState, type StatusCategory, type Task } from "./board-store";
 import { absorb, diffBoards, emptyDiff, renumber, taskKey, toWire, type Diff } from "./board-sync";
 
 // Saving a board's changes. Everything waiting goes in one request. When the database turns that down, the
@@ -36,7 +36,7 @@ export const blankDiff = (): Diff => ({
   created: [],
   updated: [],
   deleted: [],
-  columns: [],
+  placed: [],
   comments: [],
   uncomments: [],
   activity: [],
@@ -51,12 +51,15 @@ export const blankDiff = (): Diff => ({
   suggestionUnvoted: [],
 });
 
-/** Splits changes into parts that each make sense alone: one per task, the card order, the page, each idea */
+/** Splits changes into parts that each make sense alone: one per task, the page, each idea. A task's part has
+ * its new position too, so a move that's turned down doesn't leave the task's position behind in a column it never
+ * reached */
 export function splitDiff(d: Diff): Diff[] {
   const tasks = new Set<string>([
     ...d.created,
     ...d.updated.map((u) => u.id),
     ...d.deleted,
+    ...d.placed,
     ...d.comments.map((c) => c.task),
     ...d.uncomments.map((c) => c.task),
     ...d.activity.map((a) => a.task),
@@ -72,6 +75,7 @@ export function splitDiff(d: Diff): Diff[] {
     created: d.created.filter((x) => x === id),
     updated: d.updated.filter((u) => u.id === id),
     deleted: d.deleted.filter((x) => x === id),
+    placed: d.placed.filter((x) => x === id),
     comments: d.comments.filter((c) => c.task === id),
     uncomments: d.uncomments.filter((c) => c.task === id),
     activity: d.activity.filter((a) => a.task === id),
@@ -79,7 +83,6 @@ export function splitDiff(d: Diff): Diff[] {
     voted: d.voted.filter((x) => x === id),
     unvoted: d.unvoted.filter((x) => x === id),
   }));
-  if (d.columns.length) parts.push({ ...blankDiff(), columns: d.columns });
   if (d.roadmapPublic || d.page) parts.push({ ...blankDiff(), roadmapPublic: d.roadmapPublic, page: d.page });
   for (const id of d.suggested)
     parts.push({ ...blankDiff(), suggested: [id], suggestionVoted: d.suggestionVoted.filter((x) => x === id) });
@@ -102,6 +105,7 @@ export function renameDiff(d: Diff, from: string, to: string): Diff {
     created: d.created.map(r),
     updated: d.updated.map((u) => ({ ...u, id: r(u.id) })),
     deleted: d.deleted.map(r),
+    placed: d.placed.map(r),
     comments: d.comments.map((c) => ({ ...c, task: r(c.task) })),
     uncomments: d.uncomments.map((c) => ({ ...c, task: r(c.task) })),
     activity: d.activity.map((a) => ({ ...a, task: r(a.task) })),
@@ -131,7 +135,7 @@ export function describeDiff(d: Diff, state: BoardState): string {
     if (d.comments.length) return `Your comment on ${task}`;
     return `Changes to ${title(task)}`;
   }
-  if (d.columns.length) return "The order of the cards";
+  if (d.placed.length) return `Moving ${title(d.placed[0])}`;
   if (d.roadmapPublic || d.page) return "The public roadmap settings";
   if (d.suggested.length || d.declined.length) return "An idea on the roadmap";
   return "A vote on an idea";
@@ -209,14 +213,11 @@ export function revert(ui: BoardState, base: BoardState, d: Diff): BoardState {
   const lift = (id: string) => {
     for (const s of statuses) if (columns[s].includes(id)) columns[s] = columns[s].filter((x) => x !== id);
   };
+  // Back where its position says, which is the saved one once that's put back too
   const putBack = (id: string) => {
-    const t = tasks[id];
-    if (!t) return;
+    if (!tasks[id]) return;
     lift(id);
-    const column = [...columns[t.status]];
-    const at = base.columns[t.status]?.indexOf(id) ?? -1;
-    column.splice(at < 0 ? column.length : Math.min(at, column.length), 0, id);
-    columns[t.status] = column;
+    columns[tasks[id].status] = slotIn(columns[tasks[id].status] ?? [], tasks, id);
   };
 
   for (const id of d.created) {
@@ -236,6 +237,13 @@ export function revert(ui: BoardState, base: BoardState, d: Diff): BoardState {
     for (const f of fields) next[f] = was[f];
     tasks[id] = next as Task;
     if (fields.includes("status")) putBack(id);
+  }
+  for (const id of d.placed) {
+    const now = tasks[id];
+    const was = base.tasks[id];
+    if (!now || !was) continue;
+    tasks[id] = { ...now, position: was.position };
+    putBack(id);
   }
   for (const id of [...d.voted, ...d.unvoted]) {
     const now = tasks[id];
@@ -262,12 +270,6 @@ export function revert(ui: BoardState, base: BoardState, d: Diff): BoardState {
     const activity = [...now.activity.filter((a) => !a.id || !added.has(a.id)), ...back].sort((a, b) => a.at - b.at);
     tasks[id] = { ...now, activity };
   }
-  for (const s of d.columns) {
-    const saved = (base.columns[s] ?? []).filter((id) => tasks[id]?.status === s);
-    const known = new Set(saved);
-    columns[s] = [...saved, ...columns[s].filter((id) => !known.has(id) && tasks[id]?.status === s)];
-  }
-
   let suggestions = ui.roadmap.suggestions.filter((s) => !d.suggested.includes(s.id));
   for (const id of d.declined) {
     const was = base.roadmap.suggestions.find((s) => s.id === id);

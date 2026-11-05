@@ -99,9 +99,9 @@ test("tasks moved to the same column line up at its bottom in the order they wer
     { task: "ACT-8", status: "in_progress" },
   ];
   await fresh().updateTasks(ref, list);
-  // Done had two tasks, and in progress had three until two of them left
+  // Done ended at 1, and in progress at 2 once two of its three tasks left, as only the one at the bottom stayed
   expect([position(5), position(6)]).toEqual([2, 3]);
-  expect([position(1), position(8)]).toEqual([1, 2]);
+  expect([position(1), position(8)]).toEqual([3, 4]);
   await sameAsOneAtATime(list);
 });
 

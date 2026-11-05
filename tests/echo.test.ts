@@ -99,7 +99,7 @@ function emptyParts() {
     created: [],
     updated: [],
     deleted: [],
-    columns: [],
+    placed: [],
     comments: [],
     uncomments: [],
     activity: [],

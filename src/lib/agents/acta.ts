@@ -4,6 +4,7 @@ import { revalidateTag } from "next/cache";
 import { after } from "next/server";
 import {
   formatDue,
+  movesFor,
   pageFrom,
   priorities,
   statusTitle,
@@ -447,28 +448,47 @@ export function actaFor(agent: Agent) {
     return found(b, n, data as unknown as FullRow | null, deleted);
   }
 
-  // The column's tasks top to bottom, leaving one out
-  async function columnOrder(b: Board, status: StatusCategory, without: number) {
+  // The column's tasks top to bottom with their positions, leaving one out
+  async function columnOrder(b: Board, status: StatusCategory, without: number): Promise<Order> {
     const { data } = await db
       .from("tasks")
-      .select("number")
+      .select("number, position")
       .eq("board_id", b.id)
       .eq("status", status)
       .is("deleted_at", null)
       .neq("number", without)
       .order("position")
       .order("number");
-    return (data ?? []).map((r) => r.number as number);
+    return (data ?? []).map((r) => ({ number: r.number as number, position: r.position as number }));
   }
 
-  async function columnSize(b: Board, status: StatusCategory) {
-    const { count } = await db
+  // Where a task moved to the bottom of a column goes: one past the last task there. Positions can have gaps and
+  // fractions, so the number of tasks in the column wouldn't do
+  async function columnEnd(b: Board, status: StatusCategory) {
+    const { data } = await db
       .from("tasks")
-      .select("number", { count: "exact", head: true })
+      .select("position")
       .eq("board_id", b.id)
       .eq("status", status)
+      .is("deleted_at", null)
+      .order("position", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    return ((data?.position as number | undefined) ?? -1) + 1;
+  }
+
+  // The positions in some columns, by column and task, to follow where tasks go as a list of changes is planned
+  async function columnPositions(b: Board, statuses: StatusCategory[]) {
+    const out = new Map<StatusCategory, Map<number, number>>(statuses.map((s) => [s, new Map()]));
+    if (!statuses.length) return out;
+    const { data } = await db
+      .from("tasks")
+      .select("number, status, position")
+      .eq("board_id", b.id)
+      .in("status", statuses)
       .is("deleted_at", null);
-    return count ?? 0;
+    for (const r of data ?? []) out.get(r.status as StatusCategory)?.set(r.number as number, r.position as number);
+    return out;
   }
 
   function pickLabels(b: Board, names: string[]) {
@@ -600,13 +620,15 @@ export function actaFor(agent: Agent) {
 
   // What a patch changes on a task, checked the same way for update_task and update_tasks so the two can't drift.
   // Nothing is saved. A move to another column puts the task at its bottom, which the caller works out since it
-  // knows how full that column is. place, before and after read the column through columnOf and rewrite its order
+  // knows where that column ends. place, before and after read the column through columnOf and give the task a
+  // position between its new neighbours, which is the only one that changes unless the column has to be numbered
+  // again
   async function changesFor(
     b: Board,
     t: TaskRow,
     p: TaskPatch,
     who: Who,
-    columnOf: (status: StatusCategory) => Promise<number[]>,
+    columnOf: (status: StatusCategory) => Promise<Order>,
   ) {
     const fields: Record<string, unknown> = {};
     const notes: string[] = [];
@@ -731,24 +753,26 @@ export function actaFor(agent: Agent) {
     const places = [p.place, p.before, p.after].filter(Boolean).length;
     if (places > 1) throw new Problem("Use only one of place, before and after.");
     let placed: Order | undefined;
+    // Where it ends up, counting from 1, and how many tasks the column then has
+    let place: { at: number; of: number } | undefined;
     if (places) {
       const status = (fields.status as StatusCategory | undefined) ?? t.status;
-      const column = [...(await columnOf(status))];
+      const column = await columnOf(status);
       let at = p.place === "top" ? 0 : column.length;
       const next = p.before ?? p.after;
       if (next) {
         const other = numberOf(b, next);
-        const i = column.indexOf(other);
+        const i = column.findIndex((o) => o.number === other);
         if (i === -1)
           throw new Problem(
             `${taskId(b, other)} isn’t in ${statusTitle[status]}. Place a task next to one in its own column.`,
           );
         at = p.before ? i : i + 1;
       }
-      column.splice(at, 0, t.number);
-      placed = column.map((number, position) => ({ number, position }));
+      placed = movesFor([...column.slice(0, at), { number: t.number }, ...column.slice(at)]);
+      place = { at: at + 1, of: column.length + 1 };
     }
-    return { fields, notes, placed, moved: fields.status as StatusCategory | undefined };
+    return { fields, notes, placed, place, moved: fields.status as StatusCategory | undefined };
   }
 
   // The task as reading it again would show it once fields are saved. They're its own columns, and only
@@ -760,11 +784,10 @@ export function actaFor(agent: Agent) {
   });
 
   // What update_task answers once a task's changes are saved
-  function changed(b: Board, t: TaskRow, notes: string[], order: Order, who: Who) {
-    const placed = order.length > 1 ? order.findIndex((o) => o.number === t.number) + 1 : undefined;
+  function changed(b: Board, t: TaskRow, notes: string[], place: { at: number; of: number } | undefined, who: Who) {
     return compact({
       changed: notes,
-      place_in_column: placed && `${placed} of ${order.length}`,
+      place_in_column: place && place.of > 1 ? `${place.at} of ${place.of}` : undefined,
       task: summary(b, t, who),
     });
   }
@@ -776,11 +799,11 @@ export function actaFor(agent: Agent) {
     const n = numberOf(b, task);
     const places = [p.place, p.before, p.after].filter(Boolean).length;
     // Read together: the task, its workspace's people, and the column a status move takes it to. A move goes to the
-    // bottom, so it needs that column's size, unless it's placed in the column, which needs the column's order
-    const [t, who, size, column] = await Promise.all([
+    // bottom, so it needs where that column ends, unless it's placed in the column, which needs the column's order
+    const [t, who, end, column] = await Promise.all([
       row(b, n),
       nameOf(b.workspace_id),
-      p.status && !places ? columnSize(b, p.status) : undefined,
+      p.status && !places ? columnEnd(b, p.status) : undefined,
       p.status && places === 1 ? columnOrder(b, p.status, n) : undefined,
     ]);
     const plan = await changesFor(b, t, p, who, (status) =>
@@ -789,13 +812,13 @@ export function actaFor(agent: Agent) {
     if (!Object.keys(plan.fields).length && !plan.placed) return { unchanged: true, task: summary(b, t, who) };
     const order =
       plan.placed ??
-      (plan.moved ? [{ number: t.number, position: size ?? (await columnSize(b, plan.moved)) }] : []);
+      (plan.moved ? [{ number: t.number, position: end ?? (await columnEnd(b, plan.moved)) }] : []);
     await apply(b, {
       updated: Object.keys(plan.fields).length ? [{ number: t.number, fields: plan.fields }] : [],
       order,
       activity: logLines(t.number, plan.notes),
     });
-    return changed(b, saved(t, plan.fields), plan.notes, order, who);
+    return changed(b, saved(t, plan.fields), plan.notes, plan.place, who);
   }
 
   // The pull requests on some boards' tasks, by board and task. Nothing before the GitHub migration
@@ -1111,7 +1134,8 @@ export function actaFor(agent: Agent) {
 
     async createTasks(ref: string, list: NewTask[]) {
       const b = await board(ref);
-      const sizes = new Map<StatusCategory, number>();
+      // Where each column ends, as the tasks made so far leave it
+      const ends = new Map<StatusCategory, number>();
       const created: Record<string, unknown>[] = [];
       const newPublic = pageFrom(b.name, b.slug, b.page).newTasksPublic;
       const activity: Record<string, unknown>[] = [];
@@ -1129,9 +1153,9 @@ export function actaFor(agent: Agent) {
         // Within the same day, the database keeps the closed time from coming before the created one
         if (closed && closed.slice(0, 10) < (at ?? today()).slice(0, 10))
           throw new Problem(`Task ${i + 1} closed before it was created. Check its created and closed times.`);
-        if (!sizes.has(status)) sizes.set(status, await columnSize(b, status));
-        const position = sizes.get(status)!;
-        sizes.set(status, position + 1);
+        if (!ends.has(status)) ends.set(status, await columnEnd(b, status));
+        const position = ends.get(status)!;
+        ends.set(status, position + 1);
         const number = b.next_number + i;
         created.push({
           number,
@@ -1225,19 +1249,20 @@ export function actaFor(agent: Agent) {
       });
       const wanted = [...new Set(numbers.filter((n): n is number => typeof n === "number"))];
       const targets = [...new Set(list.flatMap((p) => (p.status ? [p.status] : [])))];
-      const [read, who, sizes] = await Promise.all([
+      const [read, who, held] = await Promise.all([
         (async () =>
           wanted.length
             ? await db.from("tasks").select(await rowFields()).eq("board_id", b.id).in("number", wanted)
             : { data: [], error: null })(),
         nameOf(b.workspace_id),
-        Promise.all(targets.map(async (s) => [s, await columnSize(b, s)] as const)),
+        columnPositions(b, targets),
       ]);
       if (read.error) return oneByOne(0);
 
-      // The tasks and column sizes as the changes so far leave them
+      // The tasks, and the positions in the columns they move to, as the changes so far leave them. A column's end
+      // is one past its last task, the same as columnEnd reads it one task at a time
       const current = new Map(((read.data ?? []) as unknown as FullRow[]).map((t) => [t.number, t]));
-      const counts = new Map<StatusCategory, number>(sizes);
+      const endOf = (column: Map<number, number>) => (column.size ? Math.max(...column.values()) + 1 : 0);
       type Waiting = { i: number; number: number; fields: Record<string, unknown>; notes: string[]; order: Order };
       let waiting: (Waiting & { columns: StatusCategory[] })[] = [];
 
@@ -1287,12 +1312,11 @@ export function actaFor(agent: Agent) {
           // A move goes to the bottom of its new column, behind any moved there before it in this call
           let order = plan.placed ?? [];
           if (plan.moved) {
-            const size = counts.get(plan.moved)!;
-            if (!plan.placed) order = [{ number: t.number, position: size }];
-            counts.set(plan.moved, size + 1);
-            const left = counts.get(t.status);
-            if (left !== undefined) counts.set(t.status, left - 1);
+            held.get(t.status)?.delete(t.number);
+            if (!plan.placed) order = [{ number: t.number, position: endOf(held.get(plan.moved)!) }];
           }
+          const into = held.get(plan.moved ?? t.status);
+          for (const o of order) into?.set(o.number, o.position);
           const next = saved(t, plan.fields);
           current.set(n, next);
           const columns = [
@@ -1300,7 +1324,7 @@ export function actaFor(agent: Agent) {
             ...(plan.placed ? [plan.moved ?? t.status] : []),
           ];
           waiting.push({ i, number: n, fields: plan.fields, notes: plan.notes, order, columns });
-          outcomes[i] = { updated: { id: task, ...changed(b, next, plan.notes, order, who) } };
+          outcomes[i] = { updated: { id: task, ...changed(b, next, plan.notes, plan.place, who) } };
         } catch (error) {
           if (!(error instanceof Problem)) throw error;
           outcomes[i] = { problem: error.message };
@@ -1319,15 +1343,15 @@ export function actaFor(agent: Agent) {
       if (!p.by === !p.tasks?.length) throw new Problem("Pass by, to sort the column, or tasks, to set its order.");
       const { data, error } = await db
         .from("tasks")
-        .select(await fields())
+        .select(`${await fields()}, position`)
         .eq("board_id", b.id)
         .eq("status", p.status)
         .is("deleted_at", null)
         .order("position")
         .order("number");
       if (error) throw dbProblem(error);
-      const rows = (data ?? []) as unknown as TaskRow[];
-      let sorted: TaskRow[];
+      const rows = (data ?? []) as unknown as (TaskRow & { position: number })[];
+      let sorted: typeof rows;
       if (p.by) {
         const value = sortValue[p.by];
         const flip = p.reverse ? -1 : 1;
@@ -1346,8 +1370,9 @@ export function actaFor(agent: Agent) {
           );
         sorted = [...first.map((n) => rows.find((r) => r.number === n)!), ...rows.filter((r) => !first.includes(r.number))];
       }
-      // Positions are rewritten whole, so a column left uneven by earlier moves comes out tidy too
-      await apply(b, { order: sorted.map((r, position) => ({ number: r.number, position })) });
+      // Tasks already in order among themselves keep their positions, and the rest go between them, so a column
+      // that was nearly sorted saves only the few that move
+      await apply(b, { order: movesFor(sorted.map((r) => ({ number: r.number, position: r.position }))) });
       return {
         board: b.ref,
         status: p.status,
@@ -1452,7 +1477,7 @@ export function actaFor(agent: Agent) {
             public: t.public,
             shipped_on: t.shipped_on,
             archived_at: t.archived_at ?? null,
-            position: await columnSize(b, t.status),
+            position: await columnEnd(b, t.status),
             origin: t.origin,
           },
         ],
@@ -1620,7 +1645,7 @@ export function actaFor(agent: Agent) {
             labels: feature ? [feature.id] : [],
             description: s.details ?? "",
             public: true,
-            position: await columnSize(b, "todo"),
+            position: await columnEnd(b, "todo"),
             origin: s.id,
           },
         ],

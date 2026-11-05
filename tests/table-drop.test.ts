@@ -118,7 +118,11 @@ test("Alt with the arrows moves one row at a time and stops at the ends", () => 
 test("a move only changes what it needs to", () => {
   const s = board();
   const after = boardReducer(s, { type: "move", id: "ACT-2", to: "todo", before: "ACT-1" });
-  expect(after.tasks["ACT-2"]).toBe(s.tasks["ACT-2"]);
+  // The card takes a position above its new neighbour, and that's all that changes about it
+  expect({ ...after.tasks["ACT-2"], position: 0 }).toEqual({ ...s.tasks["ACT-2"], position: 0 });
+  expect(after.tasks["ACT-2"].position).toBeLessThan(after.tasks["ACT-1"].position!);
+  expect(after.tasks["ACT-1"]).toBe(s.tasks["ACT-1"]);
+  expect(after.tasks["ACT-3"]).toBe(s.tasks["ACT-3"]);
   expect(after.columns.review).toBe(s.columns.review);
   expect(after.columns.todo).toEqual(["ACT-2", "ACT-1", "ACT-3"]);
 });
