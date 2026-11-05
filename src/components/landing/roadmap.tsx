@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Icon } from "@/components/ui/icons";
 import { StatusMarker } from "@/components/markers";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/controls";
+import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { DitherFill, DitherShadow, type DitherTone } from "@/components/ui/dither";
 import { actaRoadmapHref, publicPath } from "@/lib/slugs";

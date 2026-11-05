@@ -52,9 +52,14 @@ export async function proxy(request: NextRequest) {
 }
 
 // API routes come with keys or GitHub's signature rather than a session, so the proxy has nothing to refresh for
-// them. Only the GitHub routes a signed-in person calls from the app read the session: flush, install and setup
+// them. Only the GitHub routes a signed-in person calls from the app read the session: flush, install and setup.
+// Pages that never read the session skip the proxy too, so they come straight from the cache: the home page, the
+// docs, the changelog, the legal pages, the library, the demo, the share images, and public roadmaps under /p,
+// which are read without cookies. The roadmap domain only rewrites two-part paths whose first part could be a
+// workspace, and none of these can: they're one part, or start with a reserved name or one too short for a
+// workspace. /compare/<page> and /use-cases/<page> stay, since a workspace could be called compare or use-cases
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|api/(?!github/(?:flush|install|setup)(?:/|$))|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|webp|gif|ico|txt|xml)$).*)",
+    "/((?!$|docs(?:/|$)|changelog(?:/|$)|(?:compare|privacy|terms|library|demo|opengraph-image)$|p/|_next/static|_next/image|api/(?!github/(?:flush|install|setup)(?:/|$))|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|webp|gif|ico|txt|xml)$).*)",
   ],
 };

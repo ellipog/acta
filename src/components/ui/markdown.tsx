@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import { githubRef, plainLinkText } from "@/lib/github-links";
 import { cn } from "@/lib/utils";
 import { Icon, type IconName } from "./icons";
@@ -169,7 +169,9 @@ function Table({ table, id }: { table: MarkdownTable; id: string }) {
   );
 }
 
-export function Markdown({ source, className }: { source: string; className?: string }) {
+// Drawn again only when its text changes. A task's description and comments sit beside fields that redraw with
+// every key typed into them, and parsing each comment again with each key would slow typing down
+export const Markdown = memo(function Markdown({ source, className }: { source: string; className?: string }) {
   const blocks = source
     .trim()
     .split(/(```[\s\S]*?```)/)
@@ -238,7 +240,7 @@ export function Markdown({ source, className }: { source: string; className?: st
       })}
     </div>
   );
-}
+});
 
 const tools: { icon: IconName | "b" | "i" | "code"; label: string; wrap: [string, string]; line?: boolean }[] = [
   { icon: "b", label: "Bold", wrap: ["**", "**"] },

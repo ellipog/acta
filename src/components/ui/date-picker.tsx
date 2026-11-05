@@ -1,42 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { useToday } from "@/lib/hooks";
 import { DitherFill } from "./dither";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 import { PixelArrow, PixelCaret } from "./pixel";
-import { MONTHS, addDays, addMonths, localToday, pad, parts, toIso, weekday } from "@/lib/dates";
+import { MONTHS, addDays, addMonths, dueState, formatDate, formatShort, pad, parts, toIso, weekday } from "@/lib/dates";
+
+// Pages that only show dates read these from where they live, without the calendar and its popover
+export { dueState, formatDate, formatShort, useToday };
 
 const WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
-
-// Null while prerendering
-export function useToday() {
-  return useSyncExternalStore(
-    () => () => {},
-    localToday,
-    () => null,
-  );
-}
-
-export function formatDate(iso?: string) {
-  if (!iso) return "";
-  const { y, m, d } = parts(iso);
-  return `${MONTHS[m].slice(0, 3)} ${d}, ${y}`;
-}
-
-export function formatShort(iso: string, today: string | null) {
-  const { y, m, d } = parts(iso);
-  const sameYear = today ? parts(today).y === y : true;
-  return `${MONTHS[m].slice(0, 3)} ${d}${sameYear ? "" : `, ${y}`}`;
-}
-
-export function dueState(iso: string | undefined, today: string | null): "overdue" | "today" | "soon" | "later" | null {
-  if (!iso || !today) return null;
-  if (iso < today) return "overdue";
-  if (iso === today) return "today";
-  return iso <= addDays(today, 7) ? "soon" : "later";
-}
 
 type View = "days" | "months" | "years";
 

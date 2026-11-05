@@ -47,6 +47,25 @@ export function timeToClose(t: { opened?: string | null; closed?: string | null 
   return Number.isNaN(ms) ? null : Math.max(0, ms);
 }
 
+export function formatDate(iso?: string) {
+  if (!iso) return "";
+  const { y, m, d } = parts(iso);
+  return `${MONTHS[m].slice(0, 3)} ${d}, ${y}`;
+}
+
+export function formatShort(iso: string, today: string | null) {
+  const { y, m, d } = parts(iso);
+  const sameYear = today ? parts(today).y === y : true;
+  return `${MONTHS[m].slice(0, 3)} ${d}${sameYear ? "" : `, ${y}`}`;
+}
+
+export function dueState(iso: string | undefined, today: string | null): "overdue" | "today" | "soon" | "later" | null {
+  if (!iso || !today) return null;
+  if (iso < today) return "overdue";
+  if (iso === today) return "today";
+  return iso <= addDays(today, 7) ? "soon" : "later";
+}
+
 export function localToday() {
   const t = new Date();
   return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;

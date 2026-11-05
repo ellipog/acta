@@ -5,11 +5,11 @@ import { StatusMarker } from "@/components/board";
 import { Avatar, EmptyState } from "@/components/ui/display";
 import { DitherFill, type DitherTone } from "@/components/ui/dither";
 import { Button } from "@/components/ui/button";
-import { formatShort, useToday } from "@/components/ui/date-picker";
 import { Icon } from "@/components/ui/icons";
 import { Tooltip } from "@/components/ui/tooltip";
 import { PixelCaret } from "@/components/ui/pixel";
-import { MONTHS, addDays, addMonths, diffDays, monthEnd, monthStart, parts, weekday } from "@/lib/dates";
+import { MONTHS, addDays, addMonths, diffDays, formatShort, monthEnd, monthStart, parts, weekday } from "@/lib/dates";
+import { useToday } from "@/lib/hooks";
 import {
   boardMetaVersion,
   closed,
@@ -407,112 +407,20 @@ function TimelineViewBody({
               </p>
             </div>
 
-            <div className="relative shrink-0" style={{ width }}>
-              {zoom === "year"
-                ? [...new Set(months.map((m) => m.iso.slice(0, 4)))].map((y) => {
-                    const from = months.find((m) => m.iso.startsWith(y))!.from;
-                    const to = [...months].reverse().find((m) => m.iso.startsWith(y))!.to;
-                    return (
-                      <div
-                        key={y}
-                        className="absolute top-0 h-7 border-l border-line"
-                        style={{
-                          left: x(from),
-                          width: (diffDays(from, to) + 1) * ppd,
-                        }}
-                      >
-                        <span className="sticky left-[calc(var(--left)+8px)] inline-block px-2 pt-1.5 font-display text-sm">
-                          {y}
-                        </span>
-                      </div>
-                    );
-                  })
-                : months.map((m) => (
-                    <div
-                      key={m.iso}
-                      className="absolute top-0 h-7 border-l border-line"
-                      style={{
-                        left: x(m.from),
-                        width: (diffDays(m.from, m.to) + 1) * ppd,
-                      }}
-                    >
-                      <span className="sticky left-[calc(var(--left)+8px)] inline-block px-2 pt-1.5 font-display text-sm whitespace-nowrap">
-                        {MONTHS[parts(m.iso).m]} {parts(m.iso).y}
-                      </span>
-                    </div>
-                  ))}
-              <div className="absolute inset-x-0 top-7 h-7 font-mono text-[11px] text-ink-3">
-                {zoom === "month"
-                  ? dayList.map((d) => (
-                      <span
-                        key={d}
-                        className={cn(
-                          "absolute top-0 grid h-7 place-items-center",
-                          d === today ? "font-medium text-pyrite-ink" : weekday(d) > 4 ? "text-ink-3/60" : "",
-                        )}
-                        style={{ left: x(d), width: ppd }}
-                      >
-                        {parts(d).d}
-                      </span>
-                    ))
-                  : zoom === "quarter"
-                    ? dayList
-                        .filter((d) => weekday(d) === 0)
-                        .map((d) => (
-                          <span key={d} className="absolute top-0 flex h-7 items-center pl-1" style={{ left: x(d) }}>
-                            {parts(d).d}
-                          </span>
-                        ))
-                    : months.map((m) => (
-                        <span
-                          key={m.iso}
-                          className="absolute top-0 flex h-7 items-center pl-2"
-                          style={{ left: x(m.from) }}
-                        >
-                          {MONTHS[parts(m.iso).m].slice(0, 3)}
-                        </span>
-                      ))}
-              </div>
-              <div
-                className="absolute top-7 bottom-0 z-10 flex flex-col items-center"
-                style={{ left: x(today) + ppd / 2 - 1 }}
-              >
-                <span className="h-full w-0.5 bg-pyrite" />
-              </div>
-              <span
-                className="absolute top-[22px] z-10 size-2 -translate-x-1/2 bg-pyrite"
-                style={{ left: x(today) + ppd / 2 }}
-              />
-            </div>
+            <Ruler months={months} dayList={dayList} first={first} ppd={ppd} zoom={zoom} today={today} width={width} />
           </div>
 
           <div className="relative">
-            <div
-              aria-hidden
-              className={cn("pointer-events-none absolute inset-y-0 left-[var(--left)]", !rows.length && "hidden")}
-              style={{ width }}
-            >
-              {zoom !== "year"
-                ? dayList
-                    .filter((d) => weekday(d) === 5)
-                    .map((d) => (
-                      <DitherFill
-                        key={d}
-                        level={12}
-                        tone="line"
-                        className="absolute inset-y-0"
-                        style={{ left: x(d), width: 2 * ppd }}
-                      />
-                    ))
-                : null}
-              {(zoom === "month" ? dayList.filter((d) => weekday(d) === 0) : []).map((d) => (
-                <span key={d} className="absolute inset-y-0 w-px bg-line/70" style={{ left: x(d) }} />
-              ))}
-              {months.map((m) => (
-                <span key={m.iso} className="absolute inset-y-0 w-px bg-line-strong/70" style={{ left: x(m.from) }} />
-              ))}
-              <span className="absolute inset-y-0 z-20 w-0.5 bg-pyrite" style={{ left: x(today) + ppd / 2 - 1 }} />
-            </div>
+            <Grid
+              months={months}
+              dayList={dayList}
+              first={first}
+              ppd={ppd}
+              zoom={zoom}
+              today={today}
+              width={width}
+              hidden={!rows.length}
+            />
 
             {groups.map((g) => {
               const collapsed = prefs.collapsed.includes(g.key);
@@ -649,6 +557,127 @@ function TimelineViewBody({
     </div>
   );
 }
+
+type Scale = {
+  months: { iso: string; from: string; to: string }[];
+  dayList: string[];
+  first: string;
+  ppd: number;
+  zoom: Zoom;
+  today: string;
+  width: number;
+};
+
+// The months and days along the top. A drag or a hover redraws the timeline as the pointer crosses each day, and the
+// ruler holds a mark for every day shown, so it draws again only when the range, zoom or day changes
+const Ruler = memo(function Ruler({ months, dayList, first, ppd, zoom, today, width }: Scale) {
+  const x = (iso: string) => diffDays(first, iso) * ppd;
+  return (
+    <div className="relative shrink-0" style={{ width }}>
+      {zoom === "year"
+        ? [...new Set(months.map((m) => m.iso.slice(0, 4)))].map((y) => {
+            const from = months.find((m) => m.iso.startsWith(y))!.from;
+            const to = [...months].reverse().find((m) => m.iso.startsWith(y))!.to;
+            return (
+              <div
+                key={y}
+                className="absolute top-0 h-7 border-l border-line"
+                style={{
+                  left: x(from),
+                  width: (diffDays(from, to) + 1) * ppd,
+                }}
+              >
+                <span className="sticky left-[calc(var(--left)+8px)] inline-block px-2 pt-1.5 font-display text-sm">
+                  {y}
+                </span>
+              </div>
+            );
+          })
+        : months.map((m) => (
+            <div
+              key={m.iso}
+              className="absolute top-0 h-7 border-l border-line"
+              style={{
+                left: x(m.from),
+                width: (diffDays(m.from, m.to) + 1) * ppd,
+              }}
+            >
+              <span className="sticky left-[calc(var(--left)+8px)] inline-block px-2 pt-1.5 font-display text-sm whitespace-nowrap">
+                {MONTHS[parts(m.iso).m]} {parts(m.iso).y}
+              </span>
+            </div>
+          ))}
+      <div className="absolute inset-x-0 top-7 h-7 font-mono text-[11px] text-ink-3">
+        {zoom === "month"
+          ? dayList.map((d) => (
+              <span
+                key={d}
+                className={cn(
+                  "absolute top-0 grid h-7 place-items-center",
+                  d === today ? "font-medium text-pyrite-ink" : weekday(d) > 4 ? "text-ink-3/60" : "",
+                )}
+                style={{ left: x(d), width: ppd }}
+              >
+                {parts(d).d}
+              </span>
+            ))
+          : zoom === "quarter"
+            ? dayList
+                .filter((d) => weekday(d) === 0)
+                .map((d) => (
+                  <span key={d} className="absolute top-0 flex h-7 items-center pl-1" style={{ left: x(d) }}>
+                    {parts(d).d}
+                  </span>
+                ))
+            : months.map((m) => (
+                <span key={m.iso} className="absolute top-0 flex h-7 items-center pl-2" style={{ left: x(m.from) }}>
+                  {MONTHS[parts(m.iso).m].slice(0, 3)}
+                </span>
+              ))}
+      </div>
+      <div className="absolute top-7 bottom-0 z-10 flex flex-col items-center" style={{ left: x(today) + ppd / 2 - 1 }}>
+        <span className="h-full w-0.5 bg-pyrite" />
+      </div>
+      <span
+        className="absolute top-[22px] z-10 size-2 -translate-x-1/2 bg-pyrite"
+        style={{ left: x(today) + ppd / 2 }}
+      />
+    </div>
+  );
+});
+
+// The weekends, week and month lines and today's line behind the rows, drawn again on the same terms as the ruler
+const Grid = memo(function Grid({ months, dayList, first, ppd, zoom, today, width, hidden }: Scale & { hidden: boolean }) {
+  const x = (iso: string) => diffDays(first, iso) * ppd;
+  return (
+    <div
+      aria-hidden
+      className={cn("pointer-events-none absolute inset-y-0 left-[var(--left)]", hidden && "hidden")}
+      style={{ width }}
+    >
+      {zoom !== "year"
+        ? dayList
+            .filter((d) => weekday(d) === 5)
+            .map((d) => (
+              <DitherFill
+                key={d}
+                level={12}
+                tone="line"
+                className="absolute inset-y-0"
+                style={{ left: x(d), width: 2 * ppd }}
+              />
+            ))
+        : null}
+      {(zoom === "month" ? dayList.filter((d) => weekday(d) === 0) : []).map((d) => (
+        <span key={d} className="absolute inset-y-0 w-px bg-line/70" style={{ left: x(d) }} />
+      ))}
+      {months.map((m) => (
+        <span key={m.iso} className="absolute inset-y-0 w-px bg-line-strong/70" style={{ left: x(m.from) }} />
+      ))}
+      <span className="absolute inset-y-0 z-20 w-0.5 bg-pyrite" style={{ left: x(today) + ppd / 2 - 1 }} />
+    </div>
+  );
+});
 
 // One task's row. It only draws again when something it shows changes: its task, a drag or hover on it, or its
 // bar scrolling past an edge

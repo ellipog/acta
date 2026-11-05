@@ -21,8 +21,10 @@ import {
   toWire,
   type ActivityRow,
   type BoardRow,
+  type Change as BoardChange,
   type CommentRow,
   type Context,
+  type Gone,
   type RemoteEvent,
   type SuggestionRow,
   type TaskRow,
@@ -31,7 +33,13 @@ import { toneFor, type LiveBoard } from "@/lib/live";
 import { isLive, listen, type Change } from "@/lib/realtime";
 import { loadClient } from "@/lib/supabase/browser";
 import { supabaseKey, supabaseUrl } from "@/lib/supabase/env";
-import type { DemoAction } from "./demo-state";
+import type { Catch, DemoAction } from "./demo-state";
+
+// What a change from someone else does to the boards undo and redo go back to. The undo history keeps these until
+// it needs them, so each is made out here, where it holds on to its change and nothing else from around it
+const replay = (change: BoardChange): Catch => (b) => apply(b, change);
+const rename = (from: string, to: string): Catch => (b) => renumber(b, from, to);
+const forget = (gone: Gone): Catch => (b) => dropGone(b, gone);
 
 // Changes to tasks that sync with GitHub issues, and comments on them, wait in the database until the server sends
 // them. A save that could have touched one asks for that, once things settle
@@ -152,10 +160,10 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       if (change.kind === "task" && change.add && latest.current.tasks[change.id] && !before.tasks[change.id]) {
         const from = change.id;
         const to = taskKey(prefix, Math.max(latest.current.next, Number(from.split("-").pop()) + 1));
-        dispatch({ type: "rebase", current: (b) => renumber(b, from, to), history: (b) => renumber(b, from, to) });
+        dispatch({ type: "rebase", current: (b) => renumber(b, from, to), history: rename(from, to) });
       }
       base.current = apply(before, change);
-      dispatch({ type: "rebase", current: (b) => apply(b, change, before), history: (b) => apply(b, change) });
+      dispatch({ type: "rebase", current: (b) => apply(b, change, before), history: replay(change) });
     },
     [ctx, dispatch, prefix],
   );
@@ -169,7 +177,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     const before = base.current;
     base.current = fresh;
     snapshot.current = fresh;
-    dispatch({ type: "rebase", current: (b) => absorb(fresh, b, diffBoards(before, b)), history: () => null });
+    dispatch({ type: "rebase", current: (b) => absorb(fresh, b, diffBoards(before, b)), history: null });
     syncedAt.current = started;
     caughtUp.current = true;
   }, [boardId, dispatch]);
@@ -231,7 +239,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     inflight.current = false;
 
     for (const [a, b] of result.renamed)
-      dispatch({ type: "rebase", current: (s) => renumber(s, a, b), history: (s) => renumber(s, a, b) });
+      dispatch({ type: "rebase", current: (s) => renumber(s, a, b), history: rename(a, b) });
     for (const part of result.saved) sent.current.record(part, result.goal);
     if (
       result.saved.some(
@@ -249,11 +257,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     const saved = result.base;
     if (result.refused.length) {
       // Only what the database turned down comes off the board. Everything else was saved
-      dispatch({
-        type: "rebase",
-        current: (s) => result.refused.reduce((b, r) => revert(b, saved, r.diff), s),
-        history: (s) => s,
-      });
+      dispatch({ type: "rebase", current: (s) => result.refused.reduce((b, r) => revert(b, saved, r.diff), s) });
       const [one] = result.refused;
       toast({
         icon: "x",
@@ -303,7 +307,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     snapshot.current = live.state;
     if (!gone) return;
     if (base.current) base.current = dropGone(base.current, gone);
-    dispatch({ type: "rebase", current: (b) => dropGone(b, gone), history: (b) => dropGone(b, gone) });
+    dispatch({ type: "rebase", current: (b) => dropGone(b, gone), history: forget(gone) });
   }, [live, dispatch]);
 
   useEffect(() => {

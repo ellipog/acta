@@ -1,22 +1,18 @@
 "use client";
 
-import { useState } from "react";
-import { Dialog as D } from "radix-ui";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ProjectMark, StatusMarker } from "@/components/markers";
 import { Button } from "@/components/ui/button";
-import { formatShort, useToday } from "@/components/ui/date-picker";
 import { Dither, DitherFill, type DitherTone } from "@/components/ui/dither";
 import { Avatar, EmptyState, Eyebrow, Spinner } from "@/components/ui/display";
 import { Icon } from "@/components/ui/icons";
 import { LogoMark } from "@/components/ui/logo-mark";
 import { Input, Textarea } from "@/components/ui/input";
-import { Markdown } from "@/components/ui/markdown";
-import { DialogContent } from "@/components/ui/dialog";
 import { lazyPart } from "@/components/lazy-part";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
-import { useNow } from "@/lib/hooks";
-import { MONTHS, duration, timeToClose } from "@/lib/dates";
+import { useNow, useToday } from "@/lib/hooks";
+import { MONTHS, duration, formatShort, timeToClose } from "@/lib/dates";
 import type { DitherName } from "@/lib/dither-assets";
 import {
   me,
@@ -36,8 +32,14 @@ import {
 } from "@/lib/board-store";
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
-import type { Zoom } from "./fields";
+import type { Prefs, Zoom } from "./fields";
 import { PageFrame } from "./page-frame";
+
+// Opening an item shows it in a dialog with its description, which most visits never do, so that comes when one is
+// first opened. Until then nothing shows in its place, rather than the page going back to its loading frame
+const RoadmapDetail = lazyPart(() => import("./roadmap-detail").then((m) => m.RoadmapDetail));
+// The public timeline shows every row it's given
+const always = () => true;
 
 // The page visitors see. It lives apart from the roadmap editor so the public page doesn't download the editor,
 // and the timeline only loads for pages laid out as one
@@ -248,14 +250,68 @@ export function Visitor({
   const [allShipped, setAllShipped] = useState(false);
 
   const q = query.trim().toLowerCase();
-  const all = Object.values(state.tasks).filter(
-    (x) => x.public && x.status !== "canceled" && (page.showShipped || stageOf(x) !== "shipped"),
+  const all = useMemo(
+    () =>
+      Object.values(state.tasks).filter(
+        (x) => x.public && x.status !== "canceled" && (page.showShipped || stageOf(x) !== "shipped"),
+      ),
+    [state.tasks, page.showShipped],
   );
-  const items = all.filter((x) => !q || x.title.toLowerCase().includes(q) || x.description.toLowerCase().includes(q));
+  const items = useMemo(
+    () => all.filter((x) => !q || x.title.toLowerCase().includes(q) || x.description.toLowerCase().includes(q)),
+    [all, q],
+  );
   const max = Math.max(1, ...all.map((x) => x.votes ?? 0));
   const order = page.sort === "date" ? byDue : byVotes;
-  const stages = stageIds.filter((s) => page.showShipped || s !== "shipped");
+  const stages = useMemo(() => stageIds.filter((s) => page.showShipped || s !== "shipped"), [page.showShipped]);
   const vote = (id: string) => dispatch({ type: "vote", id });
+
+  // The timeline draws again only when what it shows changes, so what it's given keeps the same identity while
+  // someone types an idea or opens an item. Votes from it go through the newest dispatch
+  const timelineGroups = useMemo(
+    () =>
+      page.timelineGroup === "stage"
+        ? stages.map((s) => ({
+            key: `p:${s}`,
+            title: page.stageNames[s],
+            icon: <StatusMarker status={stageMeta[s].marker} />,
+            rows: items.filter((x) => stageOf(x) === s && (x.start || x.due)),
+          }))
+        : [...new Set(items.map((x) => x.project ?? "Other"))].sort().map((p) => ({
+            key: `p:${p}`,
+            title: p,
+            icon: <ProjectMark project={p === "Other" ? undefined : p} />,
+            rows: items.filter((x) => (x.project ?? "Other") === p && (x.start || x.due)),
+          })),
+    [page.timelineGroup, page.stageNames, stages, items],
+  );
+  const timelinePrefs = useMemo(
+    () => ({ grouping: "none" as const, zoom: zoom ?? page.zoom, collapsed }),
+    [zoom, page.zoom, collapsed],
+  );
+  const setTimelinePrefs = useCallback((p: Partial<Prefs>) => {
+    if (p.zoom) setZoom(p.zoom);
+    if (p.collapsed) setCollapsed(p.collapsed);
+  }, []);
+  const clearSearch = useCallback(() => setQuery(""), []);
+  const latest = useRef(dispatch);
+  useLayoutEffect(() => {
+    latest.current = dispatch;
+  });
+  const lead = useMemo(
+    () =>
+      page.voting
+        ? (x: Task) => (
+            <VoteButton
+              task={x}
+              accent={accent}
+              onVote={() => latest.current({ type: "vote", id: x.id })}
+              size="sm"
+            />
+          )
+        : undefined,
+    [page.voting, accent],
+  );
   const open = detail ? state.tasks[detail] : null;
   const ranked = items.filter((x) => (only === "all" ? stageOf(x) !== "shipped" : stageOf(x) === only)).sort(order);
   const ideas = [...state.roadmap.suggestions].sort(
@@ -359,21 +415,6 @@ export function Visitor({
       </div>
     </li>
   );
-
-  const timelineGroups =
-    page.timelineGroup === "stage"
-      ? stages.map((s) => ({
-          key: `p:${s}`,
-          title: page.stageNames[s],
-          icon: <StatusMarker status={stageMeta[s].marker} />,
-          rows: items.filter((x) => stageOf(x) === s && (x.start || x.due)),
-        }))
-      : [...new Set(items.map((x) => x.project ?? "Other"))].sort().map((p) => ({
-          key: `p:${p}`,
-          title: p,
-          icon: <ProjectMark project={p === "Other" ? undefined : p} />,
-          rows: items.filter((x) => (x.project ?? "Other") === p && (x.start || x.due)),
-        }));
 
   const stats = page.showStats ? (
     <dl
@@ -563,23 +604,16 @@ export function Visitor({
           <TimelineView
             state={state}
             dispatch={dispatch}
-            visible={() => true}
+            visible={always}
             onOpen={setDetail}
-            prefs={{ grouping: "none", zoom: zoom ?? page.zoom, collapsed }}
-            setPrefs={(p) => {
-              if (p.zoom) setZoom(p.zoom);
-              if (p.collapsed) setCollapsed(p.collapsed);
-            }}
+            prefs={timelinePrefs}
+            setPrefs={setTimelinePrefs}
             filtered={Boolean(q)}
-            onClearFilters={() => setQuery("")}
+            onClearFilters={clearSearch}
             readOnly
             accent={accent}
             customGroups={timelineGroups}
-            lead={
-              page.voting
-                ? (x) => <VoteButton task={x} accent={accent} onVote={() => vote(x.id)} size="sm" />
-                : undefined
-            }
+            lead={lead}
           />
         </div>
       ) : (
@@ -831,13 +865,16 @@ export function Visitor({
         </footer>
       </div>
 
-      <D.Root open={Boolean(open)} onOpenChange={(o) => !o && setDetail(null)}>
-        {open ? (
-          <DialogContent title={open.title} className="max-w-xl">
-            {(() => {
-              const s = stageOf(open);
-              return (
-                <div className="flex flex-col gap-4" style={accentVars(page.color)}>
+      {open
+        ? (() => {
+            const s = stageOf(open);
+            return (
+              <RoadmapDetail
+                title={open.title}
+                description={open.description}
+                style={accentVars(page.color)}
+                onClose={() => setDetail(null)}
+                top={
                   <div className="flex flex-wrap items-center gap-3">
                     <span className="flex items-center gap-1.5 border border-line px-2 py-0.5 text-xs text-ink-2">
                       <StatusMarker status={stageMeta[s].marker} className="size-2.5" />
@@ -845,38 +882,36 @@ export function Visitor({
                     </span>
                     {meta(open)}
                   </div>
-                  {open.description ? (
-                    <Markdown source={open.description} />
-                  ) : (
-                    <p className="text-sm text-ink-3">No details yet.</p>
-                  )}
-                  {page.showProgress && open.subtasks.length && s !== "shipped" ? (
-                    <div>
-                      <p className="mb-1.5 text-[11px] text-ink-3">Progress</p>
-                      <div className="flex h-2 gap-px">
-                        {open.subtasks.map((st) => (
-                          <span key={st.id} className={cn("flex-1", st.done ? tint[accent].bg : "bg-line")} />
-                        ))}
+                }
+                bottom={
+                  <>
+                    {page.showProgress && open.subtasks.length && s !== "shipped" ? (
+                      <div>
+                        <p className="mb-1.5 text-[11px] text-ink-3">Progress</p>
+                        <div className="flex h-2 gap-px">
+                          {open.subtasks.map((st) => (
+                            <span key={st.id} className={cn("flex-1", st.done ? tint[accent].bg : "bg-line")} />
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  ) : null}
-                  {page.voting ? (
-                    <div className="flex items-center gap-3 border-t border-line pt-4">
-                      <VoteButton task={open} accent={accent} onVote={() => vote(open.id)} />
-                      <p className="text-sm text-ink-2">
-                        {open.voted ? "You voted for this." : "Want this? Give it a vote."}
-                        <span className="block font-mono text-[11px] text-ink-3">
-                          {open.votes ?? 0} {open.votes === 1 ? "vote" : "votes"} so far
-                        </span>
-                      </p>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })()}
-          </DialogContent>
-        ) : null}
-      </D.Root>
+                    ) : null}
+                    {page.voting ? (
+                      <div className="flex items-center gap-3 border-t border-line pt-4">
+                        <VoteButton task={open} accent={accent} onVote={() => vote(open.id)} />
+                        <p className="text-sm text-ink-2">
+                          {open.voted ? "You voted for this." : "Want this? Give it a vote."}
+                          <span className="block font-mono text-[11px] text-ink-3">
+                            {open.votes ?? 0} {open.votes === 1 ? "vote" : "votes"} so far
+                          </span>
+                        </p>
+                      </div>
+                    ) : null}
+                  </>
+                }
+              />
+            );
+          })()
+        : null}
     </div>
   );
 }

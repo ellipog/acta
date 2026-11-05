@@ -5,12 +5,13 @@ import {
   Checkbox as CheckboxPrimitive,
   RadioGroup as RadioPrimitive,
   Slider as SliderPrimitive,
-  Switch as SwitchPrimitive,
   ToggleGroup as ToggleGroupPrimitive,
 } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { DitherFill } from "./dither";
 import { PixelDash, PixelMinus, PixelPlus, PixelTick } from "./pixel";
+
+export { Switch } from "./switch";
 
 export function Checkbox({ className, ...props }: React.ComponentProps<typeof CheckboxPrimitive.Root>) {
   return (
@@ -26,21 +27,6 @@ export function Checkbox({ className, ...props }: React.ComponentProps<typeof Ch
         <PixelDash className="hidden group-data-[state=indeterminate]/check:block" />
       </CheckboxPrimitive.Indicator>
     </CheckboxPrimitive.Root>
-  );
-}
-
-export function Switch({ className, ...props }: React.ComponentProps<typeof SwitchPrimitive.Root>) {
-  return (
-    <SwitchPrimitive.Root
-      className={cn(
-        "group relative inline-flex h-5 w-9 shrink-0 items-center border border-line-strong bg-sunken p-0.5 transition-colors data-[state=checked]:border-lapis data-[state=checked]:bg-lapis",
-        className,
-      )}
-      {...props}
-    >
-      <span aria-hidden className="dither-50 absolute inset-0.5 [--dither:var(--line-strong)] group-data-[state=checked]:opacity-0" />
-      <SwitchPrimitive.Thumb className="relative block size-3.5 border border-line-strong bg-raised transition-transform data-[state=checked]:translate-x-4 data-[state=checked]:border-on-accent" />
-    </SwitchPrimitive.Root>
   );
 }
 

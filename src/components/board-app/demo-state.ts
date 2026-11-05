@@ -1,7 +1,11 @@
 import { boardReducer, normalizeBoard, type BoardAction, type BoardState } from "@/lib/board-store";
 import { columnMeta, defaultColumns, defaultPrefs, type Prefs } from "./fields";
 
-type Step = { board: BoardState; label: string };
+/** A change someone else made, as it applies to any copy of the board */
+export type Catch = (b: BoardState) => BoardState;
+
+// `seen` is how many of the changes from other people the step's board already has
+type Step = { board: BoardState; label: string; seen: number };
 
 export type Demo = {
   board: BoardState;
@@ -11,6 +15,11 @@ export type Demo = {
   synced?: Prefs;
   past: Step[];
   future: Step[];
+  // Changes from other people that boards in the undo history may not have yet, oldest first, and how many
+  // changes came before the first of them. A board in the history takes them on only when undo or redo brings it
+  // back, rather than each change rewriting every board in the history as it arrives
+  missed: Catch[];
+  caught: number;
 };
 
 export type DemoAction =
@@ -23,7 +32,9 @@ export type DemoAction =
   | { type: "undo" }
   | { type: "redo" }
   | { type: "undoTo"; depth: number }
-  | { type: "rebase"; current: (b: BoardState) => BoardState; history: (b: BoardState) => BoardState | null };
+  // Someone else's change. `current` applies it to the board on screen and `history` to the boards undo and redo go
+  // back to. Without `history` those stay as they are, and null forgets them
+  | { type: "rebase"; current: (b: BoardState) => BoardState; history?: Catch | null };
 
 const LIMIT = 100;
 
@@ -86,7 +97,26 @@ function mergePrefs(saved: Partial<Prefs> | null, base: Prefs): Prefs {
 }
 
 export function initDemo(board: BoardState, prefs: Partial<Prefs> = {}): Demo {
-  return { board, prefs: { ...defaultPrefs, ...prefs }, restored: false, past: [], future: [] };
+  return { board, prefs: { ...defaultPrefs, ...prefs }, restored: false, past: [], future: [], missed: [], caught: 0 };
+}
+
+// How many changes from other people have arrived so far
+const seenNow = (demo: Demo) => demo.caught + demo.missed.length;
+
+// A board from the history with the changes it missed, in the order they came
+function caughtUp(demo: Demo, step: Step) {
+  let board = step.board;
+  for (let i = step.seen - demo.caught; i < demo.missed.length; i++) board = demo.missed[i](board);
+  return board;
+}
+
+// Lets go of the changes that every board left in the history already has
+function settle(demo: Demo): Demo {
+  let oldest = seenNow(demo);
+  for (const s of demo.past) oldest = Math.min(oldest, s.seen);
+  for (const s of demo.future) oldest = Math.min(oldest, s.seen);
+  if (oldest === demo.caught) return demo;
+  return { ...demo, missed: demo.missed.slice(oldest - demo.caught), caught: oldest };
 }
 
 export function demoReducer(demo: Demo, action: DemoAction): Demo {
@@ -104,10 +134,14 @@ export function demoReducer(demo: Demo, action: DemoAction): Demo {
     case "prefs":
       return { ...demo, prefs: { ...demo.prefs, ...action.patch } };
     case "checkpoint":
-      return { ...demo, past: [...demo.past, { board: demo.board, label: action.label }].slice(-LIMIT), future: [] };
+      return settle({
+        ...demo,
+        past: [...demo.past, { board: demo.board, label: action.label, seen: seenNow(demo) }].slice(-LIMIT),
+        future: [],
+      });
     case "revert": {
       const step = demo.past.at(-1);
-      return step ? { ...demo, board: step.board, past: demo.past.slice(0, -1) } : demo;
+      return step ? settle({ ...demo, board: caughtUp(demo, step), past: demo.past.slice(0, -1) }) : demo;
     }
     case "silent":
       return { ...demo, board: boardReducer(demo.board, action.action) };
@@ -116,57 +150,46 @@ export function demoReducer(demo: Demo, action: DemoAction): Demo {
     case "undo": {
       const step = demo.past.at(-1);
       if (!step) return demo;
-      return {
+      return settle({
         ...demo,
-        board: step.board,
+        board: caughtUp(demo, step),
         past: demo.past.slice(0, -1),
-        future: [{ board: demo.board, label: step.label }, ...demo.future],
-      };
+        future: [{ board: demo.board, label: step.label, seen: seenNow(demo) }, ...demo.future],
+      });
     }
     case "redo": {
       const step = demo.future[0];
       if (!step) return demo;
-      return {
+      return settle({
         ...demo,
-        board: step.board,
-        past: [...demo.past, { board: demo.board, label: step.label }],
+        board: caughtUp(demo, step),
+        past: [...demo.past, { board: demo.board, label: step.label, seen: seenNow(demo) }],
         future: demo.future.slice(1),
-      };
+      });
     }
     case "undoTo":
       return demo.past.length === action.depth + 1 ? demoReducer(demo, { type: "undo" }) : demo;
     case "rebase": {
       const board = action.current(demo.board);
-      // A change that touches no step keeps the history as it was, and one that changes nothing at all keeps
-      // the whole state, so React has nothing to draw
-      const move = (steps: Step[]) => {
-        let out: Step[] | null = null;
-        for (let i = 0; i < steps.length; i++) {
-          const step = steps[i];
-          const b = action.history(step.board);
-          if (!b) return [];
-          if (b === step.board && !out) continue;
-          out ??= steps.slice(0, i);
-          out.push(b === step.board ? step : { ...step, board: b });
-        }
-        return out ?? steps;
-      };
-      const past = move(demo.past);
-      const future = move(demo.future);
-      if (board === demo.board && past === demo.past && future === demo.future) return demo;
-      return { ...demo, board, past, future };
+      const kept = demo.past.length || demo.future.length;
+      if (action.history === null && kept)
+        return { ...demo, board, past: [], future: [], missed: [], caught: seenNow(demo) };
+      // With no history to bring along, a change that changes nothing keeps the whole state, so React has nothing
+      // to draw. Otherwise the history only notes the change, which costs the same however long the history is
+      if (!action.history || !kept) return board === demo.board ? demo : { ...demo, board };
+      return { ...demo, board, missed: [...demo.missed, action.history] };
     }
     default: {
       const board = boardReducer(demo.board, action);
       if (board === demo.board) return demo;
       const label = describe(action, demo.board);
-      if (action.type === "page" && demo.past.at(-1)?.label === label) return { ...demo, board, future: [] };
-      return {
+      if (action.type === "page" && demo.past.at(-1)?.label === label) return settle({ ...demo, board, future: [] });
+      return settle({
         ...demo,
         board,
-        past: [...demo.past, { board: demo.board, label }].slice(-LIMIT),
+        past: [...demo.past, { board: demo.board, label, seen: seenNow(demo) }].slice(-LIMIT),
         future: [],
-      };
+      });
     }
   }
 }

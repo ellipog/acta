@@ -1,6 +1,14 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { localToday } from "./dates";
+
+const still = () => () => {};
+
+// Null while prerendering
+export function useToday() {
+  return useSyncExternalStore(still, localToday, () => null);
+}
 
 const minute = () => Math.floor(Date.now() / 60_000) * 60_000;
 const everyMinute = (tick: () => void) => {

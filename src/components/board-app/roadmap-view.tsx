@@ -1,6 +1,7 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { StatusMarker } from "@/components/markers";
 import { Combobox } from "@/components/ui/combobox";
 import { Segmented, Switch } from "@/components/ui/controls";
@@ -653,6 +654,9 @@ function LinkRow({
   );
 }
 
+// How long typing has to stop before what's typed is saved
+const PAUSE = 600;
+
 function Customize({
   state,
   dispatch,
@@ -664,9 +668,49 @@ function Customize({
   boardId?: string;
   canManage: boolean;
 }) {
-  const page = state.roadmap.page;
+  // Each change to the page is a save that goes out to everyone on the board and clears the public page's cached
+  // copy, so what's typed waits here until a pause, or until focus leaves the panel. The fields and the preview
+  // show it straight away
+  const [draft, setDraft] = useState<Partial<PublicPage> | null>(null);
+  const typed = useRef<Partial<PublicPage> | null>(null);
+  const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const page = draft ? { ...state.roadmap.page, ...draft } : state.roadmap.page;
+  const shown = draft ? { ...state, roadmap: { ...state.roadmap, page } } : state;
   const [device, setDevice] = useState<"desktop" | "phone">("desktop");
-  const set = (patch: Partial<PublicPage>) => dispatch({ type: "page", patch });
+  // A change saves straight away, with whatever is still being typed as part of the same change
+  const set = (patch: Partial<PublicPage> = {}) => {
+    clearTimeout(pause.current);
+    const all = { ...typed.current, ...patch };
+    typed.current = null;
+    setDraft(null);
+    if (Object.keys(all).length) dispatch({ type: "page", patch: all });
+  };
+  const type = (patch: Partial<PublicPage>) => {
+    // Someone who can't change the page is told so with the first key, as anywhere else on the board
+    if (!canManage) return dispatch({ type: "page", patch });
+    typed.current = { ...typed.current, ...patch };
+    setDraft(typed.current);
+    clearTimeout(pause.current);
+    pause.current = setTimeout(() => save.current(), PAUSE);
+  };
+  const save = useRef(set);
+  useLayoutEffect(() => {
+    save.current = set;
+  });
+  // Hiding or closing the tab saves the board at once, and leaving the panel takes it away, so what's typed joins
+  // the board first. The capture phase runs before the board's own listeners, and flushSync puts it on the board
+  // before they read it
+  useEffect(() => {
+    const now = () => flushSync(() => save.current());
+    const hidden = () => document.visibilityState === "hidden" && now();
+    document.addEventListener("visibilitychange", hidden, true);
+    window.addEventListener("pagehide", now, true);
+    return () => {
+      document.removeEventListener("visibilitychange", hidden, true);
+      window.removeEventListener("pagehide", now, true);
+      save.current();
+    };
+  }, []);
   const customNoun = !nouns.some(([one, many]) => one === page.ideaOne && many === page.ideaMany);
   const [custom, setCustom] = useState(customNoun);
   const url = publicPath(me.workspace, page.slug);
@@ -690,22 +734,25 @@ function Customize({
     [next[i], next[i + by]] = [next[i + by], next[i]];
     set({ sections: next });
   };
-  const setLink = (i: number, link: PageLink | null) =>
-    set({ links: link ? page.links.map((l, j) => (j === i ? link : l)) : page.links.filter((_, j) => j !== i) });
+  const typeLink = (i: number, link: PageLink) => type({ links: page.links.map((l, j) => (j === i ? link : l)) });
+  const removeLink = (i: number) => set({ links: page.links.filter((_, j) => j !== i) });
   const announcementBroken = Boolean(page.announcementLink.trim()) && !safeHref(page.announcementLink);
 
   return (
     <div className="flex h-full flex-col @4xl:flex-row">
-      <aside className="shrink-0 overflow-y-auto border-line bg-surface @max-4xl:max-h-[45%] @max-4xl:border-b @4xl:w-[22rem] @4xl:border-r">
+      <aside
+        onBlur={() => set()}
+        className="shrink-0 overflow-y-auto border-line bg-surface @max-4xl:max-h-[45%] @max-4xl:border-b @4xl:w-[22rem] @4xl:border-r"
+      >
         <Group title="Page">
           <Setting label="Title" htmlFor="page-title">
-            <Input id="page-title" value={page.title} onChange={(e) => set({ title: e.target.value })} />
+            <Input id="page-title" value={page.title} onChange={(e) => type({ title: e.target.value })} />
           </Setting>
           <Setting label="Introduction" htmlFor="page-tagline">
             <Textarea
               id="page-tagline"
               value={page.tagline}
-              onChange={(e) => set({ tagline: e.target.value })}
+              onChange={(e) => type({ tagline: e.target.value })}
               className="min-h-20"
             />
           </Setting>
@@ -840,7 +887,7 @@ function Customize({
                 </PopoverTrigger>
                 <PopoverContent className="w-60">
                   <p className="px-3 pt-3 text-xs font-medium text-ink-2">Your own colour</p>
-                  <CustomColor value={page.color || "#2c4a8c"} onChange={(color) => set({ color })} />
+                  <CustomColor value={page.color || "#2c4a8c"} onChange={(color) => type({ color })} />
                 </PopoverContent>
               </Popover>
             </div>
@@ -974,7 +1021,7 @@ function Customize({
             </Setting>
           )}
           <Setting label="Button" hint="A call to action beside the title, like a sign-up or your docs.">
-            <LinkRow link={page.cta} name="Button" onChange={(cta) => set({ cta })} />
+            <LinkRow link={page.cta} name="Button" onChange={(cta) => type({ cta })} />
           </Setting>
           <Setting label="Links">
             <div className="flex flex-col gap-1.5">
@@ -983,8 +1030,8 @@ function Customize({
                   key={i}
                   link={l}
                   name={`Link ${i + 1}`}
-                  onChange={(link) => setLink(i, link)}
-                  onRemove={() => setLink(i, null)}
+                  onChange={(link) => typeLink(i, link)}
+                  onRemove={() => removeLink(i)}
                 />
               ))}
               {page.links.length < pageLimits.links ? (
@@ -1012,7 +1059,7 @@ function Customize({
               value={page.announcement}
               maxLength={pageLimits.text}
               placeholder="Dark mode is here"
-              onChange={(e) => set({ announcement: e.target.value })}
+              onChange={(e) => type({ announcement: e.target.value })}
             />
           </Setting>
           <Setting label="Link" htmlFor="page-announcement-link">
@@ -1023,7 +1070,7 @@ function Customize({
               spellCheck={false}
               aria-invalid={announcementBroken}
               placeholder="Optional"
-              onChange={(e) => set({ announcementLink: e.target.value })}
+              onChange={(e) => type({ announcementLink: e.target.value })}
               className={cn("font-mono text-[13px]", announcementBroken && "border-hematite")}
             />
             {announcementBroken ? (
@@ -1086,7 +1133,7 @@ function Customize({
                 value={page.stageNames[id]}
                 placeholder={defaultPage.stageNames[id]}
                 onChange={(e) =>
-                  set({
+                  type({
                     stageNames: { ...page.stageNames, [id]: e.target.value },
                   })
                 }
@@ -1145,21 +1192,21 @@ function Customize({
                   aria-label="One"
                   placeholder="pitch"
                   value={page.ideaOne}
-                  onChange={(e) => set({ ideaOne: e.target.value.toLowerCase() })}
+                  onChange={(e) => type({ ideaOne: e.target.value.toLowerCase() })}
                   className="h-8"
                 />
                 <Input
                   aria-label="Many"
                   placeholder="pitches"
                   value={page.ideaMany}
-                  onChange={(e) => set({ ideaMany: e.target.value.toLowerCase() })}
+                  onChange={(e) => type({ ideaMany: e.target.value.toLowerCase() })}
                   className="h-8"
                 />
               </div>
             ) : null}
           </Setting>
           <Setting label="Prompt" htmlFor="page-prompt" hint="The placeholder in the form.">
-            <Input id="page-prompt" value={page.ideaPrompt} onChange={(e) => set({ ideaPrompt: e.target.value })} />
+            <Input id="page-prompt" value={page.ideaPrompt} onChange={(e) => type({ ideaPrompt: e.target.value })} />
           </Setting>
           <Toggle
             label={`Show ${page.ideaMany} in public`}
@@ -1263,7 +1310,7 @@ function Customize({
               id="page-footer"
               value={page.footer}
               maxLength={pageLimits.long}
-              onChange={(e) => set({ footer: e.target.value })}
+              onChange={(e) => type({ footer: e.target.value })}
               className="min-h-16"
             />
           </Setting>
@@ -1280,7 +1327,7 @@ function Customize({
               value={page.css}
               maxLength={pageLimits.css}
               spellCheck={false}
-              onChange={(e) => set({ css: e.target.value })}
+              onChange={(e) => type({ css: e.target.value })}
               placeholder={"h1 { letter-spacing: -0.02em; }\n.acta-footer { border: 0; }"}
               className="min-h-24 font-mono text-[12px]"
             />
@@ -1295,7 +1342,7 @@ function Customize({
               value={page.headerHtml}
               maxLength={pageLimits.html}
               spellCheck={false}
-              onChange={(e) => set({ headerHtml: e.target.value })}
+              onChange={(e) => type({ headerHtml: e.target.value })}
               placeholder={'<nav><a href="https://yourco.com">Home</a></nav>'}
               className="min-h-20 font-mono text-[12px]"
             />
@@ -1306,7 +1353,7 @@ function Customize({
               value={page.footerHtml}
               maxLength={pageLimits.html}
               spellCheck={false}
-              onChange={(e) => set({ footerHtml: e.target.value })}
+              onChange={(e) => type({ footerHtml: e.target.value })}
               className="min-h-20 font-mono text-[12px]"
             />
           </Setting>
@@ -1347,7 +1394,7 @@ function Customize({
           <button
             onClick={() => {
               setCustom(false);
-              dispatch({ type: "page", patch: { ...defaultPage, newTasksPublic: page.newTasksPublic } });
+              set({ ...defaultPage, newTasksPublic: page.newTasksPublic });
             }}
             className="text-[11px] text-ink-3 hover:text-hematite"
           >
@@ -1378,7 +1425,7 @@ function Customize({
             )}
           >
             <Frame url={url} phone={device === "phone"}>
-              <Visitor state={state} dispatch={dispatch} />
+              <Visitor state={shown} dispatch={dispatch} />
             </Frame>
           </div>
         </div>

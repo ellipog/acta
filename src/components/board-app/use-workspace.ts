@@ -23,6 +23,9 @@ const hash = (text: string) => {
   return (h >>> 0).toString(36);
 };
 
+// The workspace whose counts this page last followed
+let followed: string | null = null;
+
 /** The workspace around a live board: its frame for the loading screen, live task counts and boards loaded ahead */
 export function useWorkspace(live: LiveBoard | undefined) {
   const liveRef = useRef(live);
@@ -33,12 +36,21 @@ export function useWorkspace(live: LiveBoard | undefined) {
   }, [live]);
 
   const workspaceId = live?.workspace.id;
+  const boardId = live?.board.id;
   const ids = live?.boards.map((b) => b.id).join(",") ?? "";
 
-  // Counts beside the other boards follow along: a task added, deleted or restored there reads them again
+  // Counts beside the other boards follow along: a task added, deleted or restored there reads them again. The open
+  // board counts its own tasks from its own feed, so it's left out here and its changes don't arrive twice. Each
+  // board open has its own set of the others to follow, and going back to a board within a few seconds finds its
+  // feed still open
   useEffect(() => {
-    if (!workspaceId || !ids) return;
-    const list = ids.split(",");
+    if (!workspaceId || !ids || !boardId) return;
+    const list = ids.split(",").filter((id) => id !== boardId);
+    if (!list.length) return;
+    // Nothing follows the counts between one board's feed closing and the next one's opening, so after moving
+    // between boards they're read again once it's live. The first board on the page comes with fresh counts
+    const moved = followed === workspaceId;
+    followed = workspaceId;
     let timer: ReturnType<typeof setTimeout> | undefined;
     // Only the boards that changed are counted again, or every board after a dropped connection
     const touched = new Set<string>();
@@ -58,26 +70,25 @@ export function useWorkspace(live: LiveBoard | undefined) {
         setMine(yours);
       }, 1000);
     };
-    const stop = listen(`counts:${workspaceId}:${hash(ids)}`, [{ table: "tasks", filter: `board_id=in.(${ids})` }], {
+    const others = list.join(",");
+    const stop = listen(`counts:${workspaceId}:${hash(others)}`, [{ table: "tasks", filter: `board_id=in.(${others})` }], {
       change: (_table, p) => {
         const row = (p.eventType === "DELETE" ? p.old : p.new) as { board_id?: string };
-        // The open board counts its own tasks. Elsewhere any change could be a task deleted, restored, archived or
-        // brought back, so that board's counts are read again
-        if (row.board_id === liveRef.current?.board.id) return;
+        // Any change could be a task deleted, restored, archived or brought back, so that board's counts are read
+        // again
         refresh(row.board_id && list.includes(row.board_id) ? row.board_id : undefined);
       },
       joined: (again) => {
-        if (again) refresh();
+        if (again || moved) refresh();
       },
     });
     return () => {
       clearTimeout(timer);
       stop();
     };
-  }, [workspaceId, ids]);
+  }, [workspaceId, boardId, ids]);
 
   // Boards next door load once the browser is idle, so the first click on one shows it at once
-  const boardId = live?.board.id;
   useEffect(() => {
     const here = liveRef.current;
     if (!here || !boardId || slowNetwork()) return;

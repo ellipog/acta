@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import type { User } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
@@ -44,48 +44,60 @@ export function HeaderCta() {
 
 type Me = { user: User | null; name: string; avatar: string | null; admin: boolean };
 
-export function AccountButton() {
-  const signedIn = useSignedIn();
-  const [me, setMe] = useState<Me | null>(null);
+// Who's signed in, read once for the whole page and shared by every account button on it. Moving between boards
+// draws new buttons, which find the answer already here. Signing in or out, and a changed profile, read it again
+let account: Me | null = null;
+let watching = false;
+const listeners = new Set<() => void>();
 
-  useEffect(() => {
-    if (!signedIn) return;
-    let alive = true;
-    let stop = () => {};
+function watchAccount(onChange: () => void) {
+  listeners.add(onChange);
+  if (!watching) {
+    watching = true;
     void loadClient().then((supabase) => {
-      if (!alive) return;
+      let reads = 0;
       const load = async (user: User | null) => {
-        if (!user) {
-          if (alive) setMe({ user: null, name: "", avatar: null, admin: false });
-          return;
-        }
-        const [{ data: profile }, { data: admin }] = await Promise.all([
-          supabase.from("profiles").select("name, avatar_url").eq("id", user.id).maybeSingle(),
-          supabase.from("admins").select("user_id").eq("user_id", user.id).maybeSingle(),
-        ]);
-        if (alive)
-          setMe({
+        // Only the newest read is kept, in case two overlap
+        const read = ++reads;
+        let next: Me = { user: null, name: "", avatar: null, admin: false };
+        if (user) {
+          const [{ data: profile }, { data: admin }] = await Promise.all([
+            supabase.from("profiles").select("name, avatar_url").eq("id", user.id).maybeSingle(),
+            supabase.from("admins").select("user_id").eq("user_id", user.id).maybeSingle(),
+          ]);
+          next = {
             user,
             name: profile?.name || user.email || "You",
             avatar: profile?.avatar_url ?? null,
             admin: Boolean(admin),
-          });
+          };
+        }
+        if (read !== reads) return;
+        account = next;
+        listeners.forEach((l) => l());
       };
-      const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-        setTimeout(() => load(session?.user ?? null), 0);
+      supabase.auth.onAuthStateChange((event, session) => {
+        const user = session?.user ?? null;
+        // A fresh token says nothing new about who this is
+        if (event === "TOKEN_REFRESHED" && account && user?.id === account.user?.id) return;
+        // supabase-js asks for nothing to be awaited inside this callback, so the read waits a moment
+        setTimeout(() => void load(user), 0);
       });
-      const reload = () => supabase.auth.getSession().then(({ data }) => load(data.session?.user ?? null));
-      window.addEventListener(profileEvent, reload);
-      stop = () => {
-        data.subscription.unsubscribe();
-        window.removeEventListener(profileEvent, reload);
-      };
+      window.addEventListener(profileEvent, () => {
+        void supabase.auth.getSession().then(({ data }) => load(data.session?.user ?? null));
+      });
     });
-    return () => {
-      alive = false;
-      stop();
-    };
-  }, [signedIn]);
+  }
+  return () => void listeners.delete(onChange);
+}
+
+const readAccount = () => account;
+const noAccount = () => null;
+
+export function AccountButton() {
+  const signedIn = useSignedIn();
+  // Only someone with a session cookie has anything to read
+  const me = useSyncExternalStore(signedIn ? watchAccount : still, signedIn ? readAccount : noAccount, noAccount);
 
   if (!authReady) return null;
   if (signedIn === null || (signedIn && !me)) return <span aria-hidden className="w-9" />;
