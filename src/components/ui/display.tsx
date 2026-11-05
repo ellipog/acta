@@ -141,7 +141,7 @@ export function Eyebrow({ className, ...props }: React.ComponentProps<"p">) {
 
 export function Skeleton({ className }: { className?: string }) {
   return (
-    <div aria-hidden className={cn("relative overflow-hidden bg-sunken", className)}>
+    <div aria-hidden className={cn("late relative overflow-hidden bg-sunken", className)}>
       <DitherFill level={12} tone="line" className="grain absolute inset-0" />
       <DitherFill level={50} tone="line" className="sweep absolute inset-y-0 left-0 w-1/4" />
     </div>

@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { AppSkeleton, AppTopBar } from "@/components/app-chrome";
+import { BoardFrame } from "@/components/board-app/board-frame";
 import { getAuth, getWorkspace, lastBoardIn } from "@/lib/workspace";
 import { FirstBoard } from "./first-board";
 
@@ -13,8 +14,11 @@ export const metadata: Metadata = {
 
 export default function WorkspacePage({ params }: PageProps<"/[workspace]">) {
   return (
+    // As on a board: the inner fallback has the sidebar when the browser moves here from a workspace it has seen
     <Suspense fallback={<AppSkeleton />}>
-      <Workspace params={params} />
+      <Suspense fallback={<BoardFrame />}>
+        <Workspace params={params} />
+      </Suspense>
     </Suspense>
   );
 }

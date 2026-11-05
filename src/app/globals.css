@@ -482,6 +482,14 @@ section[id] {
   0%, 11% { background: var(--ink); }
   12%, 100% { background: var(--line-strong); }
 }
+/* Loading placeholders stay hidden for a moment. Most loads finish first, and go straight from the frame to the
+   page without a flash of gray in between. It's a wait, not a fade, so it's the same with reduced motion */
+@keyframes late {
+  from { opacity: 0; }
+}
+.late {
+  animation: late 350ms steps(1, end);
+}
 .grain {
   animation: grain 0.6s steps(4, end) infinite;
 }

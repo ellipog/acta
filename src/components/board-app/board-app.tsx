@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import dynamic from "next/dynamic";
 import {
   useCallback,
   useDeferredValue,
@@ -14,6 +13,7 @@ import {
 } from "react";
 import { Dialog as D } from "radix-ui";
 import { Icon, type IconName } from "@/components/ui/icons";
+import { lazyPart } from "@/components/lazy-part";
 import {
   closed,
   defaultStatusTitle,
@@ -91,25 +91,21 @@ import { BoardLinks, NewBoard } from "./board-nav";
 import { useBoardSync, type SaveStatus, type Visitor } from "./use-board-sync";
 import { useWorkspace } from "./use-workspace";
 
-// Each view is its own download. The one on screen comes with the page, the rest and the task dialog arrive once
-// the browser is idle, or straight away if someone opens one first
-const ViewLoading = () => (
-  <div className="grid h-full place-items-center">
+// Each view is its own download, and so is the task dialog. The rest arrive once the browser is idle, or straight
+// away if someone opens one first. Each waits in its own spot, so opening one never blanks the board
+const viewLoading = (
+  <div className="late grid h-full place-items-center">
     <Spinner />
   </div>
 );
-const BoardView = dynamic(() => import("./board-view").then((m) => m.BoardView), { loading: ViewLoading });
-const TableView = dynamic(() => import("./table-view").then((m) => m.TableView), { loading: ViewLoading });
-const TimelineView = dynamic(() => import("./timeline-view").then((m) => m.TimelineView), { loading: ViewLoading });
-const PublicRoadmap = dynamic(() => import("./roadmap-view").then((m) => m.PublicRoadmap), { loading: ViewLoading });
-const TaskDialog = dynamic(() => import("./task-dialog").then((m) => m.TaskDialog));
+const BoardView = lazyPart(() => import("./board-view").then((m) => m.BoardView), viewLoading);
+const TableView = lazyPart(() => import("./table-view").then((m) => m.TableView), viewLoading);
+const TimelineView = lazyPart(() => import("./timeline-view").then((m) => m.TimelineView), viewLoading);
+const PublicRoadmap = lazyPart(() => import("./roadmap-view").then((m) => m.PublicRoadmap), viewLoading);
+const TaskDialog = lazyPart(() => import("./task-dialog").then((m) => m.TaskDialog));
 
 function preloadViews() {
-  void import("./board-view");
-  void import("./table-view");
-  void import("./timeline-view");
-  void import("./roadmap-view");
-  void import("./task-dialog");
+  for (const part of [BoardView, TableView, TimelineView, PublicRoadmap, TaskDialog]) part.preload().catch(() => {});
 }
 
 const BOARD_KEY = "acta-demo-board-v5";

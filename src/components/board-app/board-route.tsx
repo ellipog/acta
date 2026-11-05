@@ -2,11 +2,11 @@
 
 import { Suspense, use, useEffect, useState } from "react";
 import { notFound, redirect, useParams } from "next/navigation";
-import { AppSkeleton } from "@/components/app-chrome";
-import { boardPath, cachedBoard, cachedShell, forgetBoard, useCounts } from "@/lib/board-cache";
+import { boardPath, cachedBoard, forgetBoard } from "@/lib/board-cache";
 import type { LiveBoard } from "@/lib/live";
 import type { BoardResult } from "@/lib/workspace";
 import { BoardApp } from "./board-app";
+import { Frame } from "./board-frame";
 
 // The board page. A board this tab has seen shows straight away from the cache, and the server's copy fills in
 // whatever changed when it arrives. Only a board seen for the first time waits, behind a frame that already has
@@ -19,11 +19,6 @@ export function BoardRoute({ data }: { data: Promise<BoardResult> }) {
       <Board data={data} start={start} path={boardPath(params.workspace, params.board)} />
     </Suspense>
   );
-}
-
-function Frame({ workspace, board }: { workspace: string; board: string }) {
-  const counts = useCounts();
-  return <AppSkeleton shell={cachedShell(workspace)} board={board} counts={counts} />;
 }
 
 function Board({ data, start, path }: { data: Promise<BoardResult>; start: LiveBoard | null; path: string }) {

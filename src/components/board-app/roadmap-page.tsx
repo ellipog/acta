@@ -1,18 +1,18 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { useState } from "react";
 import { Dialog as D } from "radix-ui";
 import { ProjectMark, StatusMarker } from "@/components/markers";
 import { Button } from "@/components/ui/button";
 import { formatShort, useToday } from "@/components/ui/date-picker";
 import { Dither, DitherFill, type DitherTone } from "@/components/ui/dither";
-import { Avatar, EmptyState, Eyebrow } from "@/components/ui/display";
+import { Avatar, EmptyState, Eyebrow, Spinner } from "@/components/ui/display";
 import { Icon } from "@/components/ui/icons";
 import { LogoMark } from "@/components/ui/logo-mark";
 import { Input, Textarea } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { DialogContent } from "@/components/ui/dialog";
+import { lazyPart } from "@/components/lazy-part";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
 import { useNow } from "@/lib/hooks";
@@ -41,7 +41,12 @@ import { PageFrame } from "./page-frame";
 
 // The page visitors see. It lives apart from the roadmap editor so the public page doesn't download the editor,
 // and the timeline only loads for pages laid out as one
-const TimelineView = dynamic(() => import("./timeline-view").then((m) => m.TimelineView));
+const TimelineView = lazyPart(
+  () => import("./timeline-view").then((m) => m.TimelineView),
+  <div className="late grid h-full place-items-center">
+    <Spinner />
+  </div>,
+);
 
 export const stageMeta: Record<Stage, { marker: StatusCategory; tone: DitherTone }> = {
   planned: { marker: "todo", tone: "lapis" },
