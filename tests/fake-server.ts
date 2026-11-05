@@ -1,7 +1,7 @@
-import { boardState, type NestedBoard } from "@/lib/board-load";
+import { boardState, THREAD_ACTIVITY, type BoardLine, type NestedBoard } from "@/lib/board-load";
 import { pageFrom, type BoardState, type Label, type PublicPage } from "@/lib/board-store";
 import type { Wire } from "@/lib/board-save";
-import type { TaskRow } from "@/lib/board-sync";
+import { activityFrom, apply, commentFrom, heldBy, taskNumber, type Change, type TaskRow } from "@/lib/board-sync";
 import { can, type Permission, type Permissions, type Role } from "@/lib/live";
 
 // A stand-in for the database behind apply_board_changes, close enough to catch a change that never reaches it.
@@ -60,7 +60,8 @@ export class FakeBoardServer {
   refuse: ((changes: Wire) => Err | null) | null = null;
   private clock = Date.UTC(2026, 9, 27, 9);
 
-  private now() {
+  // The database's clock, which moves a second with each write
+  now() {
     this.clock += 1000;
     return new Date(this.clock).toISOString();
   }
@@ -232,11 +233,27 @@ export class FakeBoardServer {
     return { moved, next: this.board.next_number };
   }
 
-  /** The board as the app reads it on a fresh visit */
+  /** Who wrote something, as the app names people */
+  nameOf = (id: string | null) => (id === this.me ? "Me" : "Them");
+
+  private lines(number: number) {
+    return this.activity
+      .filter((a) => a.number === number)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .map((a) => ({ id: a.id, actor: a.actor, text: a.text, created_at: a.created_at, via: null }));
+  }
+
+  /** The board as the app reads it on a fresh visit: each task's comment count and latest activity line, and the
+   * board's latest lines by other people for the Inbox */
   load(): BoardState {
     const live = [...this.tasks.values()]
       .filter((t) => !t.deleted_at)
       .sort((a, b) => a.position - b.position || a.number - b.number);
+    const recent: BoardLine[] = this.activity
+      .filter((a) => a.actor !== this.me && live.some((t) => t.number === a.number))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .slice(0, 20)
+      .map((a) => ({ id: a.id, number: a.number, actor: a.actor, text: a.text, created_at: a.created_at, via: null }));
     const nested: NestedBoard = {
       id: this.board.id,
       slug: this.board.slug,
@@ -250,14 +267,8 @@ export class FakeBoardServer {
       tasks: live.map((t) => ({
         ...t,
         vote_count: this.votes.filter((v) => v.number === t.number).length,
-        comments: this.comments
-          .filter((c) => c.number === t.number)
-          .sort((a, b) => a.created_at.localeCompare(b.created_at))
-          .map((c) => ({ id: c.id, author: c.author, body: c.body, created_at: c.created_at, via: null })),
-        activity: this.activity
-          .filter((a) => a.number === t.number)
-          .sort((a, b) => b.created_at.localeCompare(a.created_at))
-          .map((a) => ({ id: a.id, actor: a.actor, text: a.text, created_at: a.created_at, via: null })),
+        comments: [{ count: this.comments.filter((c) => c.number === t.number).length }],
+        activity: this.lines(t.number).slice(0, 1),
         task_votes: this.votes.filter((v) => v.number === t.number && v.voter === this.me).map((v) => ({ voter: v.voter })),
       })),
       suggestions: this.ideas.map((s) => ({
@@ -271,7 +282,36 @@ export class FakeBoardServer {
         suggestion_votes: this.ideaVotes.filter((v) => v.id === s.id && v.voter === this.me).map((v) => ({ voter: v.voter })),
       })),
     };
-    const state = boardState(nested, () => "Me");
+    const state = boardState(nested, this.nameOf, recent);
     return { ...state, roadmap: { ...state.roadmap, page: pageFrom(this.board.name, this.board.slug, this.board.page) } };
+  }
+
+  /** A task's thread and newest activity, as its dialog reads them */
+  read(number: number) {
+    const lines = this.lines(number).slice(0, THREAD_ACTIVITY);
+    return {
+      comments: this.comments
+        .filter((c) => c.number === number)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at))
+        .map((c) => commentFrom({ ...c, via: null }, this.nameOf)),
+      activity: lines.map((a) => activityFrom(a, this.nameOf)).reverse(),
+      complete: lines.length < THREAD_ACTIVITY,
+    };
+  }
+
+  /** The change a task's dialog makes once its thread is read, with what base held when the read began */
+  thread(id: string, base: BoardState): Change {
+    return { kind: "thread", task: id, ...this.read(taskNumber(id)), had: heldBy(base.tasks[id]) };
+  }
+
+  /** A copy of the board with every task's thread read, as if each dialog had been opened. base is the copy the
+   * server last confirmed, which state is built on */
+  readAll(state: BoardState, base = state): BoardState {
+    return Object.keys(state.tasks).reduce((s, id) => apply(s, this.thread(id, base)), state);
+  }
+
+  /** What the database holds, with every thread */
+  loadWhole() {
+    return this.readAll(this.load());
   }
 }

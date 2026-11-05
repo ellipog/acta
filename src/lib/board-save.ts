@@ -256,9 +256,11 @@ export function revert(ui: BoardState, base: BoardState, d: Diff): BoardState {
     if (!now) continue;
     const added = new Set(d.comments.filter((c) => c.task === id).map((c) => c.comment.id));
     const removed = new Set(d.uncomments.filter((c) => c.task === id).map((c) => c.id));
-    const back = (base.tasks[id]?.thread ?? []).filter((c) => removed.has(c.id));
+    const back = (base.tasks[id]?.thread ?? []).filter((c) => removed.has(c.id) && !now.thread?.some((x) => x.id === c.id));
     const thread = [...(now.thread ?? []).filter((c) => !added.has(c.id)), ...back].sort((a, b) => a.at - b.at);
-    tasks[id] = { ...now, thread, comments: thread.length };
+    // The thread may be only part of the whole, so the count moves by what it gained or lost
+    const comments = Math.max(0, now.comments + thread.length - (now.thread?.length ?? 0));
+    tasks[id] = { ...now, thread, comments };
   }
   const logs = new Set([...d.activity, ...d.unactivity].map((a) => a.task));
   for (const id of logs) {

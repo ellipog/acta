@@ -41,6 +41,7 @@ function view(s: BoardState) {
           archived: Boolean(t.archived),
           votes: t.votes ?? 0,
           voted: Boolean(t.voted),
+          comments: t.comments,
           thread: (t.thread ?? []).map((c) => c.body),
           activity: t.activity.map((a) => a.text),
         },
@@ -80,13 +81,19 @@ async function saves(base: BoardState, ui: BoardState) {
   const r = await saveChanges(base, ui, server.send, "ACT");
   expect(r.refused).toEqual([]);
   expect(r.waiting).toBe(false);
-  // What the database holds and what the app thinks it holds both match the screen
-  expect(view(server.load())).toEqual(view(ui));
-  expect(view(r.base)).toEqual(view(ui));
+  // What the database holds and what the app thinks it holds both match the screen, once each task's dialog has
+  // read its thread
+  const screen = view(server.readAll(ui, r.base));
+  expect(view(server.loadWhole())).toEqual(screen);
+  expect(view(server.readAll(r.base))).toEqual(screen);
+  // Before then the counts already agree
+  expect(counts(server.load())).toEqual(counts(ui));
   // And nothing is left to send
   expect(emptyDiff(diffBoards(r.base, ui))).toBe(true);
   return r;
 }
+
+const counts = (s: BoardState) => Object.fromEntries(Object.values(s.tasks).map((t) => [t.id, t.comments]));
 
 describe("every edit reaches the database", () => {
   beforeEach(() => {
@@ -201,6 +208,7 @@ describe("every edit reaches the database", () => {
       comments: 0,
       thread: [],
       activity: [],
+      partial: true,
       public: true,
       votes: 0,
       voted: false,
@@ -213,14 +221,15 @@ describe("every edit reaches the database", () => {
       position: 0,
     } satisfies Required<Task>;
     // Comments, activity and votes have tables of their own, the id and origin are fixed when it's made, the
-    // database stamps when it opened and closed, and the position goes with the card order
-    const elsewhere = ["id", "comments", "thread", "activity", "votes", "voted", "origin", "opened", "closed", "position"];
+    // database stamps when it opened and closed, the position goes with the card order, and whether its thread has
+    // been read is only this tab's to know
+    const elsewhere = ["id", "comments", "thread", "activity", "partial", "votes", "voted", "origin", "opened", "closed", "position"];
     expect(Object.keys(full).sort()).toEqual([...syncedFields, ...elsewhere].sort());
 
     server = new FakeBoardServer();
     const base = server.load();
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { id, comments, thread, activity, votes, voted, opened, closed, position, ...fields } = full;
+    const { id, comments, thread, activity, partial, votes, voted, opened, closed, position, ...fields } = full;
     const ui = run(base, { type: "add", status: "review", title: full.title, patch: fields });
     await saves(base, ui);
     const back = server.load().tasks["ACT-1"];
@@ -243,7 +252,7 @@ describe("a change the database turns down", () => {
     );
     const r = await saveChanges(base, ui, server.send, "ACT");
     expect(r.refused.map((x) => x.what)).toEqual(["Changes to ACT-2 · Sketch the layout"]);
-    const after = server.load();
+    const after = server.loadWhole();
     expect(after.tasks["ACT-1"].title).toBe("Saved anyway");
     expect(after.tasks["ACT-3"].thread?.map((c) => c.body)).toEqual(["Still here"]);
     expect(after.tasks["ACT-2"].labels).toEqual([]);
@@ -325,7 +334,7 @@ describe("new tasks someone else numbered first", () => {
     const mine = run(base, { type: "add", status: "todo", title: "Mine" }, { type: "comment", id: "ACT-5", body: "On mine" });
     const r = await saveChanges(base, mine, server.send, "ACT");
     expect(r.renamed).toEqual([["ACT-5", "ACT-6"]]);
-    const after = server.load();
+    const after = server.loadWhole();
     expect(after.tasks["ACT-5"].title).toBe("Theirs");
     expect(after.tasks["ACT-6"].title).toBe("Mine");
     expect(after.tasks["ACT-6"].thread?.map((c) => c.body)).toEqual(["On mine"]);

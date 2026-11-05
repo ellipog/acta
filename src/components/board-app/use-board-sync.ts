@@ -5,26 +5,29 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/toast";
 import { fetchBoardState, roadmapChanged } from "@/lib/actions";
 import { rememberBoard } from "@/lib/board-cache";
-import { defaultPage, type BoardState } from "@/lib/board-store";
+import { readCounts, readThread } from "@/lib/board-load";
+import { defaultPage, type Activity, type BoardState } from "@/lib/board-store";
 import { revert, saveChanges } from "@/lib/board-save";
 import {
   absorb,
+  activityFrom,
   apply,
   diffBoards,
+  heldBy,
+  keepOwn,
   SentLog,
-  dropGone,
   emptyDiff,
-  goneSince,
   renumber,
   resolve,
   taskKey,
+  taskNumber,
   toWire,
+  unsure,
   type ActivityRow,
   type BoardRow,
   type Change as BoardChange,
   type CommentRow,
   type Context,
-  type Gone,
   type RemoteEvent,
   type SuggestionRow,
   type TaskRow,
@@ -39,7 +42,6 @@ import type { Catch, DemoAction } from "./demo-state";
 // it needs them, so each is made out here, where it holds on to its change and nothing else from around it
 const replay = (change: BoardChange): Catch => (b) => apply(b, change);
 const rename = (from: string, to: string): Catch => (b) => renumber(b, from, to);
-const forget = (gone: Gone): Catch => (b) => dropGone(b, gone);
 
 // Changes to tasks that sync with GitHub issues, and comments on them, wait in the database until the server sends
 // them. A save that could have touched one asks for that, once things settle
@@ -76,6 +78,10 @@ export type Visitor = { id: string; name: string; avatar: string | null; tone: s
 
 // Changes newer than this before a snapshot are read again when catching up, in case clocks drift
 const MARGIN = 60_000;
+// A deleted comment or activity line leaves a trace for a day (see removed_lines). A board away for longer than this
+// is read again instead of caught up, as a deletion could have been missed
+const TRACE = 12 * 3_600_000;
+const pause = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 type Handlers = {
   receive: (ev: RemoteEvent) => void;
@@ -83,6 +89,7 @@ type Handlers = {
   catchUp: (since: number) => Promise<void>;
   flush: () => Promise<void>;
   remember: () => void;
+  recount: () => Promise<void>;
 };
 const idle = async () => {};
 
@@ -96,6 +103,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retry = useRef(0);
   const token = useRef<string | null>(null);
+  // Moves on with each save, so a read that a save overtook knows it may be out of date
+  const saves = useRef(0);
   // What this tab saved lately, so the echo of an older save can't undo a newer one
   const sent = useRef(new SentLog());
   const router = useRouter();
@@ -110,10 +119,24 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
   const syncedAt = useRef(live?.at ?? 0);
   const caughtUp = useRef(false);
   const mounted = useRef(false);
-  // The last full snapshot the server sent, to spot comments, activity and ideas deleted since
-  const snapshot = useRef(live?.state ?? null);
+  // Moves with every comment and activity line that comes in, so a read of counts can tell it may be out of date
+  const threadEvents = useRef(0);
+  // Threads being read, so opening a task twice reads it once
+  const reading = useRef(new Set<string>());
+  // Comments this tab deleted lately, whose deletion is about to come back over the live feed
+  const dropped = useRef(new Set<string>());
+  // Tasks whose counts and latest activity are to be read again, or null for every partial task
+  const recounting = useRef<Set<number> | null | undefined>(undefined);
+  const recountTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The newest callbacks, for timers and the long-lived subscription
-  const handlers = useRef<Handlers>({ receive: () => {}, resync: idle, catchUp: idle, flush: idle, remember: () => {} });
+  const handlers = useRef<Handlers>({
+    receive: () => {},
+    resync: idle,
+    catchUp: idle,
+    flush: idle,
+    remember: () => {},
+    recount: idle,
+  });
 
   useEffect(() => {
     liveRef.current = live;
@@ -130,8 +153,11 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     if (now && base.current) rememberBoard(now, base.current, knownAt());
   }, [knownAt]);
 
+  const names = useMemo(() => new Map((live?.members ?? []).map((m) => [m.id, m.name])), [live?.members]);
+  // Threads read here name people the way the board's own load does
+  const readName = useCallback((id: string | null) => (id && names.get(id)) || "Former member", [names]);
+
   const ctx = useMemo<Context>(() => {
-    const names = new Map((live?.members ?? []).map((m) => [m.id, m.name]));
     return {
       prefix,
       nameOf: (id) => (id && names.get(id)) || "Someone",
@@ -143,13 +169,23 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
         stageNames: { ...defaultPage.stageNames, ...p.stageNames },
       }),
     };
-  }, [live?.members, prefix]);
+  }, [names, prefix]);
+
+  // Counts and latest activity lines of partial tasks are read again a moment after something they can't work out
+  // for themselves, all at once. Without numbers, every partial task's are
+  const recountLater = useCallback((numbers?: number[]) => {
+    const now = recounting.current;
+    recounting.current = !numbers || now === null ? null : new Set([...(now ?? []), ...numbers]);
+    if (recountTimer.current) clearTimeout(recountTimer.current);
+    recountTimer.current = setTimeout(() => void handlers.current.recount(), 400);
+  }, []);
 
   // Someone else's change, applied to what's saved and to what's on screen. A card someone moved comes with its new
   // position and goes where that says, among the cards here, so a move is one change however long the column
   const receive = useCallback(
     (ev: RemoteEvent) => {
       if (!base.current) return;
+      if (ev.table === "comments" || ev.table === "activity") threadEvents.current++;
       if (inflight.current) {
         queue.current.push(ev);
         return;
@@ -164,52 +200,153 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       }
       base.current = apply(before, change);
       dispatch({ type: "rebase", current: (b) => apply(b, change, before), history: replay(change) });
+      // A comment this tab took back comes back as a deletion no thread holds any more, which isn't news
+      if (change.kind === "uncomment" && dropped.current.delete(change.id)) return;
+      const recount = unsure(before, base.current, change);
+      if (recount) recountLater(recount === "all" ? undefined : recount);
     },
-    [ctx, dispatch, prefix],
+    [ctx, dispatch, prefix, recountLater],
   );
 
-  // Reads the whole board again, keeping changes that haven't saved yet. For after a dropped connection
+  // Reads the whole board again, keeping changes that haven't saved yet. For after a dropped connection. Threads
+  // that were read come back partial, and are read again when their dialog opens
   const resync = useCallback(async () => {
     if (!boardId || inflight.current) return;
     const started = Date.now();
-    const fresh = await fetchBoardState(boardId).catch(() => null);
-    if (!fresh || inflight.current || !base.current) return;
+    const read = await fetchBoardState(boardId).catch(() => null);
+    if (!read || inflight.current || !base.current) return;
     const before = base.current;
+    const fresh = keepOwn(read, before);
     base.current = fresh;
-    snapshot.current = fresh;
     dispatch({ type: "rebase", current: (b) => absorb(fresh, b, diffBoards(before, b)), history: null });
     syncedAt.current = started;
     caughtUp.current = true;
   }, [boardId, dispatch]);
 
+  // Reads a task's whole thread and newest activity, for its dialog. It lands in base, on screen and in every step
+  // of undo at once, so no copy of the board is left without it
+  const loadThread = useCallback(
+    async (id: string) => {
+      if (!boardId || reading.current.has(id)) return;
+      reading.current.add(id);
+      try {
+        const supabase = await loadClient();
+        for (let tries = 0; tries < 5; tries++) {
+          if (inflight.current) {
+            await pause(300);
+            continue;
+          }
+          const task = base.current?.tasks[id];
+          if (!task?.partial) return;
+          const saved = saves.current;
+          const had = heldBy(task);
+          const read = await readThread(supabase, boardId, taskNumber(id), readName);
+          if (!base.current) return;
+          // Trouble reaching the database is tried again after a pause, longer each time
+          if (!read) {
+            await pause(1000 * 2 ** tries);
+            continue;
+          }
+          // A save of ours went out meanwhile, so what was read may be out of date
+          if (inflight.current || saves.current !== saved) continue;
+          const change: BoardChange = { kind: "thread", task: id, ...read, had };
+          base.current = apply(base.current, change);
+          dispatch({ type: "rebase", current: (b) => apply(b, change), history: replay(change) });
+          return;
+        }
+      } finally {
+        reading.current.delete(id);
+      }
+    },
+    [boardId, dispatch, readName],
+  );
+
+  // Reads comment counts and latest activity lines again for the partial tasks recountLater was told of. A count
+  // can't tell which comments it has, so a comment that comes in or a save that goes out meanwhile reads it again
+  const recount = useCallback(async () => {
+    const which = recounting.current;
+    recounting.current = undefined;
+    if (!boardId || which === undefined) return;
+    const supabase = await loadClient();
+    for (let tries = 0; tries < 5; tries++) {
+      if (inflight.current) {
+        await pause(300);
+        continue;
+      }
+      const at = base.current;
+      if (!at) return;
+      const ids = Object.values(at.tasks)
+        .filter((t) => t.partial && (!which || which.has(taskNumber(t.id))))
+        .map((t) => t.id);
+      if (!ids.length) return;
+      const seen = threadEvents.current;
+      const saved = saves.current;
+      const had = Object.fromEntries(ids.map((id) => [id, (at.tasks[id].thread ?? []).map((c) => c.id)]));
+      const rows = await readCounts(supabase, boardId, which ? ids.map(taskNumber) : undefined);
+      if (!rows || !base.current) return;
+      if (inflight.current || saves.current !== saved || threadEvents.current !== seen) {
+        await pause(300);
+        continue;
+      }
+      const counts: Record<string, number> = {};
+      const latest: Record<string, Activity> = {};
+      for (const r of rows) {
+        const id = taskKey(prefix, r.number);
+        if (!(id in had)) continue;
+        counts[id] = r.comments[0]?.count ?? 0;
+        if (r.activity[0]) latest[id] = activityFrom(r.activity[0], readName);
+      }
+      const change: BoardChange = { kind: "counts", counts, latest, had };
+      base.current = apply(base.current, change);
+      dispatch({ type: "rebase", current: (b) => apply(b, change), history: replay(change) });
+      return;
+    }
+  }, [boardId, dispatch, prefix, readName]);
+
   // Reads only what was saved after `since`, such as between the server reading the board and the live feed
-  // starting, or while the board sat in the cache. The margin allows for clocks that drift
+  // starting, or while the board sat in the cache or out of sight. The margin allows for clocks that drift
   const catchUp = useCallback(
     async (since: number) => {
       if (!boardId) return;
+      if (Date.now() - since > TRACE) return resync();
       const started = Date.now();
       const supabase = await loadClient();
       const after = new Date(since - MARGIN).toISOString();
-      const [tasks, comments, activity, suggestions, row] = await Promise.all([
+      const [tasks, comments, activity, suggestions, row, removed, declined] = await Promise.all([
         supabase.from("tasks").select("*").eq("board_id", boardId).gt("updated_at", after),
         supabase.from("comments").select("*").eq("board_id", boardId).gt("created_at", after).order("created_at"),
         supabase.from("activity").select("*").eq("board_id", boardId).gt("created_at", after).order("created_at"),
         supabase.from("suggestions").select("*").eq("board_id", boardId).gt("created_at", after),
         supabase.from("boards").select("id, roadmap_public, page, next_number").eq("id", boardId).maybeSingle(),
+        // Comments, activity and ideas are deleted outright. A deleted comment or line leaves its id behind for a
+        // while, and a declined idea is kept with the declined ones. Both are missing until their migrations run
+        supabase.from("removed_lines").select("id, number, kind").eq("board_id", boardId).gt("removed_at", after),
+        supabase.from("declined_suggestions").select("id").eq("board_id", boardId).gt("declined_at", after),
       ]);
       for (const r of tasks.data ?? []) receive({ table: "tasks", row: r as TaskRow });
+      // An idea someone accepted meanwhile is a task now
+      for (const r of tasks.data ?? []) if (r.origin) receive({ table: "suggestions", old: { id: r.origin as string } });
+      // Deletions go first, as a line an undo brought back since is among those read next
+      for (const r of removed.data ?? [])
+        receive({ table: r.kind === "comment" ? "comments" : "activity", old: { id: r.id, number: r.number } });
+      for (const r of declined.data ?? []) receive({ table: "suggestions", old: { id: r.id } });
       for (const r of comments.data ?? []) receive({ table: "comments", row: r as CommentRow });
       for (const r of activity.data ?? []) receive({ table: "activity", row: r as ActivityRow });
-      // Work an agent brings over keeps its old dates, so whatever changed on a task reads its threads again
+      // Work an agent brings over keeps its old dates, so whatever changed on a task reads its threads again. A
+      // partial task only reads its count and latest line again, and its dialog reads the rest
       const touched = [...new Set([...(tasks.data ?? []), ...(activity.data ?? [])].map((r) => r.number as number))];
-      if (touched.length) {
+      const partial = (n: number) => base.current?.tasks[taskKey(prefix, n)]?.partial;
+      const whole = touched.filter((n) => base.current?.tasks[taskKey(prefix, n)] && !partial(n));
+      if (whole.length) {
         const [older, olderActivity] = await Promise.all([
-          supabase.from("comments").select("*").eq("board_id", boardId).in("number", touched).lte("created_at", after),
-          supabase.from("activity").select("*").eq("board_id", boardId).in("number", touched).lte("created_at", after),
+          supabase.from("comments").select("*").eq("board_id", boardId).in("number", whole).lte("created_at", after),
+          supabase.from("activity").select("*").eq("board_id", boardId).in("number", whole).lte("created_at", after),
         ]);
         for (const r of older.data ?? []) receive({ table: "comments", row: r as CommentRow });
         for (const r of olderActivity.data ?? []) receive({ table: "activity", row: r as ActivityRow });
       }
+      const counted = touched.filter(partial);
+      if (counted.length) recountLater(counted);
       for (const r of suggestions.data ?? []) receive({ table: "suggestions", row: r as SuggestionRow });
       if (row.data) receive({ table: "boards", row: row.data as BoardRow });
       if (!tasks.error && !comments.error && !activity.error) {
@@ -217,7 +354,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
         caughtUp.current = true;
       }
     },
-    [boardId, receive],
+    [boardId, prefix, receive, recountLater, resync],
   );
 
   const flush = useCallback(async () => {
@@ -228,6 +365,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       return;
     }
     inflight.current = true;
+    saves.current++;
     setStatus("saving");
     const supabase = await loadClient();
     const result = await saveChanges(
@@ -240,7 +378,10 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
 
     for (const [a, b] of result.renamed)
       dispatch({ type: "rebase", current: (s) => renumber(s, a, b), history: rename(a, b) });
-    for (const part of result.saved) sent.current.record(part, result.goal);
+    for (const part of result.saved) {
+      sent.current.record(part, result.goal);
+      for (const u of part.uncomments) dropped.current.add(u.id);
+    }
     if (
       result.saved.some(
         (d) => d.comments.length || d.uncomments.length || d.updated.some((u) => u.fields.some((f) => githubFields.has(f))),
@@ -288,7 +429,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
 
   // The subscription lives as long as the board is on screen, so it reads these through a ref
   useEffect(() => {
-    handlers.current = { receive, resync, catchUp, flush, remember };
+    handlers.current = { receive, resync, catchUp, flush, remember, recount };
   });
 
   useEffect(() => {
@@ -298,17 +439,12 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     timer.current = setTimeout(() => void flush(), 250);
   }, [board, boardId, flush]);
 
-  // A newer copy of the board from the server, after a refresh or when a board shown from the cache finishes
-  // loading. Changes reach the board through the live feed, but deletions of comments, activity and ideas
-  // leave no row behind to read, so those are found by comparing the two copies
-  useEffect(() => {
-    if (!live || !snapshot.current || live.state === snapshot.current) return;
-    const gone = goneSince(snapshot.current, live.state);
-    snapshot.current = live.state;
-    if (!gone) return;
-    if (base.current) base.current = dropGone(base.current, gone);
-    dispatch({ type: "rebase", current: (b) => dropGone(b, gone), history: forget(gone) });
-  }, [live, dispatch]);
+  useEffect(
+    () => () => {
+      if (recountTimer.current) clearTimeout(recountTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!boardId || !meId) return;
@@ -339,7 +475,10 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
             if (now && JSON.stringify([next.name, next.labels, next.projects]) !== JSON.stringify([now.name, now.labels, now.projects]))
               router.refresh();
             receive({ table: "boards", row: p.new as never });
-          } else receive({ table, row: row(p), old: p.old as never } as RemoteEvent);
+          } else if (table === "comments")
+            // A comment that arrives as it's made is one no count has yet
+            receive({ table, row: row(p), old: p.old as never, fresh: p.eventType === "INSERT" });
+          else receive({ table, row: row(p), old: p.old as never } as RemoteEvent);
         },
         joined: (again) => {
           caughtUp.current = false;
@@ -432,5 +571,5 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     };
   }, [boardId]);
 
-  return { status, here, knownAt };
+  return { status, here, knownAt, loadThread };
 }

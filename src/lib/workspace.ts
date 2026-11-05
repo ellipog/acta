@@ -1,7 +1,15 @@
 import "server-only";
 import { cache } from "react";
-import { cookies } from "next/headers";
-import { boardColumns, boardQuery, boardState, countTasks, type NestedBoard } from "./board-load";
+import { cookies, headers } from "next/headers";
+import {
+  boardColumns,
+  boardInfo,
+  boardQuery,
+  boardState,
+  countTasks,
+  recentLines,
+  type NestedBoard,
+} from "./board-load";
 import type { Label, Priority, Size, StatusCategory } from "./board-store";
 import { taskKey, type TaskRow } from "./board-sync";
 import type { DitherName } from "./dither-assets";
@@ -9,6 +17,7 @@ import {
   toneFor,
   type BoardSummary,
   type LiveBoard,
+  type LiveFrame,
   type Me,
   type Member,
   type Permissions,
@@ -150,12 +159,15 @@ export const getWorkspace = cache(async (slug: string) => {
 export const loadBoard = cache(async (workspaceSlug: string, boardSlug: string): Promise<LiveBoard | null> => {
   const auth = await getAuth();
   if (!auth) return null;
-  const [ws, { data }] = await Promise.all([
+  // The Inbox's lines are read by the board's id, which the sidebar's list of boards already has
+  const id = getWorkspace(workspaceSlug).then((ws) => ws?.boards.find((b) => b.slug === boardSlug)?.id);
+  const [ws, { data }, recent] = await Promise.all([
     getWorkspace(workspaceSlug),
     boardQuery(auth.supabase, auth.id, `${boardColumns}, workspaces!inner(slug)`)
       .eq("workspaces.slug", workspaceSlug)
       .eq("slug", boardSlug)
       .maybeSingle(),
+    id.then((boardId) => (boardId ? recentLines(auth.supabase, boardId, auth.id) : [])),
   ]);
   const board = data as unknown as NestedBoard | null;
   if (!ws || !board) return null;
@@ -169,21 +181,42 @@ export const loadBoard = cache(async (workspaceSlug: string, boardSlug: string):
     workspaces: ws.workspaces,
     boards: ws.boards,
     members: ws.members,
-    board: {
-      id: board.id,
-      slug: board.slug,
-      name: board.name,
-      prefix: board.prefix,
-      labels: board.labels ?? [],
-      projects: board.projects ?? [],
-      fields: board.fields ?? [],
-      statusNames: board.status_names ?? {},
-      icon: board.icon,
-    },
-    state: boardState(board, nameOf),
+    board: boardInfo(board),
+    state: boardState(board, nameOf, recent),
     at: Date.now(),
   };
 });
+
+// The board's own row and the workspace around it, without its tasks
+const loadFrame = cache(async (workspaceSlug: string, boardSlug: string): Promise<LiveFrame | null> => {
+  const auth = await getAuth();
+  if (!auth) return null;
+  const [ws, { data }] = await Promise.all([
+    getWorkspace(workspaceSlug),
+    auth.supabase
+      .from("boards")
+      .select("*, workspaces!inner(slug)")
+      .eq("workspaces.slug", workspaceSlug)
+      .eq("slug", boardSlug)
+      .maybeSingle(),
+  ]);
+  const board = data as unknown as NestedBoard | null;
+  if (!ws || !board) return null;
+  return {
+    me: ws.me,
+    workspace: ws.workspace,
+    workspaces: ws.workspaces,
+    boards: ws.boards,
+    members: ws.members,
+    board: boardInfo(board),
+  };
+});
+
+// A move from another page asks with fetch, while loading the page whole is a document request. A browser that
+// doesn't say counts as loading it whole
+async function movingBetweenPages() {
+  return (await headers()).get("sec-fetch-dest") === "empty";
+}
 
 // A task on My tasks: what the list shows of it, and which board it's on
 export type MyTask = {
@@ -284,13 +317,22 @@ export const getMyTasks = cache(async (slug: string) => {
   };
 });
 
-export type BoardResult = { live: LiveBoard } | { go: string } | { missing: true };
+export type BoardResult = { live: LiveBoard } | { frame: LiveFrame } | { go: string } | { missing: true };
 
 // What the board page shows: the board, or where to send someone who can't see it. Handed to the browser as a
-// promise, so a board it already holds can show before this resolves
+// promise, so a board it already holds can show before this resolves.
+//
+// Loading the page whole draws the board here. Moving to it from another page sends only the workspace and the
+// board's own details: the browser shows the copy it holds and reads what changed since, or reads the board itself
+// when it holds none. Sending the whole board again would only be thrown away
 export async function openBoard(workspace: string, board: string): Promise<BoardResult> {
-  const live = await loadBoard(workspace, board);
-  if (live) return { live };
+  if (await movingBetweenPages()) {
+    const frame = await loadFrame(workspace, board);
+    if (frame) return { frame };
+  } else {
+    const live = await loadBoard(workspace, board);
+    if (live) return { live };
+  }
   if (!(await getAuth())) return { go: `/login?next=${encodeURIComponent(`/${workspace}/${board}`)}` };
   if (await getWorkspace(workspace)) return { go: `/${workspace}` };
   if (await lastBoardIn(workspace)) return { go: "/home?stale" };
@@ -298,12 +340,13 @@ export async function openBoard(workspace: string, board: string): Promise<Board
 }
 
 export async function readBoard(supabase: Client, boardId: string, meId: string) {
-  const [{ data }, { data: members }] = await Promise.all([
+  const [{ data }, { data: members }, recent] = await Promise.all([
     boardQuery(supabase, meId).eq("id", boardId).maybeSingle(),
     supabase
       .from("members")
       .select("user_id, profiles (name), workspaces!inner(boards!inner(id))")
       .eq("workspaces.boards.id", boardId),
+    recentLines(supabase, boardId, meId),
   ]);
   const board = data as unknown as NestedBoard | null;
   if (!board) return null;
@@ -313,5 +356,5 @@ export async function readBoard(supabase: Client, boardId: string, meId: string)
       (m.profiles as unknown as { name: string | null } | null)?.name || "Member",
     ]),
   );
-  return boardState(board, (id) => (id && names.get(id)) || "Former member");
+  return boardState(board, (id) => (id && names.get(id)) || "Former member", recent);
 }

@@ -167,7 +167,7 @@ export function BoardApp({
     initDemo(live ? live.state : seedBoard(), full ? {} : { view }),
   );
   const { board: state, prefs, restored, synced } = demo;
-  const { status, here, knownAt } = useBoardSync(live, state, rawDispatch);
+  const { status, here, knownAt, loadThread } = useBoardSync(live, state, rawDispatch);
   useWorkspace(full ? live : undefined);
   const liveId = live?.board.id;
   const { taskCount, mineCount } = useMemo(() => {
@@ -343,6 +343,13 @@ export function BoardApp({
   // The dialog mounts the first time a task opens and then stays, so it can animate closed
   const [dialogUsed, setDialogUsed] = useState(false);
   if (openId && !dialogUsed) setDialogUsed(true);
+
+  // The board holds only each task's comment count and latest activity, so an open task reads the rest. It reads
+  // again if the board is read anew while it's open, as after a dropped connection
+  const openPartial = Boolean(openId && state.tasks[openId]?.partial);
+  useEffect(() => {
+    if (openId && openPartial) void loadThread(openId);
+  }, [openId, openPartial, loadThread]);
 
   useEffect(() => {
     const idle = window.requestIdleCallback ?? ((run: () => void) => setTimeout(run, 1500));

@@ -172,6 +172,27 @@ export function fromRow(
   };
 }
 
+type NameOf = (userId: string | null) => string;
+
+export const commentFrom = (row: Omit<CommentRow, "board_id" | "number">, nameOf: NameOf): Comment => ({
+  id: row.id,
+  who: nameOf(row.author),
+  at: Date.parse(row.created_at),
+  body: row.body,
+  via: row.via ?? undefined,
+  from: row.author_name ?? undefined,
+});
+
+export const activityFrom = (row: Omit<ActivityRow, "board_id" | "number">, nameOf: NameOf): Activity => ({
+  id: row.id,
+  who: nameOf(row.actor),
+  at: Date.parse(row.created_at),
+  text: row.text,
+  via: row.via ?? undefined,
+});
+
+const taskOf = (prefix: string, n?: number) => (n ? taskKey(prefix, n) : undefined);
+
 export type Diff = {
   created: string[];
   updated: { id: string; fields: SyncedField[] }[];
@@ -217,6 +238,12 @@ function byId<T extends { id?: string }>(list: T[] = []) {
   return new Map(list.filter((x) => isUuid(x.id)).map((x) => [x.id!, x]));
 }
 
+// A save only ever sends the comments and activity lines this tab wrote, or takes back one of those after an undo.
+// Everything else in a thread came from the server, and a board holds only part of most threads until a task's
+// dialog reads the rest. Comparing those would make a thread that hasn't been read yet, or an older copy of the
+// board from before it was, look like comments and activity to delete
+const own = <T extends { id?: string; local?: true }>(list: T[] = []) => byId(list.filter((x) => x.local));
+
 export function diffBoards(base: BoardState, next: BoardState): Diff {
   const d: Diff = {
     created: [],
@@ -249,12 +276,12 @@ export function diffBoards(base: BoardState, next: BoardState): Diff {
       if (Boolean(a.voted) !== Boolean(b.voted)) (b.voted ? d.voted : d.unvoted).push(id);
       if (a.position !== b.position && Number.isFinite(b.position)) d.placed.push(id);
     }
-    const before = byId(a?.thread);
-    const after = byId(b.thread);
+    const before = own(a?.thread);
+    const after = own(b.thread);
     for (const [cid, c] of after) if (!before.has(cid)) d.comments.push({ task: id, comment: c });
     for (const cid of before.keys()) if (!after.has(cid)) d.uncomments.push({ task: id, id: cid });
-    const was = byId(a?.activity);
-    const now = byId(b.activity);
+    const was = own(a?.activity);
+    const now = own(b.activity);
     for (const [aid, e] of now) if (!was.has(aid)) d.activity.push({ task: id, entry: e });
     for (const aid of was.keys()) if (!now.has(aid)) d.unactivity.push({ task: id, id: aid });
   }
@@ -366,18 +393,20 @@ export function absorb(target: BoardState, source: BoardState, d: Diff): BoardSt
       t.votes = source.tasks[id]?.votes ?? t.votes;
     }
   }
+  // The count moves with each comment rather than being the thread's length, as a thread may be only part of it
   for (const { task, comment } of d.comments) {
     const t = edit(task);
     if (t && !d.created.includes(task) && !(t.thread ?? []).some((c) => c.id === comment.id)) {
       t.thread = [...(t.thread ?? []), comment];
-      t.comments = t.thread.length;
+      t.comments += 1;
     }
   }
   for (const { task, id } of d.uncomments) {
     const t = edit(task);
-    if (t) {
-      t.thread = (t.thread ?? []).filter((c) => c.id !== id);
-      t.comments = t.thread.length;
+    const thread = t?.thread?.filter((c) => c.id !== id);
+    if (t && thread && thread.length !== t.thread!.length) {
+      t.thread = thread;
+      t.comments = Math.max(0, t.comments - 1);
     }
   }
   for (const { task, entry } of d.activity) {
@@ -436,27 +465,36 @@ export function renumber(state: BoardState, from: string, to: string): BoardStat
   return { ...state, tasks, columns, next: Math.max(state.next, taskNumber(to) + 1) };
 }
 
+// What base, the copy the server last confirmed, held of a task's comments and activity when a read of them began
+export type Held = { comments: string[]; activity: string[] };
+
 export type Change =
   | { kind: "task"; id: string; remove?: boolean; add?: Task; fields?: Partial<Task> }
-  | { kind: "comment"; task: string; comment: Comment }
-  | { kind: "uncomment"; id: string }
+  // fresh: the comment is known to be new since the board was read, so it adds to the count of a partial thread
+  | { kind: "comment"; task: string; comment: Comment; fresh?: boolean }
+  | { kind: "uncomment"; id: string; task?: string }
   | { kind: "activity"; task: string; entry: Activity }
-  | { kind: "unactivity"; id: string }
+  | { kind: "unactivity"; id: string; task?: string }
+  // A task's whole thread and newest activity, as read when its dialog opens. complete: every activity line is in it
+  | { kind: "thread"; task: string; comments: Comment[]; activity: Activity[]; complete: boolean; had: Held }
+  // Comment counts and latest activity lines read for partial tasks, with what base held of each
+  | { kind: "counts"; counts: Record<string, number>; latest: Record<string, Activity>; had: Record<string, string[]> }
   | { kind: "suggestion"; suggestion: Suggestion }
   | { kind: "unsuggestion"; id: string }
   | { kind: "board"; public?: boolean; page?: PublicPage; next?: number }
   | { kind: "none" };
 
+// A removed comment or activity line comes as old. Live, that holds only its id. Catching up reads where it was too
 export type RemoteEvent =
   | { table: "tasks"; row: TaskRow }
-  | { table: "comments"; row?: CommentRow; old?: { id: string } }
-  | { table: "activity"; row?: ActivityRow; old?: { id: string } }
+  | { table: "comments"; row?: CommentRow; old?: { id: string; number?: number }; fresh?: boolean }
+  | { table: "activity"; row?: ActivityRow; old?: { id: string; number?: number } }
   | { table: "suggestions"; row?: SuggestionRow; old?: { id: string } }
   | { table: "boards"; row: BoardRow };
 
 export type Context = {
   prefix: string;
-  nameOf: (userId: string | null) => string;
+  nameOf: NameOf;
   page: (p: Partial<PublicPage>) => PublicPage;
 };
 
@@ -479,6 +517,8 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
             activity: [],
             voted: false,
             origin: ev.row.origin ?? undefined,
+            // Its comments and activity follow on their own, and its dialog reads them in case any didn't
+            partial: true,
           },
         };
       const changed: Partial<Task> = {};
@@ -495,30 +535,13 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
         return {
           kind: "comment",
           task: taskKey(ctx.prefix, ev.row.number),
-          comment: {
-            id: ev.row.id,
-            who: ctx.nameOf(ev.row.author),
-            at: Date.parse(ev.row.created_at),
-            body: ev.row.body,
-            via: ev.row.via ?? undefined,
-            from: ev.row.author_name ?? undefined,
-          },
+          comment: commentFrom(ev.row, ctx.nameOf),
+          fresh: ev.fresh,
         };
-      return ev.old ? { kind: "uncomment", id: ev.old.id } : { kind: "none" };
+      return ev.old ? { kind: "uncomment", id: ev.old.id, task: taskOf(ctx.prefix, ev.old.number) } : { kind: "none" };
     case "activity":
-      if (ev.row)
-        return {
-          kind: "activity",
-          task: taskKey(ctx.prefix, ev.row.number),
-          entry: {
-            id: ev.row.id,
-            who: ctx.nameOf(ev.row.actor),
-            at: Date.parse(ev.row.created_at),
-            text: ev.row.text,
-            via: ev.row.via ?? undefined,
-          },
-        };
-      return ev.old ? { kind: "unactivity", id: ev.old.id } : { kind: "none" };
+      if (ev.row) return { kind: "activity", task: taskKey(ctx.prefix, ev.row.number), entry: activityFrom(ev.row, ctx.nameOf) };
+      return ev.old ? { kind: "unactivity", id: ev.old.id, task: taskOf(ctx.prefix, ev.old.number) } : { kind: "none" };
     case "suggestions":
       if (ev.row) {
         const prev = base.roadmap.suggestions.find((s) => s.id === ev.row!.id);
@@ -594,13 +617,19 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
         return { ...state, tasks: { ...state.tasks, [c.task]: { ...t, thread } } };
       }
       const thread = [...(t.thread ?? []), c.comment].sort((a, b) => a.at - b.at);
-      return { ...state, tasks: { ...state.tasks, [c.task]: { ...t, thread, comments: thread.length } } };
+      // A partial thread keeps a comment it didn't have, for its dialog. Unless it's known to be new, like one that
+      // just came in live, it may already be in the count, which the caller reads again instead
+      const comments = t.partial && !c.fresh ? t.comments : t.comments + 1;
+      return { ...state, tasks: { ...state.tasks, [c.task]: { ...t, thread, comments } } };
     }
     case "uncomment": {
-      const entry = Object.values(state.tasks).find((t) => t.thread?.some((x) => x.id === c.id));
-      if (!entry) return state;
-      const thread = entry.thread!.filter((x) => x.id !== c.id);
-      return { ...state, tasks: { ...state.tasks, [entry.id]: { ...entry, thread, comments: thread.length } } };
+      const entry = c.task
+        ? state.tasks[c.task]
+        : Object.values(state.tasks).find((t) => t.thread?.some((x) => x.id === c.id));
+      if (!entry?.thread?.some((x) => x.id === c.id)) return state;
+      const thread = entry.thread.filter((x) => x.id !== c.id);
+      const comments = Math.max(0, entry.comments - 1);
+      return { ...state, tasks: { ...state.tasks, [entry.id]: { ...entry, thread, comments } } };
     }
     case "activity": {
       const t = state.tasks[c.task];
@@ -609,12 +638,48 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
       return { ...state, tasks: { ...state.tasks, [c.task]: { ...t, activity } } };
     }
     case "unactivity": {
-      const entry = Object.values(state.tasks).find((t) => t.activity.some((x) => x.id === c.id));
-      if (!entry) return state;
+      const entry = c.task
+        ? state.tasks[c.task]
+        : Object.values(state.tasks).find((t) => t.activity.some((x) => x.id === c.id));
+      if (!entry?.activity.some((x) => x.id === c.id)) return state;
       return {
         ...state,
         tasks: { ...state.tasks, [entry.id]: { ...entry, activity: entry.activity.filter((x) => x.id !== c.id) } },
       };
+    }
+    case "thread": {
+      const t = state.tasks[c.task];
+      if (!t) return state;
+      const thread = settle(t.thread ?? [], c.comments, c.had.comments, true);
+      const activity = settle(t.activity, c.activity, c.had.activity, c.complete);
+      const whole: Task = { ...t, thread, comments: thread.length, activity };
+      delete whole.partial;
+      return { ...state, tasks: { ...state.tasks, [c.task]: whole } };
+    }
+    case "counts": {
+      let tasks = state.tasks;
+      for (const id of new Set([...Object.keys(c.counts), ...Object.keys(c.latest)])) {
+        const t = tasks[id];
+        // A thread that's been read keeps its own count, which every change to it moves
+        if (!t?.partial) continue;
+        let next = t;
+        if (id in c.counts) {
+          // The server's count, plus what this copy has added to or taken from the thread base held
+          const had = new Set(c.had[id] ?? []);
+          const mine = new Set((t.thread ?? []).map((x) => x.id));
+          const added = [...mine].filter((x) => !had.has(x)).length;
+          const removed = [...had].filter((x) => !mine.has(x)).length;
+          const comments = Math.max(0, c.counts[id] + added - removed);
+          if (comments !== t.comments) next = { ...next, comments };
+        }
+        const line = c.latest[id];
+        if (line && !t.activity.some((a) => a.id === line.id))
+          next = { ...next, activity: [...t.activity, line].sort((a, b) => a.at - b.at) };
+        if (next === t) continue;
+        if (tasks === state.tasks) tasks = { ...tasks };
+        tasks[id] = next;
+      }
+      return tasks === state.tasks ? state : { ...state, tasks };
     }
     case "suggestion": {
       const list = state.roadmap.suggestions;
@@ -641,37 +706,78 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
   }
 }
 
-export type Gone = { comments: Set<string>; activity: Set<string>; suggestions: Set<string> };
-
-// Comments, activity and ideas are deleted outright, so the only sign one is gone is a newer copy of the board
-// without it. This lists what an older copy had that a newer one doesn't, for tasks both still have
-export function goneSince(before: BoardState, after: BoardState): Gone | null {
-  const gone: Gone = { comments: new Set(), activity: new Set(), suggestions: new Set() };
-  for (const [id, was] of Object.entries(before.tasks)) {
-    const now = after.tasks[id];
-    if (!now) continue;
-    const comments = new Set((now.thread ?? []).map((c) => c.id));
-    for (const c of was.thread ?? []) if (!comments.has(c.id)) gone.comments.add(c.id);
-    const activity = new Set(now.activity.map((a) => a.id));
-    for (const a of was.activity) if (a.id && !activity.has(a.id)) gone.activity.add(a.id);
+/** The partial tasks a change from the server leaves unsure of their comment count or latest activity line, to be
+ * read again. "all" when it can't tell which. after is what applying the change to before made */
+export function unsure(before: BoardState, after: BoardState, c: Change): number[] | "all" | null {
+  switch (c.kind) {
+    case "comment": {
+      // One the thread didn't hold, which may or may not be in its count already
+      const t = before.tasks[c.task];
+      return t?.partial && !c.fresh && !t.thread?.some((x) => x.id === c.comment.id) ? [taskNumber(c.task)] : null;
+    }
+    case "uncomment": {
+      // A thread that held it counted it, and the count went with it
+      if (after !== before) return null;
+      if (c.task) return before.tasks[c.task]?.partial ? [taskNumber(c.task)] : null;
+      // Live, a deleted comment says only its id, and one no thread held was in some partial task's count
+      return Object.values(before.tasks).some((t) => t.partial) ? "all" : null;
+    }
+    case "unactivity": {
+      // A partial task that loses its latest line reads the one before it
+      const t = c.task
+        ? before.tasks[c.task]
+        : Object.values(before.tasks).find((x) => x.activity.some((a) => a.id === c.id));
+      return t?.partial && t.activity.at(-1)?.id === c.id ? [taskNumber(t.id)] : null;
+    }
+    default:
+      return null;
   }
-  const ideas = new Set(after.roadmap.suggestions.map((s) => s.id));
-  for (const s of before.roadmap.suggestions) if (!ideas.has(s.id)) gone.suggestions.add(s.id);
-  return gone.comments.size || gone.activity.size || gone.suggestions.size ? gone : null;
 }
 
-export function dropGone(state: BoardState, gone: Gone): BoardState {
-  let tasks = state.tasks;
-  for (const [id, t] of Object.entries(state.tasks)) {
-    const thread = t.thread?.filter((c) => !gone.comments.has(c.id));
-    const activity = t.activity.filter((a) => !a.id || !gone.activity.has(a.id));
-    if (thread?.length === t.thread?.length && activity.length === t.activity.length) continue;
-    if (tasks === state.tasks) tasks = { ...state.tasks };
-    tasks[id] = { ...t, thread, comments: thread?.length ?? t.comments, activity };
+/** What one copy of a thread or activity log becomes once the server's own list for the task is read. had is what
+ * base held when the read began. Of those, any the server no longer lists were deleted, and every copy loses them.
+ * What the server lists that base didn't hold is new to every copy. Anything else is the copy's own business, like
+ * a comment written here and not saved yet, or one an undo took back, so it's left as the copy has it. Only the
+ * newest activity is read, so unless the list is complete, a line older than all of it is left alone too */
+export function settle<T extends { id?: string; at: number }>(list: T[], read: T[], had: string[], complete: boolean): T[] {
+  const known = new Set(had);
+  const listed = new Set(read.map((x) => x.id));
+  const oldest = complete || !read.length ? -Infinity : Math.min(...read.map((x) => x.at));
+  const gone = (x: T) => !!x.id && known.has(x.id) && !listed.has(x.id) && x.at >= oldest;
+  const kept = list.filter((x) => !gone(x));
+  const have = new Set(kept.map((x) => x.id));
+  const added = read.filter((x) => x.id && !known.has(x.id) && !have.has(x.id));
+  if (!added.length && kept.length === list.length) return list;
+  return [...kept, ...added].sort((a, b) => a.at - b.at);
+}
+
+/** A board read again holds none of its threads. The comments and activity lines this tab wrote that base held are
+ * kept in it, so an undo that hasn't saved yet can still take one of them back */
+export function keepOwn(fresh: BoardState, before: BoardState): BoardState {
+  let tasks = fresh.tasks;
+  for (const [id, t] of Object.entries(fresh.tasks)) {
+    const was = before.tasks[id];
+    if (!t.partial || !was) continue;
+    const comments = (was.thread ?? []).filter((c) => c.local && !t.thread?.some((x) => x.id === c.id));
+    const lines = was.activity.filter((a) => a.local && !t.activity.some((x) => x.id === a.id));
+    if (!comments.length && !lines.length) continue;
+    if (tasks === fresh.tasks) tasks = { ...tasks };
+    // They're saved, so the count already has them
+    tasks[id] = {
+      ...t,
+      thread: [...(t.thread ?? []), ...comments].sort((a, b) => a.at - b.at),
+      activity: [...t.activity, ...lines].sort((a, b) => a.at - b.at),
+    };
   }
-  const suggestions = state.roadmap.suggestions.filter((s) => !gone.suggestions.has(s.id));
-  if (tasks === state.tasks && suggestions.length === state.roadmap.suggestions.length) return state;
-  return { ...state, tasks, roadmap: { ...state.roadmap, suggestions } };
+  return tasks === fresh.tasks ? fresh : { ...fresh, tasks };
+}
+
+/** The ids of what a task's thread and activity hold, for a read of them that starts now */
+export function heldBy(task: Task | undefined): Held {
+  return {
+    comments: (task?.thread ?? []).map((c) => c.id),
+    activity: (task?.activity ?? []).flatMap((a) => (a.id ? [a.id] : [])),
+  };
 }
 
 // How long this tab remembers what it saved, to know its own echoes

@@ -3,13 +3,15 @@ import { Suspense } from "react";
 import { AppSkeleton } from "@/components/app-chrome";
 import { BoardFrame } from "@/components/board-app/board-frame";
 import { BoardRoute } from "@/components/board-app/board-route";
-import { loadBoard, openBoard } from "@/lib/workspace";
+import { getWorkspace, openBoard } from "@/lib/workspace";
 
+// The title only needs the names, which the workspace's list of boards has, so it doesn't read the board
 export async function generateMetadata({ params }: PageProps<"/[workspace]/[board]">): Promise<Metadata> {
   const { workspace, board } = await params;
-  const live = await loadBoard(workspace, board);
+  const ws = await getWorkspace(workspace);
+  const name = ws?.boards.find((b) => b.slug === board)?.name;
   return {
-    title: { absolute: live ? `${live.board.name} · ${live.workspace.name}` : "Acta" },
+    title: { absolute: ws && name ? `${name} · ${ws.workspace.name}` : "Acta" },
     robots: { index: false, follow: false },
   };
 }

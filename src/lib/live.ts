@@ -78,6 +78,10 @@ export type LiveBoard = {
   at: number;
 };
 
+// A board page without the board's tasks: what the server sends when the browser moves to it from another page,
+// as the browser shows its own copy, or reads the board itself
+export type LiveFrame = Omit<LiveBoard, "state" | "at">;
+
 const tones: Tone[] = ["lapis", "pyrite", "malachite", "hematite"];
 export const workspaceTones = tones;
 

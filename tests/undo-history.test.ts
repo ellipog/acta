@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, setSystemTime, spyOn, test } from "bun:test";
 import { boardReducer, seedBoard, statuses, type BoardAction, type BoardState, type Task } from "@/lib/board-store";
-import { apply, dropGone, renumber, type Change } from "@/lib/board-sync";
+import { apply, renumber, type Change } from "@/lib/board-sync";
 import { demoReducer, describe, initDemo, type Catch, type Demo, type DemoAction } from "@/components/board-app/demo-state";
 
 // The undo history used to bring every board in it up to date as each change from someone else arrived. Now a
@@ -181,8 +181,9 @@ function mix(seed: number, length: number) {
         const to = `ACT-${board.next + 5}`;
         step = { type: "remote", current: (b) => renumber(b, id, to), history: (b) => renumber(b, id, to) };
       } else if (r() < 0.04 && comments.length) {
-        const gone = { comments: new Set([pick(comments)]), activity: new Set<string>(), suggestions: new Set<string>() };
-        step = { type: "remote", current: (b) => dropGone(b, gone), history: (b) => dropGone(b, gone) };
+        // A comment someone deleted
+        const gone: Change = { kind: "uncomment", id: pick(comments) };
+        step = { type: "remote", current: (b) => apply(b, gone), history: (b) => apply(b, gone) };
       } else if (r() < 0.02) step = { type: "remote", current: (b) => apply(b, change), history: null };
       else if (r() < 0.04) step = { type: "remote", current: (b) => apply(b, change, pending) };
       else step = { type: "remote", current: (b) => apply(b, change, pending), history: (b) => apply(b, change) };

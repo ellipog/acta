@@ -5,11 +5,13 @@ export type Size = "xs" | "s" | "m" | "l" | "xl";
 export type Tone = "lapis" | "pyrite" | "malachite" | "hematite";
 
 export type Person = { id: string; name: string; tone: Tone; avatar?: string | null };
-// via names the agent key a change came through, when it wasn't made in the app
-export type Activity = { id?: string; at: number; who: string; text: string; via?: string };
+// via names the agent key a change came through, when it wasn't made in the app. local marks a line this tab
+// wrote, which is the only kind a save here ever sends or takes back (see diffBoards)
+export type Activity = { id?: string; at: number; who: string; text: string; via?: string; local?: true };
 export type Subtask = { id: string; title: string; done: boolean };
-// from names the original author of a comment an agent brought in from elsewhere, like a GitHub issue
-export type Comment = { id: string; who: string; at: number; body: string; via?: string; from?: string };
+// from names the original author of a comment an agent brought in from elsewhere, like a GitHub issue. local is
+// as for activity
+export type Comment = { id: string; who: string; at: number; body: string; via?: string; from?: string; local?: true };
 
 export type Task = {
   id: string;
@@ -24,9 +26,13 @@ export type Task = {
   assignee?: string;
   description: string;
   subtasks: Subtask[];
+  // How many comments it has, whether or not they're all in thread
   comments: number;
   thread?: Comment[];
   activity: Activity[];
+  // A board arrives with only its tasks' comment counts and latest activity, and reads the rest of a task's comments
+  // and activity when its dialog opens. Until then thread and activity hold only what's come in since, and this is set
+  partial?: true;
   public?: boolean;
   votes?: number;
   voted?: boolean;
@@ -1073,7 +1079,7 @@ export type BoardAction =
 
 const log = (task: Task, text: string): Task => ({
   ...task,
-  activity: [...task.activity, { id: newId(), at: Date.now(), who: me.name, text }],
+  activity: [...task.activity, { id: newId(), at: Date.now(), who: me.name, text, local: true }],
 });
 
 function patchTask(state: BoardState, id: string, change: Partial<Task>, note?: string): BoardState {
@@ -1152,7 +1158,7 @@ function reduce(state: BoardState, action: BoardAction): BoardState {
         description: "",
         subtasks: [],
         comments: 0,
-        activity: [{ id: newId(), at: Date.now(), who: me.name, text: action.note ?? "created the task" }],
+        activity: [{ id: newId(), at: Date.now(), who: me.name, text: action.note ?? "created the task", local: true }],
         ...(state.roadmap.page.newTasksPublic ? { public: true } : {}),
         ...fitTask(action.patch ?? {}),
         status,
@@ -1219,7 +1225,7 @@ function reduce(state: BoardState, action: BoardAction): BoardState {
       const task = state.tasks[action.id];
       const body = action.body.trim().slice(0, limits.comment);
       if (!task || !body) return state;
-      const comment: Comment = { id: newId(), who: me.name, at: Date.now(), body };
+      const comment: Comment = { id: newId(), who: me.name, at: Date.now(), body, local: true };
       const next = log(
         { ...task, comments: task.comments + 1, thread: [...(task.thread ?? []), comment] },
         "commented",

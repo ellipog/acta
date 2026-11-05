@@ -5,7 +5,7 @@ import { Dialog as D } from "radix-ui";
 import { Icon } from "@/components/ui/icons";
 import { PixelTick } from "@/components/ui/pixel";
 import { StatusMarker } from "@/components/board";
-import { Avatar } from "@/components/ui/display";
+import { Avatar, Skeleton } from "@/components/ui/display";
 import { Badge, Kbd } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MultiSelect } from "@/components/ui/combobox";
@@ -334,7 +334,10 @@ function TaskBody({
               <h3 className="text-xs font-medium text-ink-2">
                 Comments <span className="font-mono text-[11px] font-normal text-ink-3">{task.comments}</span>
               </h3>
-              {earlier ? (
+              {earlier && task.partial ? (
+                // The rest of the thread is being read. Anything newer, like a comment just written, shows below it
+                <Skeleton className="mt-3 h-12" />
+              ) : earlier ? (
                 <p className="mt-2 flex items-center gap-2 font-mono text-[11px] text-ink-3">
                   <span className="h-px flex-1 bg-line" />
                   {earlier} earlier {earlier === 1 ? "comment" : "comments"}
@@ -402,6 +405,8 @@ function TaskBody({
                   </li>
                 ))}
               </ol>
+              {/* The board has only the latest lines until the rest are read */}
+              {task.partial ? <Skeleton className="mb-3 ml-5 h-8" /> : null}
               {activity.length > 6 ? (
                 <button onClick={() => setAllActivity((v) => !v)} className="ml-5 text-[11px] text-ink-3 hover:text-ink">
                   {allActivity ? "Show less" : `Show all ${activity.length}`}
