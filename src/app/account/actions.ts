@@ -90,27 +90,49 @@ export async function deleteAccount(_: Result, form: FormData): Promise<Result> 
 const levels: Access[] = ["read", "write", "manage"];
 const isUuid = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
+export type KeyLimits = { name: string; access: Access; workspaces: string[] | null };
+
+// A key's name, what it can do and where, checked the same way when it's made and when it's changed
+function keyLimits(name: unknown, access: unknown, some: boolean, workspaces: unknown[]): KeyLimits | string {
+  const clean = String(name ?? "")
+    .trim()
+    .slice(0, 40);
+  const picked = [...new Set(workspaces.map(String).filter(isUuid))].slice(0, 50);
+  if (!clean) return "Name the key after the agent that will use it.";
+  if (!levels.includes(access as Access)) return "Choose what the key can do.";
+  if (some && !picked.length) return "Choose at least one workspace.";
+  return { name: clean, access: access as Access, workspaces: some ? picked : null };
+}
+
 // The key is shown once. Only its hash is stored
 export async function createAgentKey(_: KeyResult, form: FormData): Promise<KeyResult> {
   const { supabase } = await requireUser();
-  const name = String(form.get("name") ?? "")
-    .trim()
-    .slice(0, 40);
-  const access = String(form.get("access")) as Access;
-  const some = form.get("reach") === "some";
-  const workspaces = form.getAll("workspace").map(String).filter(isUuid).slice(0, 50);
-  if (!name) return { ok: false, message: "Name the key after the agent that will use it." };
-  if (!levels.includes(access)) return { ok: false, message: "Choose what the key can do." };
-  if (some && !workspaces.length) return { ok: false, message: "Choose at least one workspace." };
+  const limits = keyLimits(form.get("name"), form.get("access"), form.get("reach") === "some", form.getAll("workspace"));
+  if (typeof limits === "string") return { ok: false, message: limits };
   const { count } = await supabase.from("agent_keys").select("id", { count: "exact", head: true });
   if ((count ?? 0) >= 25) return { ok: false, message: "You can have 25 keys. Revoke one you don’t use first." };
   const key = newKey();
-  const { error } = await supabase
-    .from("agent_keys")
-    .insert({ name, access, workspaces: some ? workspaces : null, hash: key.hash, hint: key.hint });
+  const { error } = await supabase.from("agent_keys").insert({ ...limits, hash: key.hash, hint: key.hint });
   if (error) return { ok: false, message: "The key wasn’t made. Try again." };
   refresh();
   return { ok: true, message: "Key made.", token: key.token };
+}
+
+// The key itself stays the same, so agents using it carry on with what it may do now
+export async function updateAgentKey(id: string, change: KeyLimits): Promise<Result> {
+  const { supabase } = await requireUser();
+  if (!isUuid(String(id))) return { ok: false, message: "That key wasn’t found." };
+  const limits = keyLimits(
+    change?.name,
+    change?.access,
+    Array.isArray(change?.workspaces),
+    Array.isArray(change?.workspaces) ? change.workspaces : [],
+  );
+  if (typeof limits === "string") return { ok: false, message: limits };
+  const { data, error } = await supabase.from("agent_keys").update(limits).eq("id", id).select("id");
+  if (error || !data?.length) return { ok: false, message: "That didn’t save. Try again." };
+  refresh();
+  return { ok: true, message: `${limits.name} saved.` };
 }
 
 export async function revokeAgentKey(id: string): Promise<Result> {

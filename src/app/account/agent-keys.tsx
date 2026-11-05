@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { startTransition, useActionState, useState } from "react";
+import { startTransition, useActionState, useId, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox, Radio, RadioGroup } from "@/components/ui/controls";
@@ -14,7 +14,7 @@ import { toast } from "@/components/ui/toast";
 import type { Access } from "@/lib/agents/keys";
 import { siteUrl } from "@/lib/slugs";
 import { cn } from "@/lib/utils";
-import { createAgentKey, revokeAgentKey } from "./actions";
+import { createAgentKey, revokeAgentKey, updateAgentKey } from "./actions";
 
 export type AgentKey = {
   id: string;
@@ -104,14 +104,86 @@ function Setup({ token, example }: { token: string; example: string }) {
   );
 }
 
+// What a key is called, what it can do and where, as the form holds it
+type Draft = { name: string; access: Access; reach: "all" | "some"; picked: string[] };
+
+const blank: Draft = { name: "", access: "write", reach: "all", picked: [] };
+
+function KeyFields({
+  draft,
+  onChange,
+  workspaces,
+}: {
+  draft: Draft;
+  onChange: (patch: Partial<Draft>) => void;
+  workspaces: KeyPlace[];
+}) {
+  const nameId = useId();
+  const { name, access, reach, picked } = draft;
+  return (
+    <>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor={nameId} className="text-xs font-medium text-ink-2">
+          Name
+        </label>
+        <Input
+          id={nameId}
+          value={name}
+          onChange={(e) => onChange({ name: e.target.value })}
+          maxLength={40}
+          required
+          placeholder="Claude Code"
+          autoComplete="off"
+        />
+        <p className="text-xs text-ink-3">Shown on everything the agent does, like “Elliot via Claude Code”.</p>
+      </div>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-2 text-xs font-medium text-ink-2">What it can do</legend>
+        <RadioGroup value={access} onValueChange={(v) => onChange({ access: v as Access })}>
+          {levels.map((l) => (
+            <Radio key={l.value} value={l.value} hint={l.hint}>
+              {l.label}
+            </Radio>
+          ))}
+        </RadioGroup>
+      </fieldset>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-2 text-xs font-medium text-ink-2">Where</legend>
+        <RadioGroup value={reach} onValueChange={(v) => onChange({ reach: v as "all" | "some" })}>
+          <Radio value="all" hint="Including workspaces you join later.">
+            All my workspaces
+          </Radio>
+          <Radio value="some">Only these</Radio>
+        </RadioGroup>
+        {reach === "some" ? (
+          <ul className="ml-6.5 flex flex-col gap-2">
+            {workspaces.map((w) => (
+              <li key={w.id}>
+                <label className="flex cursor-pointer items-center gap-2.5 text-sm">
+                  <Checkbox
+                    checked={picked.includes(w.id)}
+                    onCheckedChange={(on) =>
+                      onChange({ picked: on ? [...picked, w.id] : picked.filter((x) => x !== w.id) })
+                    }
+                  />
+                  {w.name}
+                  <span className="font-mono text-[11px] text-ink-3">{w.slug}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </fieldset>
+    </>
+  );
+}
+
 function NewKey({ workspaces }: { workspaces: KeyPlace[] }) {
   const [state, act, pending] = useActionState(createAgentKey, null);
   const [open, setOpen] = useState(false);
   const [seen, setSeen] = useState(state);
-  const [name, setName] = useState("");
-  const [access, setAccess] = useState<Access>("write");
-  const [reach, setReach] = useState<"all" | "some">("all");
-  const [picked, setPicked] = useState<string[]>([]);
+  const [draft, setDraft] = useState(blank);
+  const { name, access, reach, picked } = draft;
   const token = state?.ok && state !== seen ? state.token : undefined;
   const example = `${workspaces[0]?.slug ?? "workspace"}/board`;
 
@@ -121,7 +193,7 @@ function NewKey({ workspaces }: { workspaces: KeyPlace[] }) {
       onOpenChange={(next) => {
         setOpen(next);
         if (next) return;
-        if (state !== seen && state?.ok) setName("");
+        if (state !== seen && state?.ok) setDraft((d) => ({ ...d, name: "" }));
         setSeen(state);
       }}
     >
@@ -155,64 +227,92 @@ function NewKey({ workspaces }: { workspaces: KeyPlace[] }) {
             }}
             className="flex flex-col gap-5"
           >
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="key-name" className="text-xs font-medium text-ink-2">
-                Name
-              </label>
-              <Input
-                id="key-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                maxLength={40}
-                required
-                placeholder="Claude Code"
-                autoComplete="off"
-              />
-              <p className="text-xs text-ink-3">Shown on everything the agent does, like “Elliot via Claude Code”.</p>
-            </div>
-            <fieldset className="flex flex-col gap-2">
-              <legend className="mb-2 text-xs font-medium text-ink-2">What it can do</legend>
-              <RadioGroup value={access} onValueChange={(v) => setAccess(v as Access)}>
-                {levels.map((l) => (
-                  <Radio key={l.value} value={l.value} hint={l.hint}>
-                    {l.label}
-                  </Radio>
-                ))}
-              </RadioGroup>
-            </fieldset>
-            <fieldset className="flex flex-col gap-2">
-              <legend className="mb-2 text-xs font-medium text-ink-2">Where</legend>
-              <RadioGroup value={reach} onValueChange={(v) => setReach(v as "all" | "some")}>
-                <Radio value="all" hint="Including workspaces you join later.">
-                  All my workspaces
-                </Radio>
-                <Radio value="some">Only these</Radio>
-              </RadioGroup>
-              {reach === "some" ? (
-                <ul className="ml-6.5 flex flex-col gap-2">
-                  {workspaces.map((w) => (
-                    <li key={w.id}>
-                      <label className="flex cursor-pointer items-center gap-2.5 text-sm">
-                        <Checkbox
-                          checked={picked.includes(w.id)}
-                          onCheckedChange={(on) =>
-                            setPicked((list) => (on ? [...list, w.id] : list.filter((x) => x !== w.id)))
-                          }
-                        />
-                        {w.name}
-                        <span className="font-mono text-[11px] text-ink-3">{w.slug}</span>
-                      </label>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </fieldset>
+            <KeyFields draft={draft} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} workspaces={workspaces} />
             {state && !state.ok ? <p className="text-xs text-hematite">{state.message}</p> : null}
             <Button type="submit" variant="primary" disabled={pending} className="self-end">
               {pending ? <Spinner className="[&>span.spin-cell]:bg-on-accent/40" /> : null} Make key
             </Button>
           </form>
         )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Workspaces the person has left since don't show, so saving lets them go
+const draftOf = (k: AgentKey, workspaces: KeyPlace[]): Draft => ({
+  name: k.name,
+  access: k.access,
+  reach: k.workspaces ? "some" : "all",
+  picked: (k.workspaces ?? []).filter((id) => workspaces.some((w) => w.id === id)),
+});
+
+const sameDraft = (a: Draft, b: Draft) =>
+  a.name.trim() === b.name.trim() &&
+  a.access === b.access &&
+  a.reach === b.reach &&
+  (a.reach === "all" || (a.picked.length === b.picked.length && a.picked.every((id) => b.picked.includes(id))));
+
+function EditKey({ agentKey, workspaces }: { agentKey: AgentKey; workspaces: KeyPlace[] }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(() => draftOf(agentKey, workspaces));
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const unchanged = sameDraft(draft, draftOf(agentKey, workspaces));
+
+  async function save() {
+    setBusy(true);
+    const result = await updateAgentKey(agentKey.id, {
+      name: draft.name,
+      access: draft.access,
+      workspaces: draft.reach === "some" ? draft.picked : null,
+    });
+    setBusy(false);
+    if (!result?.ok) return setProblem(result?.message ?? "That didn’t save. Try again.");
+    setOpen(false);
+    toast({ icon: "check", title: result.message, duration: 3000 });
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) return;
+        setDraft(draftOf(agentKey, workspaces));
+        setProblem(null);
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button size="sm" variant="ghost">
+          Edit
+        </Button>
+      </DialogTrigger>
+      <DialogContent
+        title={`Edit ${agentKey.name}`}
+        description="It stays the same key, so agents keep using it. Agents already running see new tools once they reconnect."
+        className="max-w-xl"
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save();
+          }}
+          className="flex flex-col gap-5"
+        >
+          <KeyFields draft={draft} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} workspaces={workspaces} />
+          {problem ? <p className="text-xs text-hematite">{problem}</p> : null}
+          <div className="flex justify-end gap-2">
+            <DialogClose asChild>
+              <Button type="button" variant="ghost">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="submit" variant="primary" disabled={busy || unchanged}>
+              {busy ? <Spinner className="[&>span.spin-cell]:bg-on-accent/40" /> : null} Save
+            </Button>
+          </div>
+        </form>
       </DialogContent>
     </Dialog>
   );
@@ -287,7 +387,10 @@ export function AgentKeys({ keys, workspaces }: { keys: AgentKey[]; workspaces: 
                   acta_…{k.hint} · made {date(k.created_at)} · {k.used_at ? `last used ${date(k.used_at)}` : "never used"}
                 </p>
               </div>
-              <Revoke agentKey={k} />
+              <div className="flex shrink-0 items-center gap-1">
+                <EditKey agentKey={k} workspaces={workspaces} />
+                <Revoke agentKey={k} />
+              </div>
             </li>
           ))}
         </ul>

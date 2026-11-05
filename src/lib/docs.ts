@@ -77,7 +77,7 @@ Open **Account → Agents** and make a key. Choose what it may do and which work
 - **Write**: also create, change, sort, comment on, delete and restore tasks, one at a time or many at once.
 - **Manage**: also create boards, edit labels, projects, fields and status names, run the public roadmap and triage ideas.
 
-A key acts as the person who made it, never further. Everything an agent does is marked with the key's name, like “Elliot via Claude Code”. You can revoke a key at any time.
+A key acts as the person who made it, never further. Everything an agent does is marked with the key's name, like “Elliot via Claude Code”. You can change a key's name, what it may do and which workspaces it reaches at any time, without making a new one, or revoke it. An agent that's already running sees the tools it gained once it reconnects.
 
 ## Claude Code
 

@@ -60,7 +60,8 @@ Acta board: workspace/board
 A key acts as the person who made it, and only in the workspaces they chose. The route checks the key, then
 `agent_apply` and `agent_board` check it again in the database before running the app's own write path, so a key
 never gets further than its owner. Everything an agent does is marked with the key's name, shown as
-“Elliot via Claude Code”, and a key can only edit the comments it wrote.
+“Elliot via Claude Code”, and a key can only edit the comments it wrote. A key's name, access and workspaces can be
+changed under **Account → Agents** after it's made, and writes follow the change at once.
 
 Agents bringing work over from another tracker can keep its history: when each task was created and shipped,
 and who wrote each comment and when. Work closed as not planned goes to **Canceled**.
