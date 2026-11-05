@@ -1,6 +1,17 @@
 "use client";
 
-import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { SubtaskCells } from "@/components/board";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -67,8 +78,22 @@ import {
 } from "./fields";
 import { CustomFieldInput } from "./custom-fields";
 import { FieldsMenu } from "./fields-menu";
-import { planDrop, planStep, type DropAt } from "./table-drop";
-import { TaskMenu } from "./task-menu";
+import { planDrop, planStep } from "./table-drop";
+import {
+  addKey,
+  dropAt,
+  dropOn,
+  headAbove,
+  piecesFor,
+  placeItems,
+  rangeFor,
+  runsFor,
+  tableItems,
+  type Drop,
+  type Heights,
+  type Item,
+} from "./table-window";
+import { TaskMenuList } from "./task-menu";
 
 type Group = {
   key: string;
@@ -79,8 +104,20 @@ type Group = {
   note?: string;
 };
 
-// Where a dragged row would land: a line above or below a row, or a whole group lit up
-type Drop = DropAt & { row?: string; side?: "before" | "after" };
+// Every line of the body is a 36px cell and its border at the default text size. The real heights are measured once
+// drawn, as the text size setting scales them
+const LINE = 37;
+const guessHeights: Heights = { head: LINE, row: LINE, add: LINE };
+// How much of the body is drawn before the table knows how tall its box is, as on the server
+const FIRST_VIEW = 800;
+
+// The minute the "updated" cells count from. Only those cells read it, so the clock doesn't draw every row
+const Now = createContext<number | null>(null);
+function Clock({ children }: { children: React.ReactNode }) {
+  return <Now value={useNow()}>{children}</Now>;
+}
+
+const rowOf = (el: Element) => el.closest<HTMLElement>("tr[data-drop-row]")?.dataset.dropRow ?? null;
 
 const GUTTER = 44;
 const TRAIL = 44;
@@ -179,9 +216,14 @@ function TableViewBody({
 }) {
   const { grouping, sort } = prefs;
   const today = useToday();
-  const now = useNow();
-  const scrollRef = useRef<HTMLDivElement>(null);
+  // Kept as state, not a ref, as which rows are drawn is read from its scroll position while drawing
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  const bodyRef = useRef<HTMLTableSectionElement>(null);
   const anchor = useRef<string | null>(null);
+  // A cell asked for before its row was drawn, focused once it is
+  const pending = useRef<{ row: string; col: ColumnId } | null>(null);
+  const [heights, setHeights] = useState(guessHeights);
+  const [menu, setMenu] = useState<string | null>(null);
 
   const [active, setActive] = useState<{ row: string; col: ColumnId } | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
@@ -227,11 +269,38 @@ function TableViewBody({
       );
   }, [rows, grouping, prefs.filters, filtered]);
 
-  const isCollapsed = (g: Group) => prefs.collapsed.includes(g.key);
   const { navRows, rowIndex } = useMemo(() => {
     const ids = groups.flatMap((g) => (prefs.collapsed.includes(g.key) ? [] : g.rows.map((r) => r.id)));
     return { navRows: ids, rowIndex: new Map(ids.map((id, i) => [id, i])) };
   }, [groups, prefs.collapsed]);
+
+  const groupOf = useMemo(() => new Map(groups.map((g) => [g.key, g])), [groups]);
+  const { items, at } = useMemo(() => tableItems(groups, prefs.collapsed), [groups, prefs.collapsed]);
+  const { tops, counts } = useMemo(() => placeItems(items, heights), [items, heights]);
+
+  // Which items are drawn follows the scroll position. It's read as an outside store, so a scroll draws the table
+  // again only when it moves the range, and does so before the frame is painted
+  const watch = useCallback(
+    (changed: () => void) => {
+      if (!scroller) return () => {};
+      scroller.addEventListener("scroll", changed, { passive: true });
+      const ro = new ResizeObserver(changed);
+      ro.observe(scroller);
+      return () => {
+        scroller.removeEventListener("scroll", changed);
+        ro.disconnect();
+      };
+    },
+    [scroller],
+  );
+  // The header row, as tall as a task's, covers the top of the view
+  const rangeKey = (top: number, height: number) => rangeFor(tops, top - heights.row, top + height - heights.row).join(":");
+  const range = useSyncExternalStore(
+    watch,
+    () => (scroller ? rangeKey(scroller.scrollTop, scroller.clientHeight) : rangeKey(0, FIRST_VIEW)),
+    () => rangeKey(0, FIRST_VIEW),
+  );
+  const [start, end] = range.split(":").map(Number);
 
   const columns = withFieldColumns(prefs.columns);
   const cols = [
@@ -315,7 +384,8 @@ function TableViewBody({
       case "subtasks":
         return t.subtasks.length ? `${t.subtasks.filter((s) => s.done).length}/${t.subtasks.length}` : "";
       case "updated":
-        return now ? timeAgo(updatedAt(t), now) : "";
+        // Counted from the minute, as the cell shows it
+        return timeAgo(updatedAt(t), Math.floor(Date.now() / 60_000) * 60_000);
       case "updatedBy": {
         const by = updatedBy(t);
         return by ? (by.via ? `${by.who} via ${by.via}` : by.who) : "";
@@ -390,18 +460,34 @@ function TableViewBody({
 
   const allChecked = rows.length > 0 && sel.length === rows.length ? true : sel.length ? "indeterminate" : false;
 
-  const focusCell = (row: string, col: ColumnId) => {
-    const td = scrollRef.current?.querySelector<HTMLElement>(`td[data-row="${row}"][data-col="${col}"]`);
-    if (!td) return;
+  const cellAt = (row: string, col: ColumnId) =>
+    scroller?.querySelector<HTMLElement>(`td[data-row="${row}"][data-col="${col}"]`) ?? null;
+  const reveal = (td: HTMLElement) => {
     const target = td.querySelector<HTMLElement>("button, input") ?? td;
     target.focus({ preventScroll: true });
     td.scrollIntoView({ block: "nearest", inline: "nearest" });
+  };
+
+  const focusCell = (row: string, col: ColumnId) => {
+    const td = cellAt(row, col);
+    if (!td && !rowIndex.has(row)) return;
+    // A row out of the drawn range is drawn as soon as it holds the cursor, then focused and scrolled to
+    pending.current = td ? null : { row, col };
+    if (td) reveal(td);
     setActive({ row, col });
   };
 
+  useLayoutEffect(() => {
+    const want = pending.current;
+    if (!want) return;
+    const td = cellAt(want.row, want.col);
+    if (td || !rowIndex.has(want.row)) pending.current = null;
+    if (td) reveal(td);
+  });
+
   const onKeyDownCapture = (e: React.KeyboardEvent) => {
     const td = (e.target as HTMLElement).closest<HTMLElement>("td[data-col]");
-    if (!td || !scrollRef.current?.contains(td) || (e.target as HTMLElement).matches("input, textarea")) return;
+    if (!td || !scroller?.contains(td) || (e.target as HTMLElement).matches("input, textarea")) return;
     const row = td.dataset.row!;
     const col = td.dataset.col as ColumnId;
     const r = rowIndex.get(row) ?? 0;
@@ -526,8 +612,8 @@ function TableViewBody({
   // Rows are picked up by the number on the left. A press that doesn't move still ticks the row
   const startRowDrag = (e: React.PointerEvent<HTMLElement>, id: string) => {
     if (e.button !== 0 || e.pointerType === "touch" || sort) return;
-    const scroller = scrollRef.current;
-    if (!scroller) return;
+    const body = bodyRef.current;
+    if (!scroller || !body) return;
     const x0 = e.clientX;
     const y0 = e.clientY;
     let started = false;
@@ -540,16 +626,17 @@ function TableViewBody({
     const locate = (): Drop | null => {
       const box = scroller.getBoundingClientRect();
       if (y < box.top || y >= box.bottom) return target;
-      const el = document.elementFromPoint(box.left + GUTTER / 2, y)?.closest<HTMLElement>("[data-drop]");
+      const el = document.elementFromPoint(box.left + GUTTER / 2, y)?.closest<HTMLElement>("[data-drop], [data-gap]");
       if (!el || !scroller.contains(el)) return target;
-      const group = el.dataset.drop!;
-      if (el.dataset.dropRow) {
-        const row = el.getBoundingClientRect();
-        const after = y >= row.top + row.height / 2;
-        const index = Number(el.dataset.dropIndex) + (after ? 1 : 0);
-        return { group, index, row: el.dataset.dropRow, side: after ? "after" : "before" };
+      // Over rows not drawn yet, as the table catches up with a fast scroll, the place comes from where they'd be
+      if (el.hasAttribute("data-gap")) return dropAt(items, tops, y - body.getBoundingClientRect().top) ?? target;
+      const row = el.dataset.dropRow;
+      if (row) {
+        const i = at.get(row);
+        const line = el.getBoundingClientRect();
+        return i === undefined ? target : dropOn(items[i], y >= line.top + line.height / 2);
       }
-      return { group, index: Number(el.dataset.dropIndex ?? 0) };
+      return { group: el.dataset.drop!, index: Number(el.dataset.dropIndex ?? 0) };
     };
     // Only a new place to land draws the table again, not every pointer move
     const show = () => {
@@ -681,8 +768,57 @@ function TableViewBody({
     if (dragId && el) el.style.transform = `translate(${ghostAt.current.x + 14}px, ${ghostAt.current.y + 10}px)`;
   }, [dragId]);
 
-  // Only the "updated" column reads the clock, so rows only redraw each minute when it's shown
-  const rowNow = colIds.includes("updated") ? now : null;
+  // Measures a drawn line of each kind. The body changes size when lines come or go, or when the text size
+  // setting changes how tall they are, and those are the times a measure could differ
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const ro = new ResizeObserver(() => {
+      const size = (selector: string) => body.querySelector(selector)?.getBoundingClientRect().height;
+      const seen = { head: size("tr[data-head]"), row: size("tr[data-drop-row]"), add: size("tr[data-add]") };
+      setHeights((was) => {
+        // A kind with none drawn, like the add rows far from view, grows or shrinks by as much as the tasks' rows
+        // did, as a new text size changes every line alike
+        const shift = seen.row ? seen.row - was.row : 0;
+        const next = {
+          head: seen.head || was.head + shift,
+          row: seen.row || was.row,
+          add: seen.add || was.add + shift,
+        };
+        return Math.abs(next.head - was.head) + Math.abs(next.row - was.row) + Math.abs(next.add - was.add) < 0.01 ? was : next;
+      });
+    });
+    ro.observe(body);
+    return () => ro.disconnect();
+  }, []);
+
+  // Screen readers learn where each drawn row sits from aria-rowindex. It's written here rather than drawn with each
+  // row, so a task added or moved above doesn't draw every row below it again. The row numbers on screen come from a
+  // CSS counter for the same reason
+  useLayoutEffect(() => {
+    const rowsDrawn = bodyRef.current?.querySelectorAll<HTMLElement>("tr[data-drop-row]") ?? [];
+    for (const tr of rowsDrawn) {
+      const i = rowIndex.get(tr.dataset.dropRow!);
+      const value = i === undefined ? null : String(i + 2);
+      if (tr.getAttribute("aria-rowindex") === value) continue;
+      if (value) tr.setAttribute("aria-rowindex", value);
+      else tr.removeAttribute("aria-rowindex");
+    }
+  });
+
+  // Drawn are the rows in range, and wherever they are, the one holding the cursor, the one being renamed, the
+  // group being added to, and the header stuck over the top of the view
+  const runs = runsFor(
+    [start, end],
+    [
+      cursor ? at.get(cursor.row) : null,
+      editing ? at.get(editing) : null,
+      adding ? at.get(addKey(adding)) : null,
+      headAbove(items, start),
+    ],
+    items.length,
+  );
+  const pieces = piecesFor(runs, tops, counts);
 
   const headerCell = (c: ColumnPref, i: number) => {
     const meta = metaOf(c.id);
@@ -785,10 +921,115 @@ function TableViewBody({
 
   const span = cols.length + 2;
 
+  // A whole group lights up while a row dragged over its header or its add row would land in it
+  const lit = (group: string) => drop?.group === group && !drop.row;
+
+  const groupHead = (g: Group, key: string, dropIndex: number) => {
+    const collapsed = prefs.collapsed.includes(g.key);
+    const pts = points(g.rows);
+    return (
+      <tr key={key} className="group/grp" data-head="" data-drop={g.key} data-drop-index={dropIndex}>
+        <td
+          colSpan={span}
+          className={cn(
+            "sticky top-9 z-[15] h-9 border-b border-line p-0",
+            lit(g.key) ? "bg-lapis-soft" : "bg-sunken",
+          )}
+        >
+          <div className="sticky left-0 flex h-9 w-max items-center gap-2.5 pr-3 pl-3.5">
+            <button
+              aria-expanded={!collapsed}
+              onClick={() =>
+                setPrefs({
+                  collapsed: collapsed ? prefs.collapsed.filter((k) => k !== g.key) : [...prefs.collapsed, g.key],
+                })
+              }
+              className="flex h-7 items-center gap-2.5 pr-1.5 outline-none focus-visible:ring-2 focus-visible:ring-lapis"
+            >
+              <PixelCaret className={cn("text-ink-3 transition-transform", collapsed && "-rotate-90")} />
+              {g.icon}
+              <span className="text-sm font-medium">{g.title}</span>
+            </button>
+            <span className="font-mono text-[11px] text-ink-3">{g.rows.length}</span>
+            {pts ? <span className="font-mono text-[11px] text-ink-3">· {pts} pt</span> : null}
+            {(g.key === "status:done" || g.key === "status:canceled") && g.rows.some((r) => !r.archived) ? (
+              <Tooltip content={`Archive everything in ${g.title}`}>
+                <button
+                  onClick={() =>
+                    dispatch(
+                      archiveTasks(
+                        g.rows.filter((r) => !r.archived).map((r) => r.id),
+                        true,
+                      ),
+                    )
+                  }
+                  className="flex h-6 items-center gap-1.5 px-1.5 text-xs text-ink-3 opacity-0 group-hover/grp:opacity-100 hover:bg-raised hover:text-ink focus-visible:opacity-100 pointer-coarse:opacity-100"
+                >
+                  <Icon name="archive" size="sm" /> Archive all
+                </button>
+              </Tooltip>
+            ) : null}
+            <Tooltip content={`Add to ${g.title}`}>
+              <button
+                aria-label={`Add a task to ${g.title}`}
+                onClick={() => {
+                  if (collapsed) setPrefs({ collapsed: prefs.collapsed.filter((k) => k !== g.key) });
+                  setAdding(g.key);
+                }}
+                className="grid size-6 place-items-center text-ink-3 opacity-0 group-hover/grp:opacity-100 hover:bg-raised hover:text-ink focus-visible:opacity-100 pointer-coarse:opacity-100"
+              >
+                <Icon name="plus" size="sm" />
+              </button>
+            </Tooltip>
+          </div>
+        </td>
+      </tr>
+    );
+  };
+
+  const line = (it: Item) => {
+    const g = groupOf.get(it.group)!;
+    if (it.kind === "head") return groupHead(g, it.key, it.drop);
+    if (it.kind === "add")
+      return (
+        <AddRow
+          key={it.key}
+          drop={g.key}
+          dropIndex={it.drop}
+          lit={lit(g.key)}
+          span={span}
+          open={adding === g.key}
+          label={g.title ? `Add to ${g.title}` : "Add a task"}
+          onOpen={() => setAdding(g.key)}
+          onClose={() => setAdding(null)}
+          onAdd={(title) => dispatch({ type: "add", status: "todo", title, patch: g.patch })}
+          stickyTitle={stickyTitle}
+        />
+      );
+    const t = g.rows[it.index];
+    return (
+      <TableRow
+        key={it.key}
+        task={t}
+        group={g.key}
+        selected={selSet.has(t.id)}
+        sorted={Boolean(sort)}
+        dragging={dragId === t.id}
+        side={drop?.row === t.id ? drop.side : undefined}
+        menu={menu === t.id}
+        colIds={colIds}
+        cursorCol={cursor?.row === t.id ? cursor.col : null}
+        editing={editing === t.id}
+        opts={opts}
+        api={api}
+      />
+    );
+  };
+
   return (
     <div className="relative flex h-full flex-col">
       <div
-        ref={scrollRef}
+        ref={setScroller}
         onScroll={(e) => {
           const x = e.currentTarget.scrollLeft > 0;
           if (x !== scrolledX) setScrolledX(x);
@@ -814,7 +1055,9 @@ function TableViewBody({
           role="grid"
           aria-label="Tasks"
           aria-rowcount={navRows.length + 1}
-          className="table-fixed border-separate border-spacing-0 text-sm"
+          // While anything is ticked every row shows its checkbox, set here once rather than on each row
+          data-selecting={sel.length > 0 || undefined}
+          className="group/grid table-fixed border-separate border-spacing-0 text-sm [counter-reset:row]"
           style={
             {
               width: `max(100%, calc(${GUTTER + TRAIL + restWidth}px + ${titleCss}))`,
@@ -859,112 +1102,26 @@ function TableViewBody({
             </tr>
           </thead>
 
-          <tbody>
-            {groups.map((g) => {
-              const collapsed = isCollapsed(g);
-              const pts = points(g.rows);
-              return (
-                <Fragment key={g.key}>
-                  {g.title ? (
-                    <tr className="group/grp" data-drop={g.key} data-drop-index={collapsed ? g.rows.length : 0}>
-                      <td
-                        colSpan={span}
-                        className={cn(
-                          "sticky top-9 z-[15] h-9 border-b border-line p-0",
-                          drop?.group === g.key && !drop.row ? "bg-lapis-soft" : "bg-sunken",
-                        )}
-                      >
-                        <div className="sticky left-0 flex h-9 w-max items-center gap-2.5 pr-3 pl-3.5">
-                          <button
-                            aria-expanded={!collapsed}
-                            onClick={() =>
-                              setPrefs({
-                                collapsed: collapsed ? prefs.collapsed.filter((k) => k !== g.key) : [...prefs.collapsed, g.key],
-                              })
-                            }
-                            className="flex h-7 items-center gap-2.5 pr-1.5 outline-none focus-visible:ring-2 focus-visible:ring-lapis"
-                          >
-                            <PixelCaret className={cn("text-ink-3 transition-transform", collapsed && "-rotate-90")} />
-                            {g.icon}
-                            <span className="text-sm font-medium">{g.title}</span>
-                          </button>
-                          <span className="font-mono text-[11px] text-ink-3">{g.rows.length}</span>
-                          {pts ? <span className="font-mono text-[11px] text-ink-3">· {pts} pt</span> : null}
-                          {(g.key === "status:done" || g.key === "status:canceled") && g.rows.some((r) => !r.archived) ? (
-                            <Tooltip content={`Archive everything in ${g.title}`}>
-                              <button
-                                onClick={() =>
-                                  dispatch(
-                                    archiveTasks(
-                                      g.rows.filter((r) => !r.archived).map((r) => r.id),
-                                      true,
-                                    ),
-                                  )
-                                }
-                                className="flex h-6 items-center gap-1.5 px-1.5 text-xs text-ink-3 opacity-0 group-hover/grp:opacity-100 hover:bg-raised hover:text-ink focus-visible:opacity-100 pointer-coarse:opacity-100"
-                              >
-                                <Icon name="archive" size="sm" /> Archive all
-                              </button>
-                            </Tooltip>
-                          ) : null}
-                          <Tooltip content={`Add to ${g.title}`}>
-                            <button
-                              aria-label={`Add a task to ${g.title}`}
-                              onClick={() => {
-                                if (collapsed) setPrefs({ collapsed: prefs.collapsed.filter((k) => k !== g.key) });
-                                setAdding(g.key);
-                              }}
-                              className="grid size-6 place-items-center text-ink-3 opacity-0 group-hover/grp:opacity-100 hover:bg-raised hover:text-ink focus-visible:opacity-100 pointer-coarse:opacity-100"
-                            >
-                              <Icon name="plus" size="sm" />
-                            </button>
-                          </Tooltip>
-                        </div>
-                      </td>
-                    </tr>
-                  ) : null}
-
-                  {collapsed
-                    ? null
-                    : g.rows.map((t, i) => (
-                        <TableRow
-                          key={t.id}
-                          task={t}
-                          index={i}
-                          n={(rowIndex.get(t.id) ?? 0) + 1}
-                          group={g.key}
-                          selected={selSet.has(t.id)}
-                          anySelected={sel.length > 0}
-                          sorted={Boolean(sort)}
-                          dragging={dragId === t.id}
-                          side={drop?.row === t.id ? drop.side : undefined}
-                          colIds={colIds}
-                          cursorCol={cursor?.row === t.id ? cursor.col : null}
-                          editing={editing === t.id}
-                          now={rowNow}
-                          opts={opts}
-                          api={api}
-                        />
-                      ))}
-
-                  {collapsed ? null : (
-                    <AddRow
-                      drop={g.key}
-                      dropIndex={g.rows.length}
-                      lit={drop?.group === g.key && !drop.row}
-                      span={span}
-                      open={adding === g.key}
-                      label={g.title ? `Add to ${g.title}` : "Add a task"}
-                      onOpen={() => setAdding(g.key)}
-                      onClose={() => setAdding(null)}
-                      onAdd={(title) => dispatch({ type: "add", status: "todo", title, patch: g.patch })}
-                      stickyTitle={stickyTitle}
-                    />
-                  )}
-                </Fragment>
-              );
-            })}
-          </tbody>
+          <Clock>
+            <TaskMenuList
+              tasks={state.tasks}
+              taskAt={rowOf}
+              open={menu}
+              onOpenChange={setMenu}
+              dispatch={dispatch}
+              onOpen={onOpen}
+            >
+              <tbody ref={bodyRef}>
+                {/* A gap is known by the first line it stands in for, so as the drawn range moves, the rows keep
+                    their places beside it instead of being taken out and put back */}
+                {pieces.flatMap((p) =>
+                  p.gap
+                    ? [<Gap key={`gap:${p.from}`} height={p.height} rows={p.rows} span={span} />]
+                    : items.slice(p.from, p.to).map(line),
+                )}
+              </tbody>
+            </TaskMenuList>
+          </Clock>
 
           {rows.length ? (
             <tfoot>
@@ -1036,22 +1193,21 @@ function TableViewBody({
   );
 }
 
+// A row isn't told where it sits. Its number is counted in CSS and a drop looks its place up by its id, so adding or
+// moving a task doesn't draw every row below it again
 type RowProps = {
   task: Task;
-  // Its place in its group, for drops, and in the whole table, for its number
-  index: number;
-  n: number;
   group: string;
   selected: boolean;
-  anySelected: boolean;
   sorted: boolean;
   dragging: boolean;
   side?: "before" | "after";
+  // Its menu is open
+  menu: boolean;
   colIds: ColumnId[];
   // The column holding the keyboard cursor, when it's on this row
   cursorCol: ColumnId | null;
   editing: boolean;
-  now: number | null;
   opts: CellOptions;
   api: RowApi;
 };
@@ -1060,18 +1216,15 @@ type RowProps = {
 // editing one task leaves the rest alone
 const TableRow = memo(function TableRow({
   task: t,
-  index,
-  n,
   group,
   selected,
-  anySelected,
   sorted,
   dragging,
   side,
+  menu,
   colIds,
   cursorCol,
   editing,
-  now,
   opts,
   api,
 }: RowProps) {
@@ -1145,18 +1298,12 @@ const TableRow = memo(function TableRow({
             <SubtaskCells subtasks={t.subtasks} />
           </span>
         );
-      case "updated": {
-        const last = t.activity.at(-1);
+      case "updated":
         return (
           <span onClick={() => api.open(t.id)} className="flex h-full cursor-pointer items-center px-3">
-            {last && now ? (
-              <Tooltip content={`${last.who} ${last.text}`}>
-                <span className="font-mono text-[11px] text-ink-3">{timeAgo(last.at, now)}</span>
-              </Tooltip>
-            ) : null}
+            <UpdatedAgo task={t} />
           </span>
         );
-      }
       case "updatedBy": {
         const by = updatedBy(t);
         const last = t.activity.at(-1);
@@ -1204,93 +1351,101 @@ const TableRow = memo(function TableRow({
   };
 
   return (
-    <TaskMenu task={t} dispatch={api.dispatch} onOpen={api.open}>
-      <tr
-        className={cn("group/row", dragging && "opacity-40")}
-        aria-selected={selected}
-        aria-rowindex={n + 1}
-        data-drop={group}
-        data-drop-row={t.id}
-        data-drop-index={index}
-        data-side={side}
+    <tr
+      className={cn("group/row [counter-increment:row]", dragging && "opacity-40")}
+      aria-selected={selected}
+      data-drop={group}
+      data-drop-row={t.id}
+      data-side={side}
+      data-state={menu ? "open" : undefined}
+    >
+      <td
+        onPointerDown={(e) => api.startRowDrag(e, t.id)}
+        title={sorted ? "Clear the sort to drag rows" : "Drag to move"}
+        className={cn(cellClass(selected), stickyGutter, "z-[5] border-r-0", !sorted && "cursor-grab")}
       >
-        <td
-          onPointerDown={(e) => api.startRowDrag(e, t.id)}
-          title={sorted ? "Clear the sort to drag rows" : "Drag to move"}
-          className={cn(cellClass(selected), stickyGutter, "z-[5] border-r-0", !sorted && "cursor-grab")}
-        >
-          <span className="relative grid h-full place-items-center">
-            {sorted ? null : (
-              <Icon
-                name="grip"
-                size="sm"
-                aria-hidden
-                className="absolute left-0 text-ink-3 opacity-0 group-hover/row:opacity-100 pointer-coarse:hidden"
-              />
-            )}
-            <span
-              className={cn(
-                "font-mono text-[11px] text-ink-3 tabular-nums group-hover/row:invisible pointer-coarse:invisible",
-                anySelected && "invisible",
-              )}
-            >
-              {n}
-            </span>
-            <Checkbox
-              tabIndex={-1}
-              aria-label={`Select ${t.id}`}
-              checked={selected}
-              onClick={(e) => {
-                e.preventDefault();
-                // The end of a drag isn't a click
-                if (api.justDropped()) return;
-                api.toggleRow(t.id, e.shiftKey);
-              }}
-              className={cn(
-                "absolute opacity-0 group-hover/row:opacity-100 pointer-coarse:opacity-100",
-                anySelected && "opacity-100",
-              )}
+        <span className="relative grid h-full place-items-center">
+          {sorted ? null : (
+            <Icon
+              name="grip"
+              size="sm"
+              aria-hidden
+              className="absolute left-0 text-ink-3 opacity-0 group-hover/row:opacity-100 pointer-coarse:hidden"
             />
-          </span>
-        </td>
+          )}
+          <span className="font-mono text-[11px] text-ink-3 tabular-nums group-hover/row:invisible group-data-[selecting]/grid:invisible pointer-coarse:invisible before:content-[counter(row)]" />
+          <Checkbox
+            tabIndex={-1}
+            aria-label={`Select ${t.id}`}
+            checked={selected}
+            onClick={(e) => {
+              e.preventDefault();
+              // The end of a drag isn't a click
+              if (api.justDropped()) return;
+              api.toggleRow(t.id, e.shiftKey);
+            }}
+            className="absolute opacity-0 group-hover/row:opacity-100 group-data-[selecting]/grid:opacity-100 pointer-coarse:opacity-100"
+          />
+        </span>
+      </td>
 
-        {colIds.map((col, i) => {
-          const title = col === "title";
-          return (
-            <td
-              key={col}
-              data-row={t.id}
-              data-col={col}
-              tabIndex={col === "subtasks" || col === "updated" || col === "updatedBy" ? tabFor(col) : undefined}
-              onFocus={() => api.focused(t.id, col)}
-              style={title ? stickyTitle : pastTitle}
-              className={cn(cellClass(selected), title && "sticky z-[5]")}
-            >
-              {title ? (
-                <TitleCell
-                  task={t}
-                  tabIndex={tabFor("title")}
-                  editing={editing}
-                  onEdit={() => api.edit(t.id)}
-                  onDone={(value, fromKeyboard) => {
-                    if (value !== null) api.rename(t, value);
-                    api.edit(null);
-                    if (fromKeyboard) requestAnimationFrame(() => api.focusCell(t.id, "title"));
-                  }}
-                  onOpen={() => api.open(t.id)}
-                />
-              ) : (
-                cell(col)
-              )}
-              {i === 0 ? seam : null}
-            </td>
-          );
-        })}
-        <td onClick={() => api.open(t.id)} className={cn(cellClass(selected), "cursor-pointer border-r-0")} />
-      </tr>
-    </TaskMenu>
+      {colIds.map((col, i) => {
+        const title = col === "title";
+        return (
+          <td
+            key={col}
+            data-row={t.id}
+            data-col={col}
+            tabIndex={col === "subtasks" || col === "updated" || col === "updatedBy" ? tabFor(col) : undefined}
+            onFocus={() => api.focused(t.id, col)}
+            style={title ? stickyTitle : pastTitle}
+            className={cn(cellClass(selected), title && "sticky z-[5]")}
+          >
+            {title ? (
+              <TitleCell
+                task={t}
+                tabIndex={tabFor("title")}
+                editing={editing}
+                onEdit={() => api.edit(t.id)}
+                onDone={(value, fromKeyboard) => {
+                  if (value !== null) api.rename(t, value);
+                  api.edit(null);
+                  if (fromKeyboard) requestAnimationFrame(() => api.focusCell(t.id, "title"));
+                }}
+                onOpen={() => api.open(t.id)}
+              />
+            ) : (
+              cell(col)
+            )}
+            {i === 0 ? seam : null}
+          </td>
+        );
+      })}
+      <td onClick={() => api.open(t.id)} className={cn(cellClass(selected), "cursor-pointer border-r-0")} />
+    </tr>
   );
 });
+
+// The only part of a row that reads the clock, so each minute redraws these and nothing else
+function UpdatedAgo({ task }: { task: Task }) {
+  const now = useContext(Now);
+  const last = task.activity.at(-1);
+  return last && now ? (
+    <Tooltip content={`${last.who} ${last.text}`}>
+      <span className="font-mono text-[11px] text-ink-3">{timeAgo(last.at, now)}</span>
+    </Tooltip>
+  ) : null;
+}
+
+// Stands in for lines that aren't drawn: as tall as they are, and counting the tasks among them so the row numbers
+// after it carry on from the right place
+function Gap({ height, rows, span }: { height: number; rows: number; span: number }) {
+  return (
+    <tr aria-hidden data-gap="" style={rows ? { counterIncrement: `row ${rows}` } : undefined}>
+      <td colSpan={span} style={{ height }} className="p-0" />
+    </tr>
+  );
+}
 
 function TitleCell({
   task,
@@ -1426,7 +1581,7 @@ function AddRow({
     setDraft("");
   };
   return (
-    <tr className="group/add" data-drop={drop} data-drop-index={dropIndex}>
+    <tr className="group/add" data-add="" data-drop={drop} data-drop-index={dropIndex}>
       <td
         className={cn(
           "sticky left-0 z-[5] h-9 border-b border-line bg-raised p-0",

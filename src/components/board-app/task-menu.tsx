@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Icon } from "@/components/ui/icons";
 import { PriorityIcon, SizeIcon, StatusMarker } from "@/components/board";
 import { Avatar } from "@/components/ui/display";
@@ -42,6 +42,53 @@ export function TaskMenu({ children, ...props }: MenuProps & { children: React.R
     <ContextMenu onOpenChange={setOpen}>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       {open ? <TaskMenuContent {...props} /> : null}
+    </ContextMenu>
+  );
+}
+
+/**
+ * One menu for a long list of tasks, such as the table's rows, opened for whichever task was right-clicked or
+ * long-pressed. Each menu listens to the whole page while it's on it, so a menu per row would mean hundreds of
+ * listeners running on every key press. Off a task, the browser's own menu shows, as it would without this
+ */
+export function TaskMenuList({
+  tasks,
+  taskAt,
+  open,
+  onOpenChange,
+  dispatch,
+  onOpen,
+  children,
+}: Omit<MenuProps, "task"> & {
+  tasks: Record<string, Task>;
+  /** The task an element inside the list belongs to, if any */
+  taskAt: (el: Element) => string | null;
+  /** The task whose menu is open */
+  open: string | null;
+  onOpenChange: (id: string | null) => void;
+  /** The one element holding the list, which takes the events */
+  children: React.ReactElement;
+}) {
+  // The task under the last press, noted before the menu hears of it
+  const pressed = useRef<string | null>(null);
+  const find = (e: React.SyntheticEvent) => (e.target instanceof Element ? taskAt(e.target) : null);
+  const task = open ? tasks[open] : undefined;
+  return (
+    <ContextMenu open={Boolean(task)} onOpenChange={(next) => onOpenChange(next ? pressed.current : null)}>
+      <ContextMenuTrigger
+        asChild
+        onPointerDownCapture={(e) => {
+          pressed.current = find(e);
+        }}
+        onContextMenuCapture={(e) => {
+          pressed.current = find(e);
+          // Stopped here, before the menu's own handler, the event keeps its default: the browser's menu
+          if (!pressed.current) e.stopPropagation();
+        }}
+      >
+        {children}
+      </ContextMenuTrigger>
+      {task ? <TaskMenuContent task={task} dispatch={dispatch} onOpen={onOpen} /> : null}
     </ContextMenu>
   );
 }
