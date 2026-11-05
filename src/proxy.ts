@@ -51,6 +51,10 @@ export async function proxy(request: NextRequest) {
   return response;
 }
 
+// API routes come with keys or GitHub's signature rather than a session, so the proxy has nothing to refresh for
+// them. Only the GitHub routes a signed-in person calls from the app read the session: flush, install and setup
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|api/collect|api/mcp|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|webp|gif|ico|txt|xml)$).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|api/(?!github/(?:flush|install|setup)(?:/|$))|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|webp|gif|ico|txt|xml)$).*)",
+  ],
 };

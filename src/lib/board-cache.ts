@@ -11,25 +11,52 @@ export type CachedBoard = LiveBoard & { cachedAt: number };
 const boards = new Map<string, CachedBoard>();
 // Snapshots older than this are thrown away rather than shown and corrected
 const KEEP = 30 * 60_000;
+// A whole board can be megabytes, so only the most recently used few stay
+const MAX = 8;
 
 export const boardPath = (workspace: string, board: string) => `${workspace}/${board}`;
 
-export function cachedBoard(path: string): CachedBoard | null {
-  if (typeof window === "undefined") return null;
+function fresh(path: string) {
   const hit = boards.get(path);
-  if (!hit) return null;
-  if (Date.now() - hit.cachedAt > KEEP) {
+  if (hit && Date.now() - hit.cachedAt > KEEP) {
     boards.delete(path);
     return null;
   }
+  return hit ?? null;
+}
+
+/** A board kept for showing. Asking counts as using it, so it's the last to go */
+export function cachedBoard(path: string): CachedBoard | null {
+  if (typeof window === "undefined") return null;
+  const hit = fresh(path);
+  if (!hit) return null;
+  boards.delete(path);
+  boards.set(path, hit);
   return hit;
 }
 
-/** Keeps a board's state. `at` is when the state was last known to be complete */
-export function rememberBoard(live: LiveBoard, state: BoardState, at: number) {
+/** The same without counting as a use, for checking what's kept */
+export const peekBoard = (path: string) => (typeof window === "undefined" ? null : fresh(path));
+
+/** Whether a board read ahead has room, without pushing out one that was looked at */
+export function roomAhead() {
+  for (const path of [...boards.keys()]) fresh(path);
+  return boards.size < MAX;
+}
+
+/** Keeps a board's state. `at` is when the state was last known to be complete. A board read `ahead` of being
+ * looked at only takes free room, and doesn't count as used */
+export function rememberBoard(live: LiveBoard, state: BoardState, at: number, { ahead = false } = {}) {
   const path = boardPath(live.workspace.slug, live.board.slug);
-  boards.set(path, { ...live, state, at, cachedAt: Date.now() });
   setCount(live.board.id, Object.keys(state.tasks).length);
+  const entry = { ...live, state, at, cachedAt: Date.now() };
+  if (ahead) {
+    if (boards.has(path) || roomAhead()) boards.set(path, entry);
+    return;
+  }
+  boards.delete(path);
+  boards.set(path, entry);
+  while (boards.size > MAX) boards.delete(boards.keys().next().value!);
 }
 
 export function forgetBoard(path: string) {

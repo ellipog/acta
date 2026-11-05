@@ -8,18 +8,28 @@ import { Avatar } from "@/components/ui/display";
 import { toast } from "@/components/ui/toast";
 import { newId, setBoardMeta, type BoardState, type Suggestion } from "@/lib/board-store";
 import {
+  isPrivate,
   publicMeta,
   publicState,
   visitorCookie,
+  votesIn,
+  withOwnVotes,
+  type OwnVotes,
   type PublicResult,
   type PublicRoadmapData,
 } from "@/lib/public-roadmap";
-import { loadClient } from "@/lib/supabase/browser";
+import { hasSession, loadClient } from "@/lib/supabase/browser";
 import { cn } from "@/lib/utils";
 
-function visitorId() {
+// The visitor's id, if they've voted or sent an idea here before
+function savedVisitor() {
   const found = document.cookie.match(new RegExp(`(?:^|; )${visitorCookie}=([^;]+)`));
-  if (found) return decodeURIComponent(found[1]);
+  return found ? decodeURIComponent(found[1]) : null;
+}
+
+function visitorId() {
+  const saved = savedVisitor();
+  if (saved) return saved;
   const id = `v:${newId()}`;
   const secure = location.protocol === "https:" ? "; secure" : "";
   document.cookie = `${visitorCookie}=${encodeURIComponent(id)}; path=/; max-age=34560000; samesite=lax${secure}`;
@@ -66,14 +76,46 @@ export function PublicView({ data, home }: { data: PublicRoadmapData; home: stri
   useForcedTheme(forced);
   const lines = useRef(new Map<string, Promise<unknown>>());
   const busy = useRef(0);
+  // What the visitor has voted on or sent since the page opened, which their saved votes mustn't undo
+  const touched = useRef(new Set<string>());
   const board = data.board.id;
-  const number = (id: string) => Number(id.slice(data.board.prefix.length + 1));
+  const prefix = data.board.prefix;
+  const number = (id: string) => Number(id.slice(prefix.length + 1));
 
   const queue = (key: string, run: () => Promise<void>) => {
     busy.current++;
+    touched.current.add(key);
     const next = (lines.current.get(key) ?? Promise.resolve()).then(run).finally(() => busy.current--);
     lines.current.set(key, next);
   };
+
+  // The page is cached and the same for everyone, so what this visitor voted for comes now. Someone who has never
+  // voted or sent an idea here, and isn't signed in, has nothing to fetch
+  useEffect(() => {
+    const visitor = savedVisitor();
+    if (!visitor && !hasSession()) return;
+    let open = true;
+    (async () => {
+      const db = await loadClient();
+      const { data: votes, error } = await db.rpc("public_votes", { p_board: board, p_visitor: visitor });
+      let own = error ? null : (votes as OwnVotes | null);
+      if (error) {
+        // Until the database has public_votes, the whole roadmap as this visitor sees it
+        const { data: fresh } = await db.rpc("public_roadmap", {
+          p_workspace: data.workspace.slug,
+          p_board: data.board.slug,
+          p_visitor: visitor,
+        });
+        const r = fresh as PublicResult;
+        if (r && !isPrivate(r)) own = votesIn(r);
+      }
+      const found = own;
+      if (open && found) setState((s) => withOwnVotes(s, found, prefix, touched.current));
+    })().catch(() => {});
+    return () => {
+      open = false;
+    };
+  }, [board, prefix, data.workspace.slug, data.board.slug]);
 
   useEffect(() => {
     let left = 0;
@@ -86,7 +128,8 @@ export function PublicView({ data, home }: { data: PublicRoadmapData; home: stri
       const { data: fresh } = await (await loadClient()).rpc("public_roadmap", {
         p_workspace: data.workspace.slug,
         p_board: data.board.slug,
-        p_visitor: visitorId(),
+        // Only someone who has voted or sent an idea has an id. Looking again doesn't give them one
+        p_visitor: savedVisitor(),
       });
       const r = fresh as PublicResult;
       if (r && !("private" in r) && !busy.current) {

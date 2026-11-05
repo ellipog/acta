@@ -52,6 +52,42 @@ export function taskNumbers(text: string | null | undefined, prefix: string): nu
   return [...found];
 }
 
+// A task id with any prefix a board can have. Wherever taskNumbers finds one for some board, this finds one too
+const anyTask = /(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9]{0,5}-\d{1,7}(?![A-Za-z0-9])/;
+const namesTask = (...texts: unknown[]) => texts.some((t) => typeof t === "string" && anyTask.test(t));
+
+/* eslint-disable @typescript-eslint/no-explicit-any -- GitHub's payloads are large and only partly read */
+/** Whether the webhook would do anything with a delivery, from the payload alone, so the rest are answered without
+ * touching the database. It follows handleDelivery in sync.ts and the handlers it calls, and keeps anything they
+ * might act on: what needs the board, like its prefix or settings, is left to them */
+export function worthHandling(event: string, p: Record<string, any>, bot: string) {
+  if (event === "installation") return p.action === "deleted";
+  if (event === "installation_repositories") return (p.repositories_removed ?? []).length > 0;
+  // Acta's own changes come back as webhooks too
+  if (p.sender?.login === bot || !p.repository?.id) return false;
+  switch (event) {
+    case "pull_request":
+      return Boolean(p.pull_request) && namesTask(p.pull_request.title, p.pull_request.head?.ref, p.pull_request.body);
+    case "pull_request_review": {
+      const review = String(p.review?.state ?? "").toLowerCase();
+      return (review === "approved" || review === "changes_requested") && Boolean(p.pull_request);
+    }
+    case "check_suite":
+      return p.action === "completed" && (p.check_suite?.pull_requests ?? []).length > 0;
+    case "create":
+      return p.ref_type === "branch" && namesTask(p.ref);
+    case "push":
+      return !p.deleted && (p.commits ?? []).slice(0, 20).some((c: Record<string, any>) => namesTask(c.message));
+    case "issues":
+      return Boolean(p.issue) && !p.issue.pull_request;
+    case "issue_comment":
+      return p.action === "created" && Boolean(p.issue) && !p.issue.pull_request;
+    default:
+      return false;
+  }
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
 const closing = "close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved";
 
 /** The tasks a pull request says it finishes, as in "Fixes ACT-12" or "Closes ACT-3, ACT-4" */

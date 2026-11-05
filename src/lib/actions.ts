@@ -1,12 +1,13 @@
 "use server";
 
-import { refresh } from "next/cache";
+import { refresh, revalidateTag } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { avatarBucket, imageType, maxAvatarBytes } from "./avatars";
 import type { Tone } from "./board-store";
 import type { DitherName } from "./dither-assets";
 import { permissionList, sigils, workspaceTones, type Permissions, type Role } from "./live";
+import { roadmapTag } from "./seo";
 import { boardPrefixFor, boardSlugFor, boardSlugProblem, slugify, slugProblem } from "./slugs";
 import { createAdminClient, serviceReady } from "./supabase/admin";
 import { createClient } from "./supabase/server";
@@ -251,4 +252,21 @@ export async function joinWorkspace(_: ActionResult, form: FormData): Promise<Ac
 export async function fetchBoardState(boardId: string) {
   const { supabase, user } = await signedIn();
   return readBoard(supabase, boardId, user.id);
+}
+
+/** A board's public roadmap was published, unpublished, edited, or lost a task. The copy visitors share is
+ * cached for a minute or more, so it's dropped now and read again on the next visit. Only a member can see the
+ * board's address, so only a member's save can clear it */
+export async function roadmapChanged(boardId: string) {
+  const auth = await getAuth();
+  if (!auth) return;
+  const { data } = await auth.supabase
+    .from("boards")
+    .select("slug, workspaces!inner(slug)")
+    .eq("id", boardId)
+    .maybeSingle();
+  const workspace = (data?.workspaces as unknown as { slug: string } | null)?.slug;
+  // A second rather than none: expiring it outright makes an action draw the page it was called from again, and
+  // that's the whole board. A visit in that second gets the old copy and reads the new one behind it
+  if (data && workspace) revalidateTag(roadmapTag(workspace, data.slug as string), { expire: 1 });
 }

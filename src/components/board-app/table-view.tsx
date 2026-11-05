@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { SubtaskCells } from "@/components/board";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,11 +21,12 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip } from "@/components/ui/tooltip";
 import { PixelCaret } from "@/components/ui/pixel";
-import { Select } from "@/components/ui/select";
+import { Select, type SelectOption } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import { useNow } from "@/lib/hooks";
 import {
   archiveTasks,
+  boardMetaVersion,
   closed,
   customText,
   formatDue,
@@ -97,7 +98,65 @@ const statusTone: Record<StatusCategory, DitherTone> = {
 const selectFields = ["status", "assignee", "priority", "size", "project"] as const satisfies readonly GroupField[];
 const isSelectField = (c: ColumnId): c is (typeof selectFields)[number] => (selectFields as readonly string[]).includes(c);
 
-export function TableView({
+// The options each cell offers. fieldOptions builds fresh lists on every read, so the table reads them once per
+// change to the board's people, labels, projects and status names, and every row shares them
+type CellOptions = Record<(typeof selectFields)[number] | "label", SelectOption[]>;
+const cellOptions = (version: number): CellOptions & { version: number } => ({
+  version,
+  status: fieldOptions.status,
+  assignee: fieldOptions.assignee,
+  priority: fieldOptions.priority,
+  size: fieldOptions.size,
+  project: fieldOptions.project,
+  label: fieldOptions.label,
+});
+
+const stickyGutter = "sticky left-0";
+const stickyTitle = { left: GUTTER } as const;
+// Cells past the title keep clear of the sticky gutter and title when scrolled to. The width lives in a CSS
+// variable on the table, so resizing the title column doesn't draw every row again
+const pastTitle = { scrollMarginLeft: "var(--sticky-width)" } as const;
+
+// The shadow along the title column's edge shows once the table scrolls sideways
+const seam = (
+  <span
+    aria-hidden
+    className="pointer-events-none absolute inset-y-0 -right-[5px] w-1 dither-50 opacity-0 transition-opacity [--dither:var(--ink)] group-data-[scrolled]/scroller:opacity-40"
+  />
+);
+
+const cellClass = (selectedRow: boolean) =>
+  cn(
+    "h-9 border-r border-b border-line p-0 align-middle outline-none",
+    "focus-within:shadow-[inset_0_0_0_2px_var(--lapis)] focus:shadow-[inset_0_0_0_2px_var(--lapis)]",
+    "group-data-[side=before]/row:shadow-[inset_0_2px_0_var(--lapis)] group-data-[side=after]/row:shadow-[inset_0_-2px_0_var(--lapis)]",
+    "scroll-mt-[4.5rem] scroll-mb-9",
+    selectedRow ? "bg-lapis-soft" : "bg-raised group-hover/row:bg-surface group-data-[state=open]/row:bg-surface",
+  );
+
+const points = (list: Task[]) => list.reduce((sum, t) => sum + (t.size ? sizePoints[t.size] : 0), 0);
+
+const sameDrop = (a: Drop | null, b: Drop | null) =>
+  a === b || (!!a && !!b && a.group === b.group && a.index === b.index && a.row === b.row && a.side === b.side);
+
+// What a row may ask of the table. The table hands every row the same object, whose methods always reach the
+// table's latest state, so a change to one task draws one row
+type RowApi = {
+  dispatch: (a: BoardAction) => void;
+  open: (id: string) => void;
+  setField: (ids: string[], field: GroupField, value: string) => void;
+  setDate: (field: "start" | "due", ids: string[], value: string | undefined) => void;
+  setLabels: (t: Task, next: string[]) => void;
+  rename: (t: Task, title: string) => void;
+  startRowDrag: (e: React.PointerEvent<HTMLElement>, id: string) => void;
+  toggleRow: (id: string, extend: boolean) => void;
+  focused: (row: string, col: ColumnId) => void;
+  edit: (id: string | null) => void;
+  focusCell: (row: string, col: ColumnId) => void;
+  justDropped: () => boolean;
+};
+
+function TableViewBody({
   state,
   dispatch,
   visible,
@@ -115,6 +174,8 @@ export function TableView({
   setPrefs: (patch: Partial<Prefs>) => void;
   filtered: boolean;
   onClearFilters: () => void;
+  /** Moves on when the board's people, labels or fields change, so what shows them is drawn again */
+  metaVersion?: number;
 }) {
   const { grouping, sort } = prefs;
   const today = useToday();
@@ -128,9 +189,14 @@ export function TableView({
   const [adding, setAdding] = useState<string | null>(null);
   const [resize, setResize] = useState<{ id: ColumnId; width: number } | null>(null);
   const [scrolledX, setScrolledX] = useState(false);
-  const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
+  // The row being dragged. The ghost under the pointer moves through its element, not through state
+  const [dragId, setDragId] = useState<string | null>(null);
+  const ghost = useRef<HTMLDivElement>(null);
+  const ghostAt = useRef({ x: 0, y: 0 });
   const [drop, setDrop] = useState<Drop | null>(null);
   const dropped = useRef(0);
+  const version = boardMetaVersion();
+  const opts = useMemo(() => cellOptions(version), [version]);
 
   const rows = useMemo(() => {
     const all = statuses.flatMap((s) => state.columns[s.id].map((id) => state.tasks[id])).filter((t) => t && visible(t));
@@ -162,15 +228,19 @@ export function TableView({
   }, [rows, grouping, prefs.filters, filtered]);
 
   const isCollapsed = (g: Group) => prefs.collapsed.includes(g.key);
-  const navRows = groups.flatMap((g) => (isCollapsed(g) ? [] : g.rows.map((r) => r.id)));
-  const rowIndex = new Map(navRows.map((id, i) => [id, i]));
+  const { navRows, rowIndex } = useMemo(() => {
+    const ids = groups.flatMap((g) => (prefs.collapsed.includes(g.key) ? [] : g.rows.map((r) => r.id)));
+    return { navRows: ids, rowIndex: new Map(ids.map((id, i) => [id, i])) };
+  }, [groups, prefs.collapsed]);
 
   const columns = withFieldColumns(prefs.columns);
   const cols = [
     ...columns.filter((c) => c.id === "title"),
     ...columns.filter((c) => c.id !== "title" && !c.hidden),
   ];
-  const colIds = cols.map((c) => c.id);
+  // Kept as one array while the columns shown stay the same, so rows don't draw again when a width changes
+  const colKey = cols.map((c) => c.id).join("|");
+  const colIds = useMemo(() => colKey.split("|") as ColumnId[], [colKey]);
   const widthOf = (c: ColumnPref) => (resize?.id === c.id ? resize.width : c.width);
   const titleWidth = widthOf(cols[0]);
   const restWidth = cols.slice(1).reduce((sum, c) => sum + widthOf(c), 0);
@@ -187,7 +257,6 @@ export function TableView({
       : navRows.length
         ? { row: navRows[0], col: "title" as ColumnId }
         : null;
-  const tabFor = (row: string, col: ColumnId) => (cursor?.row === row && cursor.col === col ? 0 : -1);
 
   const setField = (ids: string[], field: GroupField, value: string) => {
     const changed = ids.filter((id) => state.tasks[id] && valueOf(state.tasks[id], field)[0] !== value);
@@ -482,9 +551,16 @@ export function TableView({
       }
       return { group, index: Number(el.dataset.dropIndex ?? 0) };
     };
+    // Only a new place to land draws the table again, not every pointer move
     const show = () => {
-      target = locate();
-      setDrop(target);
+      const next = locate();
+      if (sameDrop(next, target)) return;
+      target = next;
+      setDrop(next);
+    };
+    const place = () => {
+      const el = ghost.current;
+      if (el) el.style.transform = `translate(${ghostAt.current.x + 14}px, ${ghostAt.current.y + 10}px)`;
     };
     // Near the top or bottom edge the table scrolls, faster the closer the pointer gets
     const tick = () => {
@@ -506,8 +582,10 @@ export function TableView({
         document.body.style.cursor = "grabbing";
         window.getSelection()?.removeAllRanges();
         frame = requestAnimationFrame(tick);
+        setDragId(id);
       }
-      setDrag({ id, x: ev.clientX, y: ev.clientY });
+      ghostAt.current = { x: ev.clientX, y: ev.clientY };
+      place();
       show();
     };
     const end = (commit: boolean) => {
@@ -519,7 +597,7 @@ export function TableView({
       if (!started) return;
       document.body.style.cursor = "";
       dropped.current = Date.now();
-      setDrag(null);
+      setDragId(null);
       setDrop(null);
       if (commit && target) {
         const action = planDrop(state, groups, id, target);
@@ -542,163 +620,69 @@ export function TableView({
 
   const setSort = (s: Prefs["sort"]) => setPrefs({ sort: s });
 
-  const points = (list: Task[]) => list.reduce((sum, t) => sum + (t.size ? sizePoints[t.size] : 0), 0);
-  const subtaskTotals = rows.reduce(
-    (acc, t) => [acc[0] + t.subtasks.filter((s) => s.done).length, acc[1] + t.subtasks.length],
-    [0, 0],
-  );
-  const overdue = rows.filter((t) => !closed(t.status) && dueState(t.due, today) === "overdue").length;
-  const assignees = [...new Set(rows.map((t) => t.assignee).filter(Boolean))].map((id) => personById(id)!);
-  const projectsUsed = new Set(rows.map((t) => t.project).filter(Boolean)).size;
-  const urgent = rows.filter((t) => t.priority === "urgent").length;
-  const byStatus = statuses.map((s) => ({ ...s, n: rows.filter((t) => t.status === s.id).length }));
-
-  const stickyGutter = "sticky left-0";
-  const stickyTitle = { left: GUTTER } as const;
-  const seam = (
-    <span
-      aria-hidden
-      className={cn(
-        "pointer-events-none absolute inset-y-0 -right-[5px] w-1 dither-50 transition-opacity [--dither:var(--ink)]",
-        scrolledX ? "opacity-40" : "opacity-0",
-      )}
-    />
+  const totals = useMemo(
+    () => ({
+      count: rows.length,
+      points: points(rows),
+      subtasks: rows.reduce(
+        (acc, t) => [acc[0] + t.subtasks.filter((s) => s.done).length, acc[1] + t.subtasks.length],
+        [0, 0],
+      ),
+      overdue: rows.filter((t) => !closed(t.status) && dueState(t.due, today) === "overdue").length,
+      assignees: [...new Set(rows.map((t) => t.assignee).filter(Boolean))].map((id) => personById(id)!),
+      projects: new Set(rows.map((t) => t.project).filter(Boolean)).size,
+      urgent: rows.filter((t) => t.priority === "urgent").length,
+      byStatus: statuses.map((s) => ({ ...s, n: rows.filter((t) => t.status === s.id).length })),
+    }),
+    [rows, today],
   );
 
-  const cellClass = (selectedRow: boolean) =>
-    cn(
-      "h-9 border-r border-b border-line p-0 align-middle outline-none",
-      "focus-within:shadow-[inset_0_0_0_2px_var(--lapis)] focus:shadow-[inset_0_0_0_2px_var(--lapis)]",
-      "group-data-[side=before]/row:shadow-[inset_0_2px_0_var(--lapis)] group-data-[side=after]/row:shadow-[inset_0_-2px_0_var(--lapis)]",
-      "scroll-mt-[4.5rem] scroll-mb-9",
-      selectedRow ? "bg-lapis-soft" : "bg-raised group-hover/row:bg-surface group-data-[state=open]/row:bg-surface",
-    );
-
-  const renderCell = (t: Task, col: ColumnId) => {
-    const tab = tabFor(t.id, col);
-    const label = `${metaOf(col).label} of ${t.id}`;
-    switch (col) {
-      case "status":
-      case "assignee":
-      case "priority":
-      case "size":
-      case "project":
-        return (
-          <Select
-            variant="cell"
-            tabIndex={tab}
-            aria-label={label}
-            value={valueOf(t, col)[0]}
-            onValueChange={(v) => setField([t.id], col, v)}
-            options={fieldOptions[col]}
-          />
-        );
-      case "due":
-        return (
-          <DatePicker
-            variant="cell"
-            due={!closed(t.status)}
-            tabIndex={tab}
-            aria-label={label}
-            placeholder=""
-            value={t.due}
-            onChange={(d) => setDue([t.id], d)}
-          />
-        );
-      case "start":
-        return (
-          <DatePicker
-            variant="cell"
-            tabIndex={tab}
-            aria-label={label}
-            placeholder=""
-            value={t.start}
-            onChange={(d) => setDate("start", [t.id], d)}
-          />
-        );
-      case "labels":
-        return (
-          <MultiSelect
-            variant="cell"
-            tabIndex={tab}
-            aria-label={label}
-            placeholder=""
-            searchPlaceholder="Find a label"
-            value={t.labels}
-            onValueChange={(next) => setLabels(t, next)}
-            options={fieldOptions.label}
-            renderValue={(chosen) =>
-              chosen.map((o) => (
-                <Badge key={o.value} tone={labelTone(o.value)}>
-                  {o.label}
-                </Badge>
-              ))
-            }
-          />
-        );
-      case "subtasks":
-        return (
-          <span onClick={() => onOpen(t.id)} className="flex h-full cursor-pointer items-center px-3 text-[11px] text-ink-3">
-            <SubtaskCells subtasks={t.subtasks} />
-          </span>
-        );
-      case "updated": {
-        const last = t.activity.at(-1);
-        return (
-          <span onClick={() => onOpen(t.id)} className="flex h-full cursor-pointer items-center px-3">
-            {last && now ? (
-              <Tooltip content={`${last.who} ${last.text}`}>
-                <span className="font-mono text-[11px] text-ink-3">{timeAgo(last.at, now)}</span>
-              </Tooltip>
-            ) : null}
-          </span>
-        );
-      }
-      case "updatedBy": {
-        const by = updatedBy(t);
-        const last = t.activity.at(-1);
-        return (
-          <span onClick={() => onOpen(t.id)} className="flex h-full min-w-0 cursor-pointer items-center gap-2 px-3">
-            {by && last ? (
-              <Tooltip content={`${by.who}${by.via ? ` via ${by.via}` : ""} ${last.text}`}>
-                <span className="flex min-w-0 items-center gap-2">
-                  <Avatar name={by.who} src={by.person?.avatar} tone={by.person?.tone} size="xs" />
-                  <span className="truncate text-sm">{by.who}</span>
-                  {by.via ? <span className="truncate text-[11px] text-ink-3">via {by.via}</span> : null}
-                </span>
-              </Tooltip>
-            ) : null}
-          </span>
-        );
-      }
-      case "title":
-        return null;
-      default: {
-        const f = fieldOf(col);
-        if (!f) return null;
-        if (f.type === "text" || f.type === "number")
-          return (
-            <span
-              onClick={() => onOpen(t.id)}
-              className={cn(
-                "flex h-full cursor-pointer items-center px-3 text-sm",
-                f.type === "number" && "justify-end font-mono text-[12px] tabular-nums",
-              )}
-            >
-              <span className="truncate">{customText(t, f)}</span>
-            </span>
-          );
-        return (
-          <CustomFieldInput
-            task={t}
-            field={f}
-            cell={{ tabIndex: tab, label }}
-            onChange={(custom, note) => dispatch({ type: "update", id: t.id, patch: { custom }, note })}
-          />
-        );
-      }
-    }
+  // Rows call back through one object that never changes, reaching whatever the table holds now
+  const handlers: RowApi = {
+    dispatch,
+    open: onOpen,
+    setField,
+    setDate,
+    setLabels,
+    rename,
+    startRowDrag,
+    toggleRow,
+    focused: (row, col) => {
+      if (active?.row !== row || active.col !== col) setActive({ row, col });
+    },
+    edit: setEditing,
+    focusCell,
+    justDropped: () => Date.now() - dropped.current < 250,
   };
+  const latest = useRef(handlers);
+  useLayoutEffect(() => {
+    latest.current = handlers;
+  });
+  const api = useMemo<RowApi>(
+    () => ({
+      dispatch: (a) => latest.current.dispatch(a),
+      open: (id) => latest.current.open(id),
+      setField: (ids, field, value) => latest.current.setField(ids, field, value),
+      setDate: (field, ids, value) => latest.current.setDate(field, ids, value),
+      setLabels: (t, next) => latest.current.setLabels(t, next),
+      rename: (t, title) => latest.current.rename(t, title),
+      startRowDrag: (e, id) => latest.current.startRowDrag(e, id),
+      toggleRow: (id, extend) => latest.current.toggleRow(id, extend),
+      focused: (row, col) => latest.current.focused(row, col),
+      edit: (id) => latest.current.edit(id),
+      focusCell: (row, col) => latest.current.focusCell(row, col),
+      justDropped: () => latest.current.justDropped(),
+    }),
+    [],
+  );
+
+  useLayoutEffect(() => {
+    const el = ghost.current;
+    if (dragId && el) el.style.transform = `translate(${ghostAt.current.x + 14}px, ${ghostAt.current.y + 10}px)`;
+  }, [dragId]);
+
+  // Only the "updated" column reads the clock, so rows only redraw each minute when it's shown
+  const rowNow = colIds.includes("updated") ? now : null;
 
   const headerCell = (c: ColumnPref, i: number) => {
     const meta = metaOf(c.id);
@@ -823,14 +807,20 @@ export function TableView({
           e.preventDefault();
           paste(cell.row, cell.col, e.clipboardData.getData("text/plain"));
         }}
-        className="min-h-0 flex-1 overflow-auto overscroll-contain"
+        data-scrolled={scrolledX || undefined}
+        className="group/scroller min-h-0 flex-1 overflow-auto overscroll-contain"
       >
         <table
           role="grid"
           aria-label="Tasks"
           aria-rowcount={navRows.length + 1}
           className="table-fixed border-separate border-spacing-0 text-sm"
-          style={{ width: `max(100%, calc(${GUTTER + TRAIL + restWidth}px + ${titleCss}))` }}
+          style={
+            {
+              width: `max(100%, calc(${GUTTER + TRAIL + restWidth}px + ${titleCss}))`,
+              "--sticky-width": stickyWidth,
+            } as React.CSSProperties
+          }
         >
           <colgroup>
             <col style={{ width: GUTTER }} />
@@ -936,106 +926,26 @@ export function TableView({
 
                   {collapsed
                     ? null
-                    : g.rows.map((t, i) => {
-                        const isSel = selSet.has(t.id);
-                        const n = (rowIndex.get(t.id) ?? 0) + 1;
-                        return (
-                          <TaskMenu key={t.id} task={t} dispatch={dispatch} onOpen={onOpen}>
-                            <tr
-                              className={cn("group/row", drag?.id === t.id && "opacity-40")}
-                              aria-selected={isSel}
-                              aria-rowindex={n + 1}
-                              data-drop={g.key}
-                              data-drop-row={t.id}
-                              data-drop-index={i}
-                              data-side={drop?.row === t.id ? drop.side : undefined}
-                            >
-                              <td
-                                onPointerDown={(e) => startRowDrag(e, t.id)}
-                                title={sort ? "Clear the sort to drag rows" : "Drag to move"}
-                                className={cn(cellClass(isSel), stickyGutter, "z-[5] border-r-0", !sort && "cursor-grab")}
-                              >
-                                <span className="relative grid h-full place-items-center">
-                                  {sort ? null : (
-                                    <Icon
-                                      name="grip"
-                                      size="sm"
-                                      aria-hidden
-                                      className="absolute left-0 text-ink-3 opacity-0 group-hover/row:opacity-100 pointer-coarse:hidden"
-                                    />
-                                  )}
-                                  <span
-                                    className={cn(
-                                      "font-mono text-[11px] text-ink-3 tabular-nums group-hover/row:invisible pointer-coarse:invisible",
-                                      sel.length && "invisible",
-                                    )}
-                                  >
-                                    {n}
-                                  </span>
-                                  <Checkbox
-                                    tabIndex={-1}
-                                    aria-label={`Select ${t.id}`}
-                                    checked={isSel}
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      // The end of a drag isn't a click
-                                      if (Date.now() - dropped.current < 250) return;
-                                      toggleRow(t.id, e.shiftKey);
-                                    }}
-                                    className={cn(
-                                      "absolute opacity-0 group-hover/row:opacity-100 pointer-coarse:opacity-100",
-                                      sel.length && "opacity-100",
-                                    )}
-                                  />
-                                </span>
-                              </td>
-
-                              {cols.map((c, i) => {
-                                const title = c.id === "title";
-                                return (
-                                  <td
-                                    key={c.id}
-                                    data-row={t.id}
-                                    data-col={c.id}
-                                    tabIndex={
-                                      c.id === "subtasks" || c.id === "updated" || c.id === "updatedBy"
-                                        ? tabFor(t.id, c.id)
-                                        : undefined
-                                    }
-                                    onFocus={() =>
-                                      (active?.row !== t.id || active.col !== c.id) && setActive({ row: t.id, col: c.id })
-                                    }
-                                    style={title ? stickyTitle : { scrollMarginLeft: stickyWidth }}
-                                    className={cn(cellClass(isSel), title && "sticky z-[5]")}
-                                  >
-                                    {title ? (
-                                      <TitleCell
-                                        task={t}
-                                        tabIndex={tabFor(t.id, "title")}
-                                        editing={editing === t.id}
-                                        onEdit={() => setEditing(t.id)}
-                                        onDone={(value, fromKeyboard) => {
-                                          if (value !== null) rename(t, value);
-                                          setEditing(null);
-                                          if (fromKeyboard) requestAnimationFrame(() => focusCell(t.id, "title"));
-                                        }}
-                                        onOpen={() => onOpen(t.id)}
-                                      />
-                                    ) : (
-                                      renderCell(t, c.id)
-                                    )}
-                                    {i === 0 ? seam : null}
-                                  </td>
-                                );
-                              })}
-                              <td
-                                onClick={() => onOpen(t.id)}
-                                className={cn(cellClass(isSel), "cursor-pointer border-r-0")}
-                              />
-                            </tr>
-                          </TaskMenu>
-                        );
-                      })}
+                    : g.rows.map((t, i) => (
+                        <TableRow
+                          key={t.id}
+                          task={t}
+                          index={i}
+                          n={(rowIndex.get(t.id) ?? 0) + 1}
+                          group={g.key}
+                          selected={selSet.has(t.id)}
+                          anySelected={sel.length > 0}
+                          sorted={Boolean(sort)}
+                          dragging={dragId === t.id}
+                          side={drop?.row === t.id ? drop.side : undefined}
+                          colIds={colIds}
+                          cursorCol={cursor?.row === t.id ? cursor.col : null}
+                          editing={editing === t.id}
+                          now={rowNow}
+                          opts={opts}
+                          api={api}
+                        />
+                      ))}
 
                   {collapsed ? null : (
                     <AddRow
@@ -1069,17 +979,7 @@ export function TableView({
                       i === 0 ? "z-30" : "z-20",
                     )}
                   >
-                    <FooterCell
-                      col={c.id}
-                      count={rows.length}
-                      byStatus={byStatus}
-                      points={points(rows)}
-                      subtasks={subtaskTotals}
-                      overdue={overdue}
-                      assignees={assignees}
-                      projects={projectsUsed}
-                      urgent={urgent}
-                    />
+                    <FooterCell col={c.id} {...totals} />
                     {i === 0 ? seam : null}
                   </td>
                 ))}
@@ -1122,19 +1022,275 @@ export function TableView({
         />
       ) : null}
 
-      {drag && state.tasks[drag.id] ? (
+      {dragId && state.tasks[dragId] ? (
         <div
+          ref={ghost}
           aria-hidden
-          className="pointer-events-none fixed z-50 flex max-w-80 items-center gap-2.5 border border-ink bg-raised px-2.5 py-1.5 text-sm shadow-[3px_3px_0_var(--line-strong)]"
-          style={{ left: drag.x + 14, top: drag.y + 10 }}
+          className="pointer-events-none fixed top-0 left-0 z-50 flex max-w-80 items-center gap-2.5 border border-ink bg-raised px-2.5 py-1.5 text-sm shadow-[3px_3px_0_var(--line-strong)] will-change-transform"
         >
-          <span className="font-mono text-[11px] text-ink-3">{drag.id}</span>
-          <span className="truncate">{state.tasks[drag.id].title}</span>
+          <span className="font-mono text-[11px] text-ink-3">{dragId}</span>
+          <span className="truncate">{state.tasks[dragId].title}</span>
         </div>
       ) : null}
     </div>
   );
 }
+
+type RowProps = {
+  task: Task;
+  // Its place in its group, for drops, and in the whole table, for its number
+  index: number;
+  n: number;
+  group: string;
+  selected: boolean;
+  anySelected: boolean;
+  sorted: boolean;
+  dragging: boolean;
+  side?: "before" | "after";
+  colIds: ColumnId[];
+  // The column holding the keyboard cursor, when it's on this row
+  cursorCol: ColumnId | null;
+  editing: boolean;
+  now: number | null;
+  opts: CellOptions;
+  api: RowApi;
+};
+
+// One task's row. It only draws again when something it shows changes, so moving the cursor, ticking a row or
+// editing one task leaves the rest alone
+const TableRow = memo(function TableRow({
+  task: t,
+  index,
+  n,
+  group,
+  selected,
+  anySelected,
+  sorted,
+  dragging,
+  side,
+  colIds,
+  cursorCol,
+  editing,
+  now,
+  opts,
+  api,
+}: RowProps) {
+  const tabFor = (col: ColumnId) => (cursorCol === col ? 0 : -1);
+
+  const cell = (col: ColumnId) => {
+    const tab = tabFor(col);
+    const label = `${metaOf(col).label} of ${t.id}`;
+    switch (col) {
+      case "status":
+      case "assignee":
+      case "priority":
+      case "size":
+      case "project":
+        return (
+          <Select
+            variant="cell"
+            tabIndex={tab}
+            aria-label={label}
+            value={valueOf(t, col)[0]}
+            onValueChange={(v) => api.setField([t.id], col, v)}
+            options={opts[col]}
+          />
+        );
+      case "due":
+        return (
+          <DatePicker
+            variant="cell"
+            due={!closed(t.status)}
+            tabIndex={tab}
+            aria-label={label}
+            placeholder=""
+            value={t.due}
+            onChange={(d) => api.setDate("due", [t.id], d)}
+          />
+        );
+      case "start":
+        return (
+          <DatePicker
+            variant="cell"
+            tabIndex={tab}
+            aria-label={label}
+            placeholder=""
+            value={t.start}
+            onChange={(d) => api.setDate("start", [t.id], d)}
+          />
+        );
+      case "labels":
+        return (
+          <MultiSelect
+            variant="cell"
+            tabIndex={tab}
+            aria-label={label}
+            placeholder=""
+            searchPlaceholder="Find a label"
+            value={t.labels}
+            onValueChange={(next) => api.setLabels(t, next)}
+            options={opts.label}
+            renderValue={(chosen) =>
+              chosen.map((o) => (
+                <Badge key={o.value} tone={labelTone(o.value)}>
+                  {o.label}
+                </Badge>
+              ))
+            }
+          />
+        );
+      case "subtasks":
+        return (
+          <span onClick={() => api.open(t.id)} className="flex h-full cursor-pointer items-center px-3 text-[11px] text-ink-3">
+            <SubtaskCells subtasks={t.subtasks} />
+          </span>
+        );
+      case "updated": {
+        const last = t.activity.at(-1);
+        return (
+          <span onClick={() => api.open(t.id)} className="flex h-full cursor-pointer items-center px-3">
+            {last && now ? (
+              <Tooltip content={`${last.who} ${last.text}`}>
+                <span className="font-mono text-[11px] text-ink-3">{timeAgo(last.at, now)}</span>
+              </Tooltip>
+            ) : null}
+          </span>
+        );
+      }
+      case "updatedBy": {
+        const by = updatedBy(t);
+        const last = t.activity.at(-1);
+        return (
+          <span onClick={() => api.open(t.id)} className="flex h-full min-w-0 cursor-pointer items-center gap-2 px-3">
+            {by && last ? (
+              <Tooltip content={`${by.who}${by.via ? ` via ${by.via}` : ""} ${last.text}`}>
+                <span className="flex min-w-0 items-center gap-2">
+                  <Avatar name={by.who} src={by.person?.avatar} tone={by.person?.tone} size="xs" />
+                  <span className="truncate text-sm">{by.who}</span>
+                  {by.via ? <span className="truncate text-[11px] text-ink-3">via {by.via}</span> : null}
+                </span>
+              </Tooltip>
+            ) : null}
+          </span>
+        );
+      }
+      case "title":
+        return null;
+      default: {
+        const f = fieldOf(col);
+        if (!f) return null;
+        if (f.type === "text" || f.type === "number")
+          return (
+            <span
+              onClick={() => api.open(t.id)}
+              className={cn(
+                "flex h-full cursor-pointer items-center px-3 text-sm",
+                f.type === "number" && "justify-end font-mono text-[12px] tabular-nums",
+              )}
+            >
+              <span className="truncate">{customText(t, f)}</span>
+            </span>
+          );
+        return (
+          <CustomFieldInput
+            task={t}
+            field={f}
+            cell={{ tabIndex: tab, label }}
+            onChange={(custom, note) => api.dispatch({ type: "update", id: t.id, patch: { custom }, note })}
+          />
+        );
+      }
+    }
+  };
+
+  return (
+    <TaskMenu task={t} dispatch={api.dispatch} onOpen={api.open}>
+      <tr
+        className={cn("group/row", dragging && "opacity-40")}
+        aria-selected={selected}
+        aria-rowindex={n + 1}
+        data-drop={group}
+        data-drop-row={t.id}
+        data-drop-index={index}
+        data-side={side}
+      >
+        <td
+          onPointerDown={(e) => api.startRowDrag(e, t.id)}
+          title={sorted ? "Clear the sort to drag rows" : "Drag to move"}
+          className={cn(cellClass(selected), stickyGutter, "z-[5] border-r-0", !sorted && "cursor-grab")}
+        >
+          <span className="relative grid h-full place-items-center">
+            {sorted ? null : (
+              <Icon
+                name="grip"
+                size="sm"
+                aria-hidden
+                className="absolute left-0 text-ink-3 opacity-0 group-hover/row:opacity-100 pointer-coarse:hidden"
+              />
+            )}
+            <span
+              className={cn(
+                "font-mono text-[11px] text-ink-3 tabular-nums group-hover/row:invisible pointer-coarse:invisible",
+                anySelected && "invisible",
+              )}
+            >
+              {n}
+            </span>
+            <Checkbox
+              tabIndex={-1}
+              aria-label={`Select ${t.id}`}
+              checked={selected}
+              onClick={(e) => {
+                e.preventDefault();
+                // The end of a drag isn't a click
+                if (api.justDropped()) return;
+                api.toggleRow(t.id, e.shiftKey);
+              }}
+              className={cn(
+                "absolute opacity-0 group-hover/row:opacity-100 pointer-coarse:opacity-100",
+                anySelected && "opacity-100",
+              )}
+            />
+          </span>
+        </td>
+
+        {colIds.map((col, i) => {
+          const title = col === "title";
+          return (
+            <td
+              key={col}
+              data-row={t.id}
+              data-col={col}
+              tabIndex={col === "subtasks" || col === "updated" || col === "updatedBy" ? tabFor(col) : undefined}
+              onFocus={() => api.focused(t.id, col)}
+              style={title ? stickyTitle : pastTitle}
+              className={cn(cellClass(selected), title && "sticky z-[5]")}
+            >
+              {title ? (
+                <TitleCell
+                  task={t}
+                  tabIndex={tabFor("title")}
+                  editing={editing}
+                  onEdit={() => api.edit(t.id)}
+                  onDone={(value, fromKeyboard) => {
+                    if (value !== null) api.rename(t, value);
+                    api.edit(null);
+                    if (fromKeyboard) requestAnimationFrame(() => api.focusCell(t.id, "title"));
+                  }}
+                  onOpen={() => api.open(t.id)}
+                />
+              ) : (
+                cell(col)
+              )}
+              {i === 0 ? seam : null}
+            </td>
+          );
+        })}
+        <td onClick={() => api.open(t.id)} className={cn(cellClass(selected), "cursor-pointer border-r-0")} />
+      </tr>
+    </TaskMenu>
+  );
+});
 
 function TitleCell({
   task,
@@ -1487,3 +1643,6 @@ function BulkBar({
     </div>
   );
 }
+
+// Drawn again only when what it shows changes, not each time the page around it does
+export const TableView = memo(TableViewBody);

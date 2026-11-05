@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import { StatusMarker } from "@/components/markers";
 import { Combobox } from "@/components/ui/combobox";
 import { Segmented, Switch } from "@/components/ui/controls";
@@ -72,7 +72,7 @@ const month = (iso?: string) => {
 };
 type Mode = "manage" | "customize" | "preview";
 
-export function PublicRoadmap({
+function PublicRoadmapBody({
   state,
   dispatch,
   visible,
@@ -87,6 +87,8 @@ export function PublicRoadmap({
   // A live board's id, for its roadmap API keys. The demo has none
   boardId?: string;
   canManage?: boolean;
+  /** Moves on when the board's people, labels or fields change, so what shows them is drawn again */
+  metaVersion?: number;
 }) {
   const [mode, setMode] = useState<Mode>("manage");
   const isPublic = state.roadmap.public;
@@ -1412,3 +1414,6 @@ function Frame({ url, phone, children }: { url: string; phone?: boolean; childre
     </DitherShadow>
   );
 }
+
+// Drawn again only when what it shows changes, not each time the page around it does
+export const PublicRoadmap = memo(PublicRoadmapBody);

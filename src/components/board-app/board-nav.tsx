@@ -34,7 +34,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { inOrder, setBoardOrder, useBoardOrder } from "@/lib/account-prefs";
 import { boardIcon } from "@/lib/board-icons";
 import { addBoard, removeBoard, saveBoard } from "@/lib/board-actions";
-import { boardPath, cachedBoard, useCounts } from "@/lib/board-cache";
+import { boardPath, peekBoard, useCounts } from "@/lib/board-cache";
 import { useBoardEdits } from "@/lib/board-edits";
 import { can, isManager, type BoardSummary, type LiveBoard } from "@/lib/live";
 import { publicHref } from "@/lib/slugs";
@@ -174,7 +174,7 @@ export function BoardLinks({
 
   const editable = (b: BoardSummary) => {
     if (b.id === live.board.id) return live.board;
-    const cached = cachedBoard(boardPath(ws, b.slug))?.board;
+    const cached = peekBoard(boardPath(ws, b.slug))?.board;
     return {
       id: b.id,
       slug: b.slug,

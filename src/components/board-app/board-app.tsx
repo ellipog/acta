@@ -2,7 +2,16 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { Dialog as D } from "radix-ui";
 import { Icon, type IconName } from "@/components/ui/icons";
 import {
@@ -12,6 +21,7 @@ import {
   me,
   nextTaskId,
   people,
+  boardMetaVersion,
   seedBoard,
   setBoardMeta,
   statusTitle,
@@ -151,8 +161,9 @@ export function BoardApp({
   useEffect(() => {
     if (incoming) settleEdits(incoming);
   }, [incoming, edits]);
-  const meta = live ? metaFor(live) : demoMeta;
+  const meta = useMemo(() => (live ? metaFor(live) : demoMeta), [live]);
   setBoardMeta(meta);
+  const metaVersion = boardMetaVersion();
   // Boards you left stay mounted out of sight for a while, and one could have set its own people and labels
   // since. Showing this one again puts its own back
   useLayoutEffect(() => setBoardMeta(meta));
@@ -163,10 +174,16 @@ export function BoardApp({
   const { status, here, knownAt } = useBoardSync(live, state, rawDispatch);
   useWorkspace(full ? live : undefined);
   const liveId = live?.board.id;
-  const taskCount = Object.values(state.tasks).filter((t) => !t.archived).length;
-  const mineCount = Object.values(state.tasks).filter(
-    (t) => !t.archived && t.assignee === me.id && !closed(t.status),
-  ).length;
+  const { taskCount, mineCount } = useMemo(() => {
+    let all = 0;
+    let mine = 0;
+    for (const t of Object.values(state.tasks)) {
+      if (t.archived) continue;
+      all++;
+      if (t.assignee === me.id && !closed(t.status)) mine++;
+    }
+    return { taskCount: all, mineCount: mine };
+  }, [state.tasks]);
   useEffect(() => {
     if (liveId) setCount(liveId, taskCount);
   }, [liveId, taskCount]);
@@ -183,8 +200,15 @@ export function BoardApp({
   const allowed = useCallback((p: Permission) => !role || can(role, permissions, p), [role, permissions]);
   const refused = useRef(0);
 
+  // One dispatch for the board's whole life. It reads the latest state through a ref, so the views and every
+  // memoized row and card they hold aren't drawn again just because the board changed somewhere else
+  const current = useRef({ state, depth: demo.past.length, allowed });
+  useLayoutEffect(() => {
+    current.current = { state, depth: demo.past.length, allowed };
+  });
   const dispatch = useCallback(
     (action: DemoAction) => {
+      const { state, depth, allowed } = current.current;
       const missing = needs(action, state).find((p) => !allowed(p));
       if (missing) {
         // Typing in a field sends a change with each key, so the reason shows once rather than with every one
@@ -194,7 +218,6 @@ export function BoardApp({
         return;
       }
       if (action.type === "bulk" && "archived" in action.patch) {
-        const depth = demo.past.length;
         const one = action.ids.length === 1;
         const on = Boolean(action.patch.archived);
         toast({
@@ -204,7 +227,6 @@ export function BoardApp({
           action: { label: "Undo", onClick: () => rawDispatch({ type: "undoTo", depth }) },
         });
       } else if (action.type === "delete" || action.type === "bulk") {
-        const depth = demo.past.length;
         const one = action.ids.length === 1;
         toast({
           icon: action.type === "delete" ? "trash" : "check",
@@ -225,7 +247,7 @@ export function BoardApp({
       }
       rawDispatch(action);
     },
-    [demo.past.length, state, allowed],
+    [],
   );
 
   const undo = useCallback(() => {
@@ -382,25 +404,39 @@ export function BoardApp({
   }, [full, createTask, undo, redo, setPrefs]);
 
   const filters = prefs.filters;
+  // The box shows each key at once. The views filter on the deferred copy, so React can draw them between keys
+  // instead of making typing wait on every card and row
+  const searching = useDeferredValue(query);
   const found = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = searching.trim().toLowerCase();
     return (t: Task) =>
       !q ||
       t.title.toLowerCase().includes(q) ||
       t.id.toLowerCase().includes(q) ||
       (t.project ?? "").toLowerCase().includes(q);
-  }, [query]);
+  }, [searching]);
   const visible = useMemo(() => (t: Task) => found(t) && matches(t, filters), [found, filters]);
   // Archived work stays on the public roadmap, so its preview shows it too
   const onRoadmap = useMemo(() => (t: Task) => found(t) && matches(t, { ...filters, archived: true }), [found, filters]);
 
+  // The task dialog steps through what the view shows, in board order
+  const dialogOrder = useMemo(
+    () =>
+      dialogUsed
+        ? Object.values(state.columns)
+            .flat()
+            .filter((id) => state.tasks[id] && visible(state.tasks[id]))
+        : [],
+    [dialogUsed, state.columns, state.tasks, visible],
+  );
+
   const filterCount = Object.keys(tidyFilters(filters)).length;
-  const filtered = Boolean(query.trim()) || filterCount > 0;
+  const filtered = Boolean(searching.trim()) || filterCount > 0;
   const setFilter = (field: FilterField, values: string[]) => setPrefs({ filters: { ...filters, [field]: values } });
-  const clearFilters = () => {
+  const clearFilters = useCallback(() => {
     setQuery("");
     setPrefs({ filters: {} });
-  };
+  }, [setPrefs]);
 
   // Filters are for the visit at hand unless someone saves them for the board
   const boardName = live ? live.board.name : demoBoard;
@@ -795,6 +831,7 @@ export function BoardApp({
                 setPrefs={setPrefs}
                 filtered={filtered}
                 onClearFilters={clearFilters}
+                metaVersion={metaVersion}
               />
             ) : prefs.view === "board" ? (
               <BoardView
@@ -804,6 +841,7 @@ export function BoardApp({
                 onOpen={setOpenId}
                 prefs={prefs}
                 setPrefs={setPrefs}
+                metaVersion={metaVersion}
               />
             ) : prefs.view === "roadmap" ? (
               <TimelineView
@@ -815,6 +853,7 @@ export function BoardApp({
                 setPrefs={setPrefs}
                 filtered={filtered}
                 onClearFilters={clearFilters}
+                metaVersion={metaVersion}
               />
             ) : (
               <PublicRoadmap
@@ -824,6 +863,7 @@ export function BoardApp({
                 onOpen={setOpenId}
                 boardId={liveId}
                 canManage={allowed("roadmap")}
+                metaVersion={metaVersion}
               />
             )}
           </main>
@@ -834,9 +874,7 @@ export function BoardApp({
             task={openId ? (state.tasks[openId] ?? null) : null}
             dispatch={dispatch}
             onClose={() => setOpenId(null)}
-            order={Object.values(state.columns)
-              .flat()
-              .filter((id) => state.tasks[id] && visible(state.tasks[id]))}
+            order={dialogOrder}
             onOpen={setOpenId}
             canEdit={canEdit}
           />
@@ -876,18 +914,7 @@ function Presence({ visitors }: { visitors?: Visitor[] }) {
   );
 }
 
-function FilterMenu({
-  state,
-  filters,
-  setFilter,
-  setFilters,
-  count,
-  onClear,
-  unsaved,
-  kept,
-  onSave,
-  onForget,
-}: {
+type FilterMenuProps = {
   state: BoardState;
   filters: Filters;
   setFilter: (field: FilterField, values: string[]) => void;
@@ -898,87 +925,113 @@ function FilterMenu({
   kept: boolean;
   onSave: () => void;
   onForget: () => void;
-}) {
+};
+
+// The menu counts every option against every task, so that only happens while it's open
+function FilterMenu(props: FilterMenuProps) {
+  const [open, setOpen] = useState(false);
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger className={tool(props.count > 0)}>
+        <Icon name="filter" size="sm" />
+        <span className="hidden @2xl:inline">Filter</span>
+        {props.count ? (
+          <span className="grid h-4 min-w-4 place-items-center bg-lapis px-1 font-mono text-[10px] text-on-accent">
+            {props.count}
+          </span>
+        ) : null}
+      </DropdownMenuTrigger>
+      {open ? <FilterMenuItems {...props} /> : null}
+    </DropdownMenu>
+  );
+}
+
+function FilterMenuItems({
+  state,
+  filters,
+  setFilter,
+  setFilters,
+  count,
+  onClear,
+  unsaved,
+  kept,
+  onSave,
+  onForget,
+}: FilterMenuProps) {
   const everything = Object.values(state.tasks);
   const all = filters.archived ? everything : everything.filter((t) => !t.archived);
   const archived = everything.length - everything.filter((t) => !t.archived).length;
   const finished = all.filter((t) => closed(t.status)).length;
+  // How many tasks hold each value of each field, in one pass
+  const tally = new Map<string, number>();
+  for (const t of all)
+    for (const f of filterFields)
+      for (const v of valueOf(t, f)) tally.set(`${f}:${v}`, (tally.get(`${f}:${v}`) ?? 0) + 1);
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger className={tool(count > 0)}>
-        <Icon name="filter" size="sm" />
-        <span className="hidden @2xl:inline">Filter</span>
-        {count ? (
-          <span className="grid h-4 min-w-4 place-items-center bg-lapis px-1 font-mono text-[10px] text-on-accent">
-            {count}
-          </span>
-        ) : null}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuCheckboxItem
-          checked={Boolean(filters.hideDone)}
-          onCheckedChange={(on) => setFilters({ hideDone: on })}
-          onSelect={(e) => e.preventDefault()}
-        >
-          <Icon name="eye-off" /> Hide done
-          <span className="ml-auto pl-2 font-mono text-[11px] text-ink-3">{finished}</span>
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={Boolean(filters.archived)}
-          onCheckedChange={(on) => setFilters({ archived: on })}
-          onSelect={(e) => e.preventDefault()}
-        >
-          <Icon name="archive" /> Show archived
-          <span className="ml-auto pl-2 font-mono text-[11px] text-ink-3">{archived}</span>
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel>Filter by</DropdownMenuLabel>
-        {filterFields.map((f) => {
-          const on = filters[f] ?? [];
-          return (
-            <DropdownMenuSub key={f}>
-              <DropdownMenuSubTrigger>
-                <Icon name={fieldIcon[f]} /> {fieldLabel[f]}
-                {on.length ? <span className="font-mono text-[11px] text-lapis">{on.length}</span> : null}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-56">
-                {fieldOptions[f].map((o) => (
-                  <DropdownMenuCheckboxItem
-                    key={o.value}
-                    checked={on.includes(o.value)}
-                    onCheckedChange={(checked) =>
-                      setFilter(f, checked ? [...on, o.value] : on.filter((v) => v !== o.value))
-                    }
-                  >
-                    {o.icon}
-                    <span className={cn("truncate", o.muted && "text-ink-3")}>{o.label}</span>
-                    <span className="ml-auto pl-2 font-mono text-[11px] text-ink-3">
-                      {all.filter((t) => valueOf(t, f).includes(o.value)).length}
-                    </span>
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-          );
-        })}
-        {count || kept ? <DropdownMenuSeparator /> : null}
-        {count && unsaved ? (
-          <DropdownMenuItem onSelect={onSave}>
-            <Icon name="check" /> Save filters for this board
-          </DropdownMenuItem>
-        ) : null}
-        {kept ? (
-          <DropdownMenuItem onSelect={onForget}>
-            <Icon name="reset" /> Forget saved filters
-          </DropdownMenuItem>
-        ) : null}
-        {count ? (
-          <DropdownMenuItem onSelect={onClear}>
-            <Icon name="x" /> Clear filters
-          </DropdownMenuItem>
-        ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <DropdownMenuContent align="end" className="w-52">
+      <DropdownMenuCheckboxItem
+        checked={Boolean(filters.hideDone)}
+        onCheckedChange={(on) => setFilters({ hideDone: on })}
+        onSelect={(e) => e.preventDefault()}
+      >
+        <Icon name="eye-off" /> Hide done
+        <span className="ml-auto pl-2 font-mono text-[11px] text-ink-3">{finished}</span>
+      </DropdownMenuCheckboxItem>
+      <DropdownMenuCheckboxItem
+        checked={Boolean(filters.archived)}
+        onCheckedChange={(on) => setFilters({ archived: on })}
+        onSelect={(e) => e.preventDefault()}
+      >
+        <Icon name="archive" /> Show archived
+        <span className="ml-auto pl-2 font-mono text-[11px] text-ink-3">{archived}</span>
+      </DropdownMenuCheckboxItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel>Filter by</DropdownMenuLabel>
+      {filterFields.map((f) => {
+        const on = filters[f] ?? [];
+        return (
+          <DropdownMenuSub key={f}>
+            <DropdownMenuSubTrigger>
+              <Icon name={fieldIcon[f]} /> {fieldLabel[f]}
+              {on.length ? <span className="font-mono text-[11px] text-lapis">{on.length}</span> : null}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-56">
+              {fieldOptions[f].map((o) => (
+                <DropdownMenuCheckboxItem
+                  key={o.value}
+                  checked={on.includes(o.value)}
+                  onCheckedChange={(checked) =>
+                    setFilter(f, checked ? [...on, o.value] : on.filter((v) => v !== o.value))
+                  }
+                >
+                  {o.icon}
+                  <span className={cn("truncate", o.muted && "text-ink-3")}>{o.label}</span>
+                  <span className="ml-auto pl-2 font-mono text-[11px] text-ink-3">
+                    {tally.get(`${f}:${o.value}`) ?? 0}
+                  </span>
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        );
+      })}
+      {count || kept ? <DropdownMenuSeparator /> : null}
+      {count && unsaved ? (
+        <DropdownMenuItem onSelect={onSave}>
+          <Icon name="check" /> Save filters for this board
+        </DropdownMenuItem>
+      ) : null}
+      {kept ? (
+        <DropdownMenuItem onSelect={onForget}>
+          <Icon name="reset" /> Forget saved filters
+        </DropdownMenuItem>
+      ) : null}
+      {count ? (
+        <DropdownMenuItem onSelect={onClear}>
+          <Icon name="x" /> Clear filters
+        </DropdownMenuItem>
+      ) : null}
+    </DropdownMenuContent>
   );
 }
 
@@ -1131,6 +1184,23 @@ function SaveState({ status }: { status: SaveStatus }) {
   );
 }
 
+// The newest things other people did, newest first. One pass keeps the few newest, so nothing else on the board
+// is copied or sorted
+function latestActivity(tasks: BoardState["tasks"], limit: number) {
+  const top: (Task["activity"][number] & { task: Task })[] = [];
+  for (const t of Object.values(tasks)) {
+    for (const a of t.activity) {
+      if (top.length === limit && a.at <= top[limit - 1].at) continue;
+      if (a.who === me.name) continue;
+      let at = top.length;
+      while (at > 0 && top[at - 1].at < a.at) at--;
+      top.splice(at, 0, { ...a, task: t });
+      if (top.length > limit) top.pop();
+    }
+  }
+  return top;
+}
+
 function Inbox({
   state,
   onOpenTask,
@@ -1142,11 +1212,7 @@ function Inbox({
 }) {
   const now = useNow();
   const [seen, setSeen] = useState(0);
-  const feed = Object.values(state.tasks)
-    .flatMap((t) => t.activity.map((a) => ({ ...a, task: t })))
-    .filter((a) => a.who !== me.name)
-    .sort((a, b) => b.at - a.at)
-    .slice(0, 12);
+  const feed = useMemo(() => latestActivity(state.tasks, 12), [state.tasks]);
   const unread = now ? feed.filter((a) => a.at > seen && now - a.at < 2 * 86_400_000).length : 0;
 
   return (

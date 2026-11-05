@@ -29,28 +29,52 @@ export function newKey() {
 let db: ReturnType<typeof createAdminClient> | null = null;
 export const agentDb = () => (db ??= createAdminClient());
 
+// Keys that worked lately, by hash, so an agent's every call (initialize and tools/list included) doesn't look its
+// key up again. A key revoked or changed meanwhile can keep reading for up to 30 seconds; writes stay safe, since
+// agent_apply and agent_board check the key in the database each time. Keys that don't work aren't kept, so a new
+// one works at once
+const keyTtl = 30_000;
+const keyCap = 500;
+const recent = new Map<string, { agent: Agent; at: number; usedAt: number }>();
+
 export async function verifyKey(token: string): Promise<Agent | null> {
   if (!shape.test(token)) return null;
   const hash = keyHash(token);
-  const { data } = await agentDb()
-    .from("agent_keys")
-    .select("id, user_id, name, access, workspaces, used_at")
-    .eq("hash", hash)
-    .maybeSingle();
-  if (!data) return null;
+  const now = Date.now();
+  const cached = recent.get(hash);
+  let hit = cached && now - cached.at < keyTtl ? cached : undefined;
+  if (!hit) {
+    const { data } = await agentDb()
+      .from("agent_keys")
+      .select("id, user_id, name, access, workspaces, used_at")
+      .eq("hash", hash)
+      .maybeSingle();
+    recent.delete(hash);
+    if (!data) return null;
+    const agent: Agent = {
+      keyId: data.id,
+      hash,
+      userId: data.user_id,
+      name: data.name,
+      access: data.access as Access,
+      workspaces: data.workspaces,
+    };
+    // A write this server queued may not have landed when the key is read again
+    const usedAt = Math.max(data.used_at ? Date.parse(data.used_at) : 0, cached?.usedAt ?? 0);
+    hit = { agent, at: now, usedAt };
+    // Kept oldest first, so the first is the one to let go
+    if (recent.size >= keyCap) recent.delete(recent.keys().next().value!);
+    recent.set(hash, hit);
+  }
   // Close enough for "last used", without a write on every call
-  if (!data.used_at || Date.now() - Date.parse(data.used_at) > 10 * 60_000)
+  if (now - hit.usedAt > 10 * 60_000) {
+    hit.usedAt = now;
+    const id = hit.agent.keyId;
     after(async () => {
-      await agentDb().from("agent_keys").update({ used_at: new Date().toISOString() }).eq("id", data.id);
+      await agentDb().from("agent_keys").update({ used_at: new Date().toISOString() }).eq("id", id);
     });
-  return {
-    keyId: data.id,
-    hash,
-    userId: data.user_id,
-    name: data.name,
-    access: data.access as Access,
-    workspaces: data.workspaces,
-  };
+  }
+  return { ...hit.agent };
 }
 
 const refuse = (status: number, message: string) =>

@@ -646,15 +646,12 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
     case "board": {
       const keepPublic = pending && pending.roadmap.public !== state.roadmap.public;
       const keepPage = pending && pending.roadmap.page !== state.roadmap.page;
-      return {
-        ...state,
-        next: Math.max(state.next, c.next ?? 0),
-        roadmap: {
-          ...state.roadmap,
-          public: keepPublic || c.public === undefined ? state.roadmap.public : c.public,
-          page: keepPage || !c.page ? state.roadmap.page : c.page,
-        },
-      };
+      const next = Math.max(state.next, c.next ?? 0);
+      const isPublic = keepPublic || c.public === undefined ? state.roadmap.public : c.public;
+      // Every task created bumps the board's row, so an unchanged page keeps its object and nothing redraws
+      const page = keepPage || !c.page || same(c.page, state.roadmap.page) ? state.roadmap.page : c.page;
+      if (next === state.next && isPublic === state.roadmap.public && page === state.roadmap.page) return state;
+      return { ...state, next, roadmap: { ...state.roadmap, public: isPublic, page } };
     }
   }
 }

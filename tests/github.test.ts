@@ -16,6 +16,7 @@ import {
   stamp,
   targetLabel,
   taskNumbers,
+  worthHandling,
 } from "../src/lib/github/match";
 import { readState, signatureOk, signState } from "../src/lib/github/signature";
 import { githubRef, plainLinkText } from "../src/lib/github-links";
@@ -203,4 +204,49 @@ test("a link made by hand moves the task like one that named it", () => {
 test("comments go to synced issues unless a repository turns that off", () => {
   expect(repoSettings({}).issueComments).toBe(true);
   expect(repoSettings({ issueComments: false }).issueComments).toBe(false);
+});
+
+// Most webhook deliveries change nothing, like Acta's own edits coming back. Those are told apart from the payload,
+// before any database work, and anything the handler might act on still goes to it
+test("deliveries the webhook would drop are dropped before any work", () => {
+  const bot = "acta-app[bot]";
+  const repo = { repository: { id: 1 }, sender: { login: "sam" } };
+  const worth = (event: string, p: Record<string, unknown>) => worthHandling(event, { ...repo, ...p }, bot);
+
+  expect(worthHandling("installation", { action: "deleted", installation: { id: 2 } }, bot)).toBe(true);
+  expect(worthHandling("installation", { action: "created" }, bot)).toBe(false);
+  expect(worthHandling("installation_repositories", { repositories_removed: [{ id: 3 }] }, bot)).toBe(true);
+  expect(worthHandling("installation_repositories", { repositories_added: [{ id: 3 }], repositories_removed: [] }, bot)).toBe(false);
+
+  // Its own changes, deliveries without a repository and events it doesn't follow
+  expect(worth("issues", { action: "edited", issue: { number: 4 }, sender: { login: bot } })).toBe(false);
+  expect(worthHandling("issues", { action: "edited", issue: { number: 4 }, sender: { login: "sam" } }, bot)).toBe(false);
+  expect(worth("star", { action: "created" })).toBe(false);
+  expect(worth("workflow_run", { action: "completed" })).toBe(false);
+
+  // Pull requests, branches and commits only when they name a task, with any board's prefix
+  expect(worth("pull_request", { action: "opened", pull_request: { title: "CSV", head: { ref: "act-12-csv" }, body: "" } })).toBe(true);
+  expect(worth("pull_request", { action: "edited", pull_request: { title: "CSV", head: { ref: "main" }, body: "Fixes WEB-3" } })).toBe(true);
+  expect(worth("pull_request", { action: "opened", pull_request: { title: "Tidy up", head: { ref: "tidy" }, body: null } })).toBe(false);
+  expect(worth("create", { ref_type: "branch", ref: "calc-7-sums" })).toBe(true);
+  expect(worth("create", { ref_type: "tag", ref: "act-12" })).toBe(false);
+  expect(worth("create", { ref_type: "branch", ref: "main" })).toBe(false);
+  expect(worth("push", { commits: [{ message: "Bump" }, { message: "Add sums (ACT-7)" }] })).toBe(true);
+  expect(worth("push", { commits: [{ message: "Bump" }] })).toBe(false);
+  expect(worth("push", { deleted: true, commits: [{ message: "ACT-7" }] })).toBe(false);
+  // Only the first 20 commits are read
+  expect(worth("push", { commits: [...Array(20).fill({ message: "Bump" }), { message: "ACT-7" }] })).toBe(false);
+
+  // Reviews that approve or ask for changes, finished checks on pull requests
+  expect(worth("pull_request_review", { review: { state: "APPROVED" }, pull_request: { number: 5 } })).toBe(true);
+  expect(worth("pull_request_review", { review: { state: "commented" }, pull_request: { number: 5 } })).toBe(false);
+  expect(worth("check_suite", { action: "completed", check_suite: { pull_requests: [{ number: 5 }] } })).toBe(true);
+  expect(worth("check_suite", { action: "completed", check_suite: { pull_requests: [] } })).toBe(false);
+  expect(worth("check_suite", { action: "requested", check_suite: { pull_requests: [{ number: 5 }] } })).toBe(false);
+
+  // Issues are left to the handler, which knows whether the repository syncs them. Not pull requests' comments
+  expect(worth("issues", { action: "labeled", issue: { number: 4 } })).toBe(true);
+  expect(worth("issue_comment", { action: "created", issue: { number: 4 } })).toBe(true);
+  expect(worth("issue_comment", { action: "edited", issue: { number: 4 } })).toBe(false);
+  expect(worth("issue_comment", { action: "created", issue: { number: 4, pull_request: {} } })).toBe(false);
 });

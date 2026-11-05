@@ -72,17 +72,32 @@ export const getWorkspaces = cache(async (): Promise<WorkspaceSummary[]> => {
     .map((m) => summary(m.workspaces as unknown as WorkspaceRow, m.role as Role, m.permissions as Permissions));
 });
 
+// Before a migration adds a column, naming it fails the read, which is then made without it
+const noColumn = (code?: string) => code === "42703" || code === "PGRST204";
+
+// The sidebar's boards: what it shows of each, not their pages and settings
+async function sidebarBoards(supabase: Client, slug: string): Promise<{ data: SidebarBoard[] | null }> {
+  const list = (columns: "id, slug, name, icon" | "id, slug, name") =>
+    supabase
+      .from("boards")
+      .select(`${columns}, workspaces!inner(slug)`)
+      .eq("workspaces.slug", slug)
+      .order("position")
+      .order("created_at");
+  const named = await list("id, slug, name, icon");
+  // icon is missing until the board icons migration runs
+  const { data } = named.error && noColumn(named.error.code) ? await list("id, slug, name") : named;
+  return { data: data as unknown as SidebarBoard[] | null };
+}
+
+type SidebarBoard = { id: string; slug: string; name: string; icon?: string | null };
+
 // Looked up by the workspace's address so these don't wait for the workspace list
 const getContents = cache(async (slug: string) => {
   const auth = await getAuth();
   if (!auth) return null;
   const [{ data: boards }, { data: members }, counts, mine] = await Promise.all([
-    auth.supabase
-      .from("boards")
-      .select("*, workspaces!inner(slug)")
-      .eq("workspaces.slug", slug)
-      .order("position")
-      .order("created_at"),
+    sidebarBoards(auth.supabase, slug),
     auth.supabase
       .from("members")
       .select("*, profiles (name, avatar_url), workspaces!inner(slug)")
@@ -190,6 +205,26 @@ export type MyTask = {
 
 export type MyBoard = { id: string; slug: string; name: string; prefix: string; labels: Label[] };
 
+// What My tasks shows of a task, without its description
+const myTaskColumns =
+  "board_id, number, title, status, priority, size, project, labels, start_on, due_on, subtasks, shipped_on, updated_at";
+
+async function assignedTasks(supabase: Client, slug: string, me: string) {
+  const list = (columns: string) =>
+    supabase
+      .from("tasks")
+      .select(`${columns}, boards!inner(workspaces!inner(slug))`)
+      .eq("boards.workspaces.slug", slug)
+      .eq("assignee", me)
+      .is("deleted_at", null)
+      .order("position")
+      .order("number")
+      .limit(2000);
+  const named = await list(`${myTaskColumns}, archived_at`);
+  // archived_at is missing until the archive migration runs
+  return named.error && noColumn(named.error.code) ? await list(myTaskColumns) : named;
+}
+
 /** Everything assigned to you across a workspace's boards, archived work left out */
 export const getMyTasks = cache(async (slug: string) => {
   const auth = await getAuth();
@@ -202,19 +237,27 @@ export const getMyTasks = cache(async (slug: string) => {
       .eq("workspaces.slug", slug)
       .order("position")
       .order("created_at"),
-    auth.supabase
-      .from("tasks")
-      .select("*, boards!inner(workspaces!inner(slug))")
-      .eq("boards.workspaces.slug", slug)
-      .eq("assignee", auth.id)
-      .is("deleted_at", null)
-      .order("position")
-      .order("number")
-      .limit(2000),
+    assignedTasks(auth.supabase, slug, auth.id),
   ]);
   if (!ws) return null;
   const prefixes = new Map((boards ?? []).map((b) => [b.id as string, b.prefix as string]));
-  const tasks: MyTask[] = ((rows ?? []) as unknown as (TaskRow & { updated_at?: string })[])
+  type MyTaskRow = Pick<
+    TaskRow,
+    | "board_id"
+    | "number"
+    | "title"
+    | "status"
+    | "priority"
+    | "size"
+    | "project"
+    | "labels"
+    | "start_on"
+    | "due_on"
+    | "subtasks"
+    | "shipped_on"
+    | "archived_at"
+  > & { updated_at?: string };
+  const tasks: MyTask[] = ((rows ?? []) as unknown as MyTaskRow[])
     .filter((r) => !r.archived_at && prefixes.has(r.board_id))
     .map((r) => ({
       board: r.board_id,

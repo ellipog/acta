@@ -1,9 +1,11 @@
 import { expect, mock, test } from "bun:test";
 import * as z from "zod";
+import { fakeSupabase } from "./fake-supabase";
 
 mock.module("server-only", () => ({}));
-// No database: listing tools never reaches it
-mock.module("@/lib/supabase/admin", () => ({ createAdminClient: () => ({}), serviceReady: false }));
+// Listing tools never reaches the database. The agent API keeps the first client it gets, and test files share
+// their modules, so this is the same stand-in agent-api.test.ts uses
+mock.module("@/lib/supabase/admin", () => ({ createAdminClient: () => fakeSupabase, serviceReady: false }));
 const { actaTools } = await import("@/lib/agents/server");
 const { fromQuery } = await import("@/lib/agents/api");
 

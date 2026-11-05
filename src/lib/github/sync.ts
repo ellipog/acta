@@ -126,6 +126,18 @@ async function linksFor(r: Repo, kind: string, ref: string): Promise<LinkRow[]> 
   return (data ?? []) as LinkRow[];
 }
 
+// The links to several pull requests, branches or commits at once
+async function linksAmong(r: Repo, kind: string, refs: string[]): Promise<LinkRow[]> {
+  if (!refs.length) return [];
+  const { data } = await db()
+    .from("task_links")
+    .select("id, number, kind, ref, closes, extra")
+    .eq("repo_id", r.id)
+    .eq("kind", kind)
+    .in("ref", refs);
+  return (data ?? []) as LinkRow[];
+}
+
 // Records a link on each task, keeping what earlier events said about it
 async function link(
   r: Repo,
@@ -159,8 +171,16 @@ async function link(
   if (error) throw new Error(`task_links: ${error.message}`);
 }
 
-// Moves tasks forward after something happened on GitHub, never back
-async function advance(r: Repo, tasks: TaskRow[], event: DevEvent, why: string, actor: string | null, at?: string) {
+// Moves tasks forward after something happened on GitHub, never back. The reason can differ by task
+async function advance(
+  r: Repo,
+  tasks: TaskRow[],
+  event: DevEvent,
+  reason: string | ((number: number) => string),
+  actor: string | null,
+  at?: string,
+) {
+  const why = (n: number) => (typeof reason === "string" ? reason : reason(n));
   const updated: Record<string, unknown>[] = [];
   const order: { number: number; position: number }[] = [];
   const activity: Record<string, unknown>[] = [];
@@ -176,7 +196,7 @@ async function advance(r: Repo, tasks: TaskRow[], event: DevEvent, why: string, 
       fields: { status: to, ...(to === "done" ? { shipped_on: (at ?? new Date().toISOString()).slice(0, 10) } : {}) },
     });
     order.push({ number: t.number, position });
-    activity.push({ id: randomUUID(), number: t.number, text: `moved it to ${statusTitle[to]} (${why})` });
+    activity.push({ id: randomUUID(), number: t.number, text: `moved it to ${statusTitle[to]} (${why(t.number)})` });
   }
   if (updated.length) await apply(r, actor, { updated, order, activity });
 }
@@ -286,16 +306,54 @@ async function onBranch(r: Repo, p: Payload) {
   await advance(r, tasks, "started", `branch ${p.ref}`, await memberFor(r, p.sender));
 }
 
+// A push's commits are read together: their tasks at once, one write for their links and one for the moves. A task
+// moves once, for the first commit that names it, as it did when they were taken one by one
 async function onPush(r: Repo, p: Payload) {
   if (p.deleted) return;
-  const actor = await memberFor(r, p.sender);
-  for (const c of (p.commits ?? []).slice(0, 20)) {
-    const tasks = await tasksAmong(r, taskNumbers(c.message, r.board.prefix));
-    if (!tasks.length) continue;
-    const title = String(c.message).split("\n")[0];
-    await link(r, tasks.map((t) => t.number), "commit", c.id, { url: c.url, title, author: c.author?.username });
-    await advance(r, tasks, "started", `commit ${String(c.id).slice(0, 7)}`, actor);
+  const commits = ((p.commits ?? []) as Payload[])
+    .slice(0, 20)
+    .map((c) => ({ c, numbers: taskNumbers(c.message, r.board.prefix) }))
+    .filter((x) => x.numbers.length);
+  if (!commits.length) return;
+  const [tasks, actor] = await Promise.all([
+    tasksAmong(r, [...new Set(commits.flatMap((x) => x.numbers))]),
+    memberFor(r, p.sender),
+  ]);
+  if (!tasks.length) return;
+  const live = new Set(tasks.map((t) => t.number));
+  const refs = [...new Set(commits.map((x) => String(x.c.id)))];
+  const known = new Map((await linksAmong(r, "commit", refs)).map((l) => [`${l.number}:${l.ref}`, l]));
+  const rows = new Map<string, Record<string, unknown>>();
+  const first = new Map<number, string>();
+  const at = new Date().toISOString();
+  for (const { c, numbers } of commits) {
+    const ref = String(c.id);
+    for (const number of numbers) {
+      if (!live.has(number)) continue;
+      if (!first.has(number)) first.set(number, `commit ${ref.slice(0, 7)}`);
+      const key = `${number}:${ref}`;
+      if (rows.has(key)) continue;
+      rows.set(key, {
+        board_id: r.board.id,
+        number,
+        repo_id: r.id,
+        kind: "commit",
+        ref,
+        url: c.url,
+        title: String(c.message).split("\n")[0].slice(0, 500),
+        state: null,
+        author: c.author?.username ?? null,
+        closes: false,
+        extra: { ...known.get(key)?.extra },
+        updated_at: at,
+      });
+    }
   }
+  const { error } = await db()
+    .from("task_links")
+    .upsert([...rows.values()], { onConflict: "board_id,number,repo_id,kind,ref" });
+  if (error) throw new Error(`task_links: ${error.message}`);
+  await advance(r, tasks, "started", (n) => first.get(n)!, actor);
 }
 
 // Issues
@@ -546,15 +604,22 @@ export async function flushOutbox(boardId: string) {
   const all = await waiting("id, number, fields, created_at, comment_id, github_comment");
   // Before the comments migration only fields wait here
   const { data } = all.error ? await waiting("id, number, fields, created_at") : all;
-  const rows = (data ?? []) as unknown as OutboxRow[];
-  if (!rows.length) return;
-  await db()
+  const waitingRows = (data ?? []) as unknown as OutboxRow[];
+  if (!waitingRows.length) return;
+  // Taking rows off the outbox claims them. Two flushes at once can both read the same rows, but each row is
+  // deleted by only one of them, and each sends only what it deleted, so nothing goes to GitHub twice
+  const { data: taken, error } = await db()
     .from("github_outbox")
     .delete()
     .in(
       "id",
-      rows.map((x) => x.id),
-    );
+      waitingRows.map((x) => x.id),
+    )
+    .select("id");
+  if (error) throw new Error(`github_outbox: ${error.message}`);
+  const mine = new Set((taken ?? []).map((x) => x.id as number));
+  const rows = waitingRows.filter((x) => mine.has(x.id));
+  if (!rows.length) return;
   const repos = new Map<number, Promise<Repo | null>>();
   const repo = (id: number) => {
     if (!repos.has(id)) repos.set(id, repoFor(id));

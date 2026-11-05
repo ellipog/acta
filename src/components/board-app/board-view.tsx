@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -57,16 +57,26 @@ type Props = {
   onOpen: (id: string) => void;
   prefs?: Prefs;
   setPrefs?: (patch: Partial<Prefs>) => void;
+  /** Moves on when the board's people, labels or fields change, so cards that show them are drawn again */
+  metaVersion?: number;
 };
 
 type Columns = BoardState["columns"];
+
+// The same objects every time: new ones would make dnd-kit hand every card on the board a new context, and draw
+// them all again
+const pointer = { activationConstraint: { distance: 5 } };
+const keyboard = {
+  coordinateGetter: sortableKeyboardCoordinates,
+  keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space"] },
+};
 
 const columnOf = (cols: Columns, id: string): StatusCategory | undefined => {
   if (id in cols) return id as StatusCategory;
   return (Object.keys(cols) as StatusCategory[]).find((c) => cols[c].includes(id));
 };
 
-export function BoardView({ state, dispatch, visible, onOpen, prefs, setPrefs }: Props) {
+function BoardViewBody({ state, dispatch, visible, onOpen, prefs, setPrefs, metaVersion = 0 }: Props) {
   const [activeId, setActiveId] = useState<string | null>(null);
   // Where the cards are while one is carried. Nothing is saved until it's dropped, so a drag is one change
   // that one undo takes back, and a cancelled drag leaves no trace
@@ -83,13 +93,7 @@ export function BoardView({ state, dispatch, visible, onOpen, prefs, setPrefs }:
   // The column the card was picked up from
   const [start, setStart] = useState<StatusCategory | null>(null);
   const lastDrop = useRef(0);
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-      keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space"] },
-    }),
-  );
+  const sensors = useSensors(useSensor(PointerSensor, pointer), useSensor(KeyboardSensor, keyboard));
 
   const collapsed = (s: StatusCategory) => prefs?.collapsed.includes(`board:${s}`) ?? false;
   const toggleCollapsed = (s: StatusCategory) =>
@@ -173,9 +177,14 @@ export function BoardView({ state, dispatch, visible, onOpen, prefs, setPrefs }:
     });
   };
 
-  const open = (id: string) => {
-    if (Date.now() - lastDrop.current > 200) onOpen(id);
-  };
+  // The same function for the board's life, so memoized cards aren't drawn again for a new one
+  const openNow = useRef(onOpen);
+  useLayoutEffect(() => {
+    openNow.current = onOpen;
+  });
+  const open = useCallback((id: string) => {
+    if (Date.now() - lastDrop.current > 200) openNow.current(id);
+  }, []);
 
   const active = activeId ? state.tasks[activeId] : null;
   const hideDone = Boolean(prefs?.filters.hideDone);
@@ -238,11 +247,7 @@ export function BoardView({ state, dispatch, visible, onOpen, prefs, setPrefs }:
               }
               dispatch={dispatch}
             >
-              <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-                {ids.map((id) => (
-                  <SortableTask key={id} task={state.tasks[id]} onOpen={open} dispatch={dispatch} />
-                ))}
-              </SortableContext>
+              <Cards ids={ids} tasks={state.tasks} onOpen={open} dispatch={dispatch} version={metaVersion} />
             </Column>
           );
         })}
@@ -452,14 +457,42 @@ function Column({
   );
 }
 
-function SortableTask({
+// A column's cards. dnd-kit draws every card of a list again whenever its list of ids is a new array, so the
+// list is kept as the same array while the column holds the same cards in the same order
+function Cards({
+  ids,
+  tasks,
+  onOpen,
+  dispatch,
+  version,
+}: {
+  ids: string[];
+  tasks: BoardState["tasks"];
+  onOpen: (id: string) => void;
+  dispatch: (a: DemoAction) => void;
+  version: number;
+}) {
+  const key = ids.join(" ");
+  const items = useMemo(() => (key ? key.split(" ") : []), [key]);
+  return (
+    <SortableContext items={items} strategy={verticalListSortingStrategy}>
+      {items.map((id) => (
+        <SortableTask key={id} task={tasks[id]} onOpen={onOpen} dispatch={dispatch} version={version} />
+      ))}
+    </SortableContext>
+  );
+}
+
+const SortableTask = memo(function SortableTask({
   task,
   onOpen,
   dispatch,
+  version,
 }: {
   task: Task;
   onOpen: (id: string) => void;
   dispatch: (a: DemoAction) => void;
+  version: number;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   return (
@@ -477,9 +510,22 @@ function SortableTask({
         aria-label={`${task.id}: ${task.title}`}
         className="relative shrink-0 cursor-grab outline-none focus-visible:ring-2 focus-visible:ring-lapis"
       >
-        <TaskCard task={task} className={cn(isDragging && "invisible")} />
-        {isDragging ? <DropSlot className="absolute inset-0 h-auto" /> : null}
+        <CardFace task={task} dragging={isDragging} version={version} />
       </div>
     </TaskMenu>
   );
-}
+});
+
+// dnd-kit draws every sortable card again each time a drag passes over a new one. The card's face only changes
+// with its task, or with the board's people and labels it shows (version), so that part is skipped
+const CardFace = memo(function CardFace({ task, dragging }: { task: Task; dragging: boolean; version: number }) {
+  return (
+    <>
+      <TaskCard task={task} className={cn(dragging && "invisible")} />
+      {dragging ? <DropSlot className="absolute inset-0 h-auto" /> : null}
+    </>
+  );
+});
+
+// Drawn again only when what it shows changes, not each time the page around it does
+export const BoardView = memo(BoardViewBody);

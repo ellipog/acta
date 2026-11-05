@@ -137,16 +137,24 @@ export function demoReducer(demo: Demo, action: DemoAction): Demo {
       return demo.past.length === action.depth + 1 ? demoReducer(demo, { type: "undo" }) : demo;
     case "rebase": {
       const board = action.current(demo.board);
+      // A change that touches no step keeps the history as it was, and one that changes nothing at all keeps
+      // the whole state, so React has nothing to draw
       const move = (steps: Step[]) => {
-        const out: Step[] = [];
-        for (const step of steps) {
+        let out: Step[] | null = null;
+        for (let i = 0; i < steps.length; i++) {
+          const step = steps[i];
           const b = action.history(step.board);
           if (!b) return [];
+          if (b === step.board && !out) continue;
+          out ??= steps.slice(0, i);
           out.push(b === step.board ? step : { ...step, board: b });
         }
-        return out;
+        return out ?? steps;
       };
-      return { ...demo, board, past: move(demo.past), future: move(demo.future) };
+      const past = move(demo.past);
+      const future = move(demo.future);
+      if (board === demo.board && past === demo.past && future === demo.future) return demo;
+      return { ...demo, board, past, future };
     }
     default: {
       const board = boardReducer(demo.board, action);

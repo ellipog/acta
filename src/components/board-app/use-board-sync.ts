@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/toast";
-import { fetchBoardState } from "@/lib/actions";
+import { fetchBoardState, roadmapChanged } from "@/lib/actions";
 import { rememberBoard } from "@/lib/board-cache";
 import { defaultPage, type BoardState, type StatusCategory } from "@/lib/board-store";
 import { revert, saveChanges } from "@/lib/board-save";
@@ -46,6 +46,20 @@ function pingGitHub(board: string) {
       githubPings.delete(board);
       void fetch(`/api/github/flush?board=${board}`, { method: "POST", keepalive: true }).catch(() => {});
     }, 1500),
+  );
+}
+
+// Visitors share a cached copy of each public roadmap. A save that publishes or unpublishes it, edits its page,
+// or takes a task off it asks the server to drop that copy, once things settle
+const roadmapPings = new Map<string, ReturnType<typeof setTimeout>>();
+function pingRoadmap(board: string) {
+  clearTimeout(roadmapPings.get(board));
+  roadmapPings.set(
+    board,
+    setTimeout(() => {
+      roadmapPings.delete(board);
+      void roadmapChanged(board).catch(() => {});
+    }, 1000),
   );
 }
 
@@ -270,6 +284,12 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       )
     )
       pingGitHub(boardId);
+    if (
+      result.saved.some(
+        (d) => d.roadmapPublic || d.page || d.deleted.length || d.updated.some((u) => u.fields.includes("public")),
+      )
+    )
+      pingRoadmap(boardId);
     base.current = result.base;
     const saved = result.base;
     if (result.refused.length) {
@@ -371,7 +391,14 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
           const seen = new Map<string, Visitor>();
           for (const list of Object.values(state))
             for (const v of list as Visitor[]) if (v.id && v.id !== me.id) seen.set(v.id, v);
-          setHere([...seen.values()]);
+          const next = [...seen.values()];
+          // Presence syncs whenever anyone joins, leaves or tracks again. The same people keep the same list
+          setHere((prev) =>
+            prev.length === next.length &&
+            prev.every((p, i) => p.id === next[i].id && p.name === next[i].name && p.avatar === next[i].avatar)
+              ? prev
+              : next,
+          );
         },
       },
       { key: me.id, me: { id: me.id, name: me.name, avatar: me.avatar, tone: toneFor(me.id) } },

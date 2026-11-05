@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test";
-import type { PublicRoadmapData, PublicTask } from "@/lib/public-roadmap";
+import {
+  publicState,
+  votesIn,
+  withOwnVotes,
+  type PublicRoadmapData,
+  type PublicTask,
+} from "@/lib/public-roadmap";
 import {
   ideaJson,
   isVisitor,
@@ -187,4 +193,38 @@ test("a key with sites answers only their pages, and servers", () => {
   expect(theirs.headers["Access-Control-Allow-Origin"]).toBeUndefined();
 
   expect(roadmapCors(sites, null).allowed).toBe(true);
+});
+
+// The public page is cached and the same for everyone. A visitor's own votes, and ideas they sent that the cached
+// page doesn't have yet, come afterwards and are laid over it, without undoing anything they did in the meantime
+test("a visitor's own votes and ideas show on the shared page", () => {
+  const shared = roadmap({}, [task(1, { votes: 2 }), task(2, { votes: 7 })]);
+  shared.suggestions = [{ ...shared.suggestions[0], voted: false }];
+  const state = publicState(shared);
+  const mine = withOwnVotes(state, {
+    tasks: [
+      { number: 1, votes: 3 },
+      { number: 9, votes: 1 },
+    ],
+    suggestions: [{ id: "s1", votes: 5 }],
+    mine: [
+      { id: "s2", title: "CSV export", details: null, by: "A visitor", at: "2026-11-05T09:00:00Z", votes: 1, voted: true },
+      { id: "s1", title: "Dark mode", details: null, by: "A visitor", at: "2026-10-01T09:00:00Z", votes: 5, voted: true },
+    ],
+  }, "WEB");
+  expect(mine.tasks["WEB-1"]).toMatchObject({ votes: 3, voted: true });
+  expect(mine.tasks["WEB-2"]).toMatchObject({ votes: 7, voted: false });
+  expect(mine.tasks["WEB-9"]).toBeUndefined();
+  expect(mine.roadmap.suggestions.map((s) => [s.id, s.votes, s.voted])).toEqual([
+    ["s2", 1, true],
+    ["s1", 5, true],
+  ]);
+
+  // A vote taken back before they arrived stays taken back
+  const after = withOwnVotes(state, { tasks: [{ number: 1, votes: 3 }], suggestions: [], mine: [] }, "WEB", new Set(["WEB-1"]));
+  expect(after.tasks["WEB-1"]).toMatchObject({ votes: 2, voted: false });
+
+  // Read as the visitor, before public_votes exists
+  const seen = roadmap({}, [task(1, { votes: 3, voted: true }), task(2)]);
+  expect(votesIn(seen)).toEqual({ tasks: [{ number: 1, votes: 3 }], suggestions: [{ id: "s1", votes: 4 }], mine: [] });
 });

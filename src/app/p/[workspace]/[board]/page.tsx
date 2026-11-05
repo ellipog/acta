@@ -1,33 +1,23 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
-import { cache, Suspense } from "react";
+import { Suspense } from "react";
 import { LogoMark } from "@/components/ui/logo-mark";
 import { Skeleton } from "@/components/ui/display";
 import { Dither } from "@/components/ui/dither";
 import { pageFrom } from "@/lib/board-store";
 import { JsonLd } from "@/components/json-ld";
-import { isPrivate, visitorCookie, type PublicResult, type PublicRoadmapData } from "@/lib/public-roadmap";
-import { excerpt, roadmapUrl, shippedOn } from "@/lib/seo";
+import { isPrivate, type PublicRoadmapData } from "@/lib/public-roadmap";
+import { excerpt, liveRoadmap, roadmapUrl, shippedOn } from "@/lib/seo";
 import { siteUrl } from "@/lib/slugs";
-import { createClient } from "@/lib/supabase/server";
 import { PublicView } from "./public-view";
 
-const getRoadmap = cache(async (workspace: string, board: string) => {
-  const supabase = await createClient();
-  const visitor = (await cookies()).get(visitorCookie)?.value ?? null;
-  const { data } = await supabase.rpc("public_roadmap", {
-    p_workspace: workspace,
-    p_board: board,
-    p_visitor: visitor,
-  });
-  return (data ?? null) as PublicResult;
-});
+// The page is the same for every visitor and read without their cookies, so it's cached and shared between them.
+// What each visitor voted for comes in the browser once it's open (see public-view.tsx)
 
 export async function generateMetadata({ params }: PageProps<"/p/[workspace]/[board]">): Promise<Metadata> {
   const { workspace, board } = await params;
-  const roadmap = await getRoadmap(workspace, board);
+  const roadmap = await liveRoadmap(workspace, board);
   if (!roadmap) return { title: "Roadmap not found", robots: { index: false } };
   if (isPrivate(roadmap)) return { title: roadmap.workspace.name, robots: { index: false } };
   const page = pageFrom(roadmap.board.name, roadmap.board.slug, roadmap.board.page);
@@ -72,7 +62,7 @@ export default function PublicRoadmapPage({ params }: PageProps<"/p/[workspace]/
 
 async function Roadmap({ params }: { params: PageProps<"/p/[workspace]/[board]">["params"] }) {
   const { workspace, board } = await params;
-  const roadmap = await getRoadmap(workspace, board);
+  const roadmap = await liveRoadmap(workspace, board);
   if (!roadmap) notFound();
   if (isPrivate(roadmap))
     return (

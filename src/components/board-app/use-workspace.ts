@@ -1,14 +1,21 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { boardPath, cachedBoard, rememberBoard, rememberShell, setCounts, setMine } from "@/lib/board-cache";
+import { boardPath, peekBoard, rememberBoard, rememberShell, roomAhead, setCounts, setMine } from "@/lib/board-cache";
 import { boardQuery, boardState, countTasks, type NestedBoard } from "@/lib/board-load";
 import type { LiveBoard } from "@/lib/live";
 import { listen } from "@/lib/realtime";
 import { loadClient } from "@/lib/supabase/browser";
 
-// How many neighbouring boards load ahead of a click
-const AHEAD = 6;
+// How many neighbouring boards load ahead of a click. Each is a whole board to download and convert, so only
+// the nearest few
+const AHEAD = 3;
+
+// Loading ahead is a guess, so it's skipped for people saving data or on a slow connection
+function slowNetwork() {
+  const net = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+  return Boolean(net?.saveData || (net?.effectiveType && /(^|-)2g$/.test(net.effectiveType)));
+}
 
 const hash = (text: string) => {
   let h = 0;
@@ -33,14 +40,19 @@ export function useWorkspace(live: LiveBoard | undefined) {
     if (!workspaceId || !ids) return;
     const list = ids.split(",");
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const refresh = () => {
+    // Only the boards that changed are counted again, or every board after a dropped connection
+    const touched = new Set<string>();
+    const refresh = (board?: string) => {
+      for (const id of board ? [board] : list) touched.add(id);
       clearTimeout(timer);
       timer = setTimeout(async () => {
+        const these = [...touched];
+        touched.clear();
         const client = await loadClient();
         const me = liveRef.current?.me.id;
         const [all, yours] = await Promise.all([
-          countTasks(client, { ids: list }),
-          me ? countTasks(client, { ids: list }, me) : {},
+          countTasks(client, { ids: these }),
+          me ? countTasks(client, { ids: these }, me) : {},
         ]);
         setCounts(all);
         setMine(yours);
@@ -50,9 +62,9 @@ export function useWorkspace(live: LiveBoard | undefined) {
       change: (_table, p) => {
         const row = (p.eventType === "DELETE" ? p.old : p.new) as { board_id?: string };
         // The open board counts its own tasks. Elsewhere any change could be a task deleted, restored, archived or
-        // brought back, so the counts are read again
+        // brought back, so that board's counts are read again
         if (row.board_id === liveRef.current?.board.id) return;
-        refresh();
+        refresh(row.board_id && list.includes(row.board_id) ? row.board_id : undefined);
       },
       joined: (again) => {
         if (again) refresh();
@@ -68,23 +80,41 @@ export function useWorkspace(live: LiveBoard | undefined) {
   const boardId = live?.board.id;
   useEffect(() => {
     const here = liveRef.current;
-    if (!here || !boardId) return;
+    if (!here || !boardId || slowNetwork()) return;
+    // The boards either side of this one in the sidebar, nearest first
+    const at = here.boards.findIndex((b) => b.id === boardId);
     const others = here.boards
-      .filter((b) => b.id !== boardId && !cachedBoard(boardPath(here.workspace.slug, b.slug)))
-      .slice(0, AHEAD);
-    if (!others.length) return;
+      .map((b, i) => ({ b, d: Math.abs(i - at) + (i < at ? 0.5 : 0) }))
+      .filter(({ b }) => b.id !== boardId && !peekBoard(boardPath(here.workspace.slug, b.slug)))
+      .sort((x, y) => x.d - y.d)
+      .slice(0, AHEAD)
+      .map(({ b }) => b);
+    if (!others.length || !roomAhead()) return;
     let stopped = false;
+    const idle = window.requestIdleCallback ?? ((run: () => void) => setTimeout(run, 1500));
+    const cancel = window.cancelIdleCallback ?? clearTimeout;
+    let id = 0;
+    // Waits for the browser to be idle again before each board, so converting one never lands on a click
+    const pause = () =>
+      new Promise<void>((done) => {
+        id = idle(() => done(), { timeout: 5000 }) as unknown as number;
+      });
     const run = async () => {
       const client = await loadClient();
       const names = new Map(here.members.map((m) => [m.id, m.name]));
       const nameOf = (id: string | null) => (id && names.get(id)) || "Former member";
-      for (const b of others) {
-        if (stopped) return;
-        if (cachedBoard(boardPath(here.workspace.slug, b.slug))) continue;
+      for (const [i, b] of others.entries()) {
+        if (i) await pause();
+        // Boards read ahead only fill free room in the cache, never push out ones that were looked at
+        if (stopped || !roomAhead()) return;
+        if (peekBoard(boardPath(here.workspace.slug, b.slug))) continue;
         const started = Date.now();
         const { data } = await boardQuery(client, here.me.id).eq("id", b.id).maybeSingle();
         const nested = data as unknown as NestedBoard | null;
         if (!nested || stopped) continue;
+        // The answer can land in the middle of a click, so turning it into a board waits for idle again
+        await pause();
+        if (stopped) return;
         const state = boardState(nested, nameOf);
         rememberBoard(
           {
@@ -105,12 +135,11 @@ export function useWorkspace(live: LiveBoard | undefined) {
           },
           state,
           started,
+          { ahead: true },
         );
       }
     };
-    const idle = window.requestIdleCallback ?? ((run: () => void) => setTimeout(run, 1500));
-    const cancel = window.cancelIdleCallback ?? clearTimeout;
-    const id = idle(() => void run(), { timeout: 5000 });
+    id = idle(() => void run(), { timeout: 5000 }) as unknown as number;
     return () => {
       stopped = true;
       cancel(id);

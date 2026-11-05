@@ -359,7 +359,22 @@ export const me = {
   board: undefined as string | undefined,
 };
 
+// Rows and cards are memoized, but they read the board's people, labels, projects, fields and status names from
+// here. This number moves whenever any of those change, so a memoized row can ask to draw again
+let metaVersion = 0;
+let metaSeen: BoardMeta | null = null;
+let metaShape = "";
+export const boardMetaVersion = () => metaVersion;
+
 export function setBoardMeta(meta: BoardMeta) {
+  if (meta !== metaSeen) {
+    metaSeen = meta;
+    const shape = JSON.stringify(meta);
+    if (shape !== metaShape) {
+      metaShape = shape;
+      metaVersion++;
+    }
+  }
   me.name = meta.me;
   me.id = meta.meId;
   me.workspace = meta.workspace;

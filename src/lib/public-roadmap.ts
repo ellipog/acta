@@ -1,4 +1,12 @@
-import { pageFrom, type BoardMeta, type BoardState, type Project, type StatusCategory, type Task } from "./board-store";
+import {
+  pageFrom,
+  type BoardMeta,
+  type BoardState,
+  type Project,
+  type StatusCategory,
+  type Suggestion,
+  type Task,
+} from "./board-store";
 import type { DitherName } from "./dither-assets";
 import { toneFor, type WorkspaceSummary } from "./live";
 
@@ -58,6 +66,53 @@ export type PublicResult = PublicRoadmapData | { private: true; workspace: { nam
 export const isPrivate = (r: PublicResult): r is { private: true; workspace: { name: string; slug: string } } =>
   Boolean(r && "private" in r);
 
+/** What one visitor voted for, with the latest counts for those, and ideas they sent in the last hour, from
+ * public_votes. The page itself is cached and the same for everyone, so these come once it's open */
+export type OwnVotes = {
+  tasks: { number: number; votes: number }[];
+  suggestions: { id: string; votes: number }[];
+  mine: PublicSuggestion[];
+};
+
+/** The visitor's own votes, from a roadmap read as them, for when public_votes isn't there yet */
+export const votesIn = (data: PublicRoadmapData): OwnVotes => ({
+  tasks: data.tasks.filter((t) => t.voted).map((t) => ({ number: t.number, votes: t.votes })),
+  suggestions: data.suggestions.filter((s) => s.voted).map((s) => ({ id: s.id, votes: s.votes })),
+  mine: [],
+});
+
+const suggestionOf = (s: PublicSuggestion): Suggestion => ({
+  id: s.id,
+  title: s.title,
+  details: s.details ?? undefined,
+  by: s.by,
+  at: Date.parse(s.at),
+  votes: s.votes,
+  voted: s.voted,
+});
+
+/** Marks what the visitor voted for on the shared page and adds their ideas it doesn't have yet. Anything they've
+ * already voted on or sent since it opened, in `skip`, stays as they left it */
+export function withOwnVotes(
+  state: BoardState,
+  own: OwnVotes,
+  prefix: string,
+  skip: ReadonlySet<string> = new Set(),
+): BoardState {
+  const tasks = { ...state.tasks };
+  for (const v of own.tasks ?? []) {
+    const id = `${prefix}-${v.number}`;
+    if (tasks[id] && !skip.has(id)) tasks[id] = { ...tasks[id], votes: v.votes, voted: true };
+  }
+  const voted = new Map((own.suggestions ?? []).map((v) => [v.id, v.votes]));
+  const listed = new Set(state.roadmap.suggestions.map((s) => s.id));
+  const added = (own.mine ?? []).filter((s) => !listed.has(s.id) && !skip.has(s.id)).map(suggestionOf);
+  const suggestions = state.roadmap.suggestions.map((s) =>
+    voted.has(s.id) && !skip.has(s.id) ? { ...s, votes: voted.get(s.id)!, voted: true } : s,
+  );
+  return { ...state, tasks, roadmap: { ...state.roadmap, suggestions: [...added, ...suggestions] } };
+}
+
 const statusKeys: StatusCategory[] = ["backlog", "todo", "in_progress", "review", "done", "canceled"];
 
 export function publicState(data: PublicRoadmapData): BoardState {
@@ -99,15 +154,7 @@ export function publicState(data: PublicRoadmapData): BoardState {
     roadmap: {
       public: true,
       page: pageFrom(data.board.name, data.board.slug, data.board.page),
-      suggestions: data.suggestions.map((s) => ({
-        id: s.id,
-        title: s.title,
-        details: s.details ?? undefined,
-        by: s.by,
-        at: Date.parse(s.at),
-        votes: s.votes,
-        voted: s.voted,
-      })),
+      suggestions: data.suggestions.map(suggestionOf),
     },
   };
 }

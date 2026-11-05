@@ -1,6 +1,6 @@
 import "server-only";
-import { createClient } from "@supabase/supabase-js";
-import { cacheLife } from "next/cache";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { cacheLife, cacheTag } from "next/cache";
 import { pageFrom, type Tone } from "./board-store";
 import type { PublicResult, PublicRoadmapData } from "./public-roadmap";
 import { publicHref, siteUrl } from "./slugs";
@@ -13,13 +13,52 @@ import { authReady, supabaseKey, supabaseUrl } from "./supabase/env";
 /** The board Acta plans itself on, whose shipped work is the changelog */
 export const actaBoard = ["aaen-studios", "acta"] as const;
 
-/** A published roadmap as a visitor without an account sees it */
+let anon: SupabaseClient | null = null;
+const anonDb = () =>
+  (anon ??= createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false, autoRefreshToken: false } }));
+
+/** The tag on every cached read of one board's roadmap. Publishing or unpublishing it, editing its page, or taking
+ * a task off it clears them at once (see roadmapChanged in actions.ts), rather than leaving them up to their age */
+export const roadmapTag = (workspace: string, board: string) => `roadmap:${workspace}/${board}`;
+
+/** A published roadmap as a visitor without an account sees it. Nothing when it can't be read right now */
 export async function publicRoadmap(workspace: string, board: string): Promise<PublicResult> {
+  try {
+    return await hourlyRoadmap(workspace, board);
+  } catch {
+    return null;
+  }
+}
+
+async function hourlyRoadmap(workspace: string, board: string): Promise<PublicResult> {
   "use cache";
   cacheLife("hours");
+  cacheTag(roadmapTag(workspace, board));
   if (!authReady) return null;
-  const db = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { data } = await db.rpc("public_roadmap", { p_workspace: workspace, p_board: board, p_visitor: null });
+  const { data, error } = await anonDb().rpc("public_roadmap", {
+    p_workspace: workspace,
+    p_board: board,
+    p_visitor: null,
+  });
+  // Thrown, so a failed read isn't kept for the next hour
+  if (error) throw new Error(`public_roadmap: ${error.message}`);
+  return (data ?? null) as PublicResult;
+}
+
+/** The same, kept about a minute: what the public page, its JSON and the roadmap API show, read once for every
+ * visitor rather than once each. What one visitor voted for isn't in it, and comes from public_votes */
+export async function liveRoadmap(workspace: string, board: string): Promise<PublicResult> {
+  "use cache";
+  cacheLife({ stale: 30, revalidate: 60, expire: 300 });
+  cacheTag(roadmapTag(workspace, board));
+  if (!authReady) return null;
+  const { data, error } = await anonDb().rpc("public_roadmap", {
+    p_workspace: workspace,
+    p_board: board,
+    p_visitor: null,
+  });
+  // Thrown, so a failed read isn't kept for the next visitor
+  if (error) throw new Error(`public_roadmap: ${error.message}`);
   return (data ?? null) as PublicResult;
 }
 

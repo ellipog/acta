@@ -1,8 +1,8 @@
-import { createClient } from "@supabase/supabase-js";
 import { isPrivate, type PublicResult } from "@/lib/public-roadmap";
 import { ideaJson, roadmapPage, shownTasks, taskJson } from "@/lib/roadmap-json";
+import { liveRoadmap } from "@/lib/seo";
 import { publicHref } from "@/lib/slugs";
-import { authReady, supabaseKey, supabaseUrl } from "@/lib/supabase/env";
+import { authReady } from "@/lib/supabase/env";
 
 // A published roadmap as JSON, for people who'd rather build the whole page themselves: their own site, a widget,
 // a changelog. It holds only what the public page shows, so anyone may read it from anywhere. To vote or send ideas
@@ -17,9 +17,8 @@ const headers = {
 export async function GET(request: Request, { params }: { params: Promise<{ workspace: string; board: string }> }) {
   const { workspace, board } = await params;
   if (!authReady) return Response.json({ error: "Not set up" }, { status: 503, headers });
-  const supabase = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false } });
-  const { data } = await supabase.rpc("public_roadmap", { p_workspace: workspace, p_board: board });
-  const roadmap = (data ?? null) as PublicResult;
+  // The same read the public page shows, shared between callers for about a minute. A failed read answers as before
+  const roadmap: PublicResult = await liveRoadmap(workspace, board).catch(() => null);
   if (!roadmap || isPrivate(roadmap))
     return Response.json({ error: "There’s no published roadmap here." }, { status: 404, headers });
 

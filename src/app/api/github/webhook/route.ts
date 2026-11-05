@@ -1,5 +1,6 @@
 import { after, NextResponse, type NextRequest } from "next/server";
-import { githubReady, webhookSecret } from "@/lib/github/app";
+import { botLogin, githubReady, webhookSecret } from "@/lib/github/app";
+import { worthHandling } from "@/lib/github/match";
 import { signatureOk } from "@/lib/github/signature";
 import { handleDelivery } from "@/lib/github/sync";
 
@@ -22,6 +23,8 @@ export async function POST(request: NextRequest) {
   } catch {
     return new NextResponse(null, { status: 400 });
   }
+  // Most deliveries are ones the handler would read and drop, like Acta's own edits coming back. They end here
+  if (!worthHandling(event, payload, botLogin())) return new NextResponse(null, { status: 202 });
   after(() =>
     handleDelivery(event, delivery.slice(0, 100), payload).catch((error) =>
       console.error(`GitHub ${event} ${delivery} failed`, error),

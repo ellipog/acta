@@ -1,5 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import { revalidateTag } from "next/cache";
 import { after } from "next/server";
 import {
   formatDue,
@@ -20,11 +21,14 @@ import {
 } from "@/lib/board-store";
 import { duration } from "@/lib/dates";
 import { branchName, repoSettings } from "@/lib/github/match";
+import { roadmapTag } from "@/lib/seo";
 import { boardSlugProblem, publicHref, siteUrl, slugify } from "@/lib/slugs";
 import { can as allows, type Permissions, type Role } from "@/lib/live";
 import { accessRank, agentDb, type Access, type Agent } from "./keys";
 
-// An agent's changes to tasks that sync with GitHub issues go to GitHub once the answer is on its way
+// An agent's changes to tasks that sync with GitHub issues go to GitHub once the answer is on its way. Each request
+// asks once per board (see flushes in actaFor), since Next runs every after() at once and each flush would read
+// the same waiting rows
 function sendToGitHub(board: string) {
   if (!process.env.GITHUB_APP_ID) return;
   try {
@@ -181,6 +185,13 @@ function compact<T extends Record<string, unknown>>(o: T) {
   return Object.fromEntries(
     Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && !v.length)),
   ) as Partial<T>;
+}
+
+// A time as PostgREST hands back a timestamptz from a database on UTC, as Supabase's are: 2026-11-05T09:30:12.5+00:00
+function dbTime(value: string) {
+  const [whole, fraction] = new Date(value).toISOString().slice(0, -1).split(".");
+  const kept = fraction.replace(/0+$/, "");
+  return `${whole}${kept ? `.${kept}` : ""}+00:00`;
 }
 
 function day(value: string | null | undefined, field: string) {
@@ -370,19 +381,34 @@ export function actaFor(agent: Agent) {
     return found;
   }
 
-  async function board(ref: string): Promise<Board> {
+  // Boards read in this request, by "workspace/board". Saving something that changes a board's own row forgets them
+  const boards = new Map<string, Promise<Board>>();
+
+  // withPeople starts reading the workspace's people as soon as the workspace is known, for tools that name them
+  async function board(ref: string, withPeople = false): Promise<Board> {
     const where = boardRef(ref);
-    const ws = await place(where.workspace);
-    const { data } = await db
-      .from("boards")
-      // Whole, since the newer columns only exist once their migration has run
-      .select("*")
-      .eq("workspace_id", ws.id)
-      .eq("slug", where.board)
-      .maybeSingle();
-    if (!data) throw new Problem(`There’s no board “${where.board}” in ${ws.slug}. Call list_boards to see the boards.`);
-    const row = data as unknown as BoardRow;
-    return { ...row, workspace: ws, ref: `${ws.slug}/${row.slug}` };
+    const key = `${where.workspace}/${where.board}`;
+    let cached = boards.get(key);
+    if (!cached) {
+      cached = (async () => {
+        const ws = await place(where.workspace);
+        if (withPeople) people(ws.id).catch(() => {});
+        const { data } = await db
+          .from("boards")
+          // Whole, since the newer columns only exist once their migration has run
+          .select("*")
+          .eq("workspace_id", ws.id)
+          .eq("slug", where.board)
+          .maybeSingle();
+        if (!data)
+          throw new Problem(`There’s no board “${where.board}” in ${ws.slug}. Call list_boards to see the boards.`);
+        const row = data as unknown as BoardRow;
+        return { ...row, workspace: ws, ref: `${ws.slug}/${row.slug}` };
+      })();
+      boards.set(key, cached);
+      cached.catch(() => boards.delete(key));
+    }
+    return cached;
   }
 
   const taskId = (b: Spot, n: number) => `${b.prefix}-${n}`;
@@ -398,20 +424,27 @@ export function actaFor(agent: Agent) {
     return Number(match[2]);
   }
 
-  async function row(b: Board, ref: string | number, deleted = false) {
-    const n = numberOf(b, ref);
-    const { data } = await db
-      .from("tasks")
-      .select(`${await fields()}, description, origin`)
-      .eq("board_id", b.id)
-      .eq("number", n)
-      .maybeSingle();
-    const t = data as unknown as (TaskRow & { origin: string | null }) | null;
+  type FullRow = TaskRow & { origin: string | null };
+  const rowFields = async () => `${await fields()}, description, origin`;
+
+  // A task that was read, or a Problem saying why it can't be used
+  function found(b: Board, n: number, t: FullRow | null | undefined, deleted = false) {
     if (!t) throw new Problem(`There’s no task ${taskId(b, n)} on ${b.ref}.`);
     if (deleted && !t.deleted_at) throw new Problem(`${taskId(b, n)} isn’t deleted.`);
     if (!deleted && t.deleted_at)
       throw new Problem(`${taskId(b, n)} was deleted.${can("write") ? " restore_task brings it back." : ""}`);
     return t;
+  }
+
+  async function row(b: Board, ref: string | number, deleted = false) {
+    const n = numberOf(b, ref);
+    const { data } = await db
+      .from("tasks")
+      .select(await rowFields())
+      .eq("board_id", b.id)
+      .eq("number", n)
+      .maybeSingle();
+    return found(b, n, data as unknown as FullRow | null, deleted);
   }
 
   // The column's tasks top to bottom, leaving one out
@@ -513,11 +546,29 @@ export function actaFor(agent: Agent) {
     return { moved_to: first?.fields.status };
   };
 
+  // Boards whose GitHub flush is already waiting on this request. One flush after the answer sends everything the
+  // request queued, where one per save would read the same rows at the same time and send them twice
+  const flushes = new Set<string>();
+  const flushGitHub = (boardId: string) => {
+    if (flushes.has(boardId)) return;
+    flushes.add(boardId);
+    sendToGitHub(boardId);
+  };
+
   async function apply(b: Board, changes: Record<string, unknown>) {
     const { data, error } = await db.rpc("agent_apply", { p_key: agent.hash, p_board: b.id, p_changes: changes });
     if (error) throw dbProblem(error);
     const some = (k: string) => Array.isArray(changes[k]) && (changes[k] as unknown[]).length > 0;
-    if (some("updated") || some("comments")) sendToGitHub(b.id);
+    // New tasks move the board's next number on, and roadmap changes are the board's own
+    if (some("created") || changes.board) boards.clear();
+    if (some("updated") || some("comments")) flushGitHub(b.id);
+    // The public roadmap is cached for everyone. Publishing, the page, and tasks coming on or off it show at once;
+    // other edits show within the minute it's kept
+    const updated = (changes.updated ?? []) as { fields: Record<string, unknown> }[];
+    if (changes.board || some("deleted") || updated.some((u) => "public" in u.fields))
+      try {
+        revalidateTag(roadmapTag(b.workspace.slug, b.slug), { expire: 0 });
+      } catch {}
     return data as { moved: Record<string, number>; next: number };
   }
 
@@ -542,6 +593,209 @@ export function actaFor(agent: Agent) {
       deleted: t.deleted_at,
       github: pullSummary(pulls),
     });
+  }
+
+  type Order = { number: number; position: number }[];
+  type Who = (id: string | null) => string | undefined;
+
+  // What a patch changes on a task, checked the same way for update_task and update_tasks so the two can't drift.
+  // Nothing is saved. A move to another column puts the task at its bottom, which the caller works out since it
+  // knows how full that column is. place, before and after read the column through columnOf and rewrite its order
+  async function changesFor(
+    b: Board,
+    t: TaskRow,
+    p: TaskPatch,
+    who: Who,
+    columnOf: (status: StatusCategory) => Promise<number[]>,
+  ) {
+    const fields: Record<string, unknown> = {};
+    const notes: string[] = [];
+
+    if (p.title !== undefined && p.title.trim() && p.title.trim() !== t.title) {
+      fields.title = p.title.trim();
+      notes.push("renamed the task");
+    }
+    if (p.description !== undefined && p.description !== t.description) {
+      fields.description = p.description;
+      notes.push("edited the description");
+    }
+    if (p.status && p.status !== t.status) {
+      fields.status = p.status;
+      if (p.status === "done") fields.shipped_on = today();
+      else if (t.status === "done") fields.shipped_on = null;
+      notes.push(`moved it to ${statusTitle[p.status]}`);
+    }
+    const shipped = day(p.shipped, "shipped");
+    if (shipped !== undefined) {
+      if (shipped && ((fields.status as StatusCategory | undefined) ?? t.status) !== "done")
+        throw new Problem("Only done tasks have a shipped date. Set status to done as well.");
+      if (shipped !== ("shipped_on" in fields ? fields.shipped_on : t.shipped_on)) {
+        fields.shipped_on = shipped;
+        notes.push(shipped ? `set the shipped date to ${formatDue(shipped)}` : "removed the shipped date");
+      }
+    }
+    if (p.priority && p.priority !== t.priority) {
+      fields.priority = p.priority;
+      notes.push(`set priority to ${priorities.find((x) => x.id === p.priority)?.title}`);
+    }
+    if (p.size !== undefined && (p.size ?? null) !== t.size) {
+      fields.size = p.size ?? null;
+      notes.push(p.size ? `sized it ${p.size.toUpperCase()}` : "removed the size");
+    }
+    const project = pickProject(b, p.project);
+    if (project !== undefined && project !== t.project) {
+      fields.project = project;
+      notes.push(project ? `moved it to project ${project}` : "removed the project");
+    }
+    const assignee = await pickPerson(b, p.assignee);
+    if (assignee !== undefined && assignee !== t.assignee) {
+      fields.assignee = assignee;
+      notes.push(assignee ? `assigned ${who(assignee)}` : "removed the assignee");
+    }
+    for (const [field, column, word] of [
+      ["start", "start_on", "start date"],
+      ["due", "due_on", "due date"],
+    ] as const) {
+      const value = day(p[field], field);
+      if (value !== undefined && value !== t[column]) {
+        fields[column] = value;
+        notes.push(value ? `set the ${word} to ${formatDue(value)}` : `removed the ${word}`);
+      }
+    }
+    if (p.public !== undefined && p.public !== t.public) {
+      fields.public = p.public;
+      notes.push(p.public ? "added it to the public roadmap" : "took it off the public roadmap");
+    }
+    if (p.fields) {
+      const own = customIn(b, t.custom ?? {}, p.fields);
+      if (own.notes.length) {
+        fields.custom = own.next;
+        notes.push(...own.notes);
+      }
+    }
+    if (p.archived !== undefined && p.archived !== Boolean(t.archived_at)) {
+      if (!(await archiveReady(db)))
+        throw new Problem("Archiving needs the latest database migration. Ask the person who runs Acta to apply it.");
+      fields.archived_at = p.archived ? new Date().toISOString() : null;
+      notes.push(p.archived ? "archived the task" : "brought the task back from the archive");
+    }
+
+    let labels = p.labels ? pickLabels(b, p.labels) : [...t.labels];
+    for (const l of pickLabels(b, p.add_labels ?? [])) if (!labels.includes(l)) labels.push(l);
+    const drop = new Set(pickLabels(b, p.remove_labels ?? []));
+    labels = labels.filter((l) => !drop.has(l));
+    if (labels.join("\u0000") !== t.labels.join("\u0000")) {
+      fields.labels = labels;
+      for (const l of labels) if (!t.labels.includes(l)) notes.push(`added label ${l}`);
+      for (const l of t.labels) if (!labels.includes(l)) notes.push(`removed label ${l}`);
+    }
+
+    const subtasks = t.subtasks.map((s) => ({ ...s }));
+    const find = (ref: string) => {
+      const hit = subtasks.find((s) => s.id === ref || same(s.title, ref));
+      if (!hit)
+        throw new Problem(
+          `${taskId(b, t.number)} has no subtask “${ref}”. Its subtasks: ${subtasks.map((s) => `“${s.title}”`).join(", ") || "none"}.`,
+        );
+      return hit;
+    };
+    for (const ref of p.complete_subtasks ?? []) {
+      const s = find(ref);
+      if (!s.done) notes.push(`completed “${s.title}”`);
+      s.done = true;
+    }
+    for (const ref of p.reopen_subtasks ?? []) {
+      const s = find(ref);
+      if (s.done) notes.push(`reopened “${s.title}”`);
+      s.done = false;
+    }
+    for (const r of p.rename_subtasks ?? []) {
+      const s = find(r.subtask);
+      const title = r.title.trim().slice(0, 200);
+      if (!title || title === s.title) continue;
+      notes.push(`renamed subtask “${s.title}” to “${title}”`);
+      s.title = title;
+    }
+    for (const ref of p.remove_subtasks ?? []) {
+      const s = find(ref);
+      subtasks.splice(subtasks.indexOf(s), 1);
+      notes.push(`removed subtask “${s.title}”`);
+    }
+    for (const title of p.add_subtasks ?? []) {
+      if (!title.trim()) continue;
+      subtasks.push({ id: `s${randomUUID().slice(0, 8)}`, title: title.trim(), done: false });
+      notes.push(`added subtask “${title.trim()}”`);
+    }
+    if (JSON.stringify(subtasks) !== JSON.stringify(t.subtasks)) fields.subtasks = subtasks;
+
+    const places = [p.place, p.before, p.after].filter(Boolean).length;
+    if (places > 1) throw new Problem("Use only one of place, before and after.");
+    let placed: Order | undefined;
+    if (places) {
+      const status = (fields.status as StatusCategory | undefined) ?? t.status;
+      const column = [...(await columnOf(status))];
+      let at = p.place === "top" ? 0 : column.length;
+      const next = p.before ?? p.after;
+      if (next) {
+        const other = numberOf(b, next);
+        const i = column.indexOf(other);
+        if (i === -1)
+          throw new Problem(
+            `${taskId(b, other)} isn’t in ${statusTitle[status]}. Place a task next to one in its own column.`,
+          );
+        at = p.before ? i : i + 1;
+      }
+      column.splice(at, 0, t.number);
+      placed = column.map((number, position) => ({ number, position }));
+    }
+    return { fields, notes, placed, moved: fields.status as StatusCategory | undefined };
+  }
+
+  // The task as reading it again would show it once fields are saved. They're its own columns, and only
+  // archived_at comes back from the database in another form
+  const saved = <T extends TaskRow>(t: T, fields: Record<string, unknown>): T => ({
+    ...t,
+    ...fields,
+    ...(typeof fields.archived_at === "string" ? { archived_at: dbTime(fields.archived_at) } : {}),
+  });
+
+  // What update_task answers once a task's changes are saved
+  function changed(b: Board, t: TaskRow, notes: string[], order: Order, who: Who) {
+    const placed = order.length > 1 ? order.findIndex((o) => o.number === t.number) + 1 : undefined;
+    return compact({
+      changed: notes,
+      place_in_column: placed && `${placed} of ${order.length}`,
+      task: summary(b, t, who),
+    });
+  }
+
+  const logLines = (number: number, notes: string[]) => notes.map((text) => ({ id: randomUUID(), number, text }));
+
+  async function updateTask(ref: string, task: string, p: TaskPatch) {
+    const b = await board(ref, true);
+    const n = numberOf(b, task);
+    const places = [p.place, p.before, p.after].filter(Boolean).length;
+    // Read together: the task, its workspace's people, and the column a status move takes it to. A move goes to the
+    // bottom, so it needs that column's size, unless it's placed in the column, which needs the column's order
+    const [t, who, size, column] = await Promise.all([
+      row(b, n),
+      nameOf(b.workspace_id),
+      p.status && !places ? columnSize(b, p.status) : undefined,
+      p.status && places === 1 ? columnOrder(b, p.status, n) : undefined,
+    ]);
+    const plan = await changesFor(b, t, p, who, (status) =>
+      column && status === p.status ? Promise.resolve(column) : columnOrder(b, status, t.number),
+    );
+    if (!Object.keys(plan.fields).length && !plan.placed) return { unchanged: true, task: summary(b, t, who) };
+    const order =
+      plan.placed ??
+      (plan.moved ? [{ number: t.number, position: size ?? (await columnSize(b, plan.moved)) }] : []);
+    await apply(b, {
+      updated: Object.keys(plan.fields).length ? [{ number: t.number, fields: plan.fields }] : [],
+      order,
+      activity: logLines(t.number, plan.notes),
+    });
+    return changed(b, saved(t, plan.fields), plan.notes, order, who);
   }
 
   // The pull requests on some boards' tasks, by board and task. Nothing before the GitHub migration
@@ -587,20 +841,21 @@ export function actaFor(agent: Agent) {
     ].join(",");
   }
 
-  async function detail(b: Board, t: TaskRow) {
-    const who = await nameOf(b.workspace_id);
-    const [{ data: comments }, { data: activity }, { data: links }, { count: repos }] = await Promise.all([
+  // What get_task shows around a task, read by its number so it can go at the same time as the task itself
+  function around(b: Board, n: number) {
+    return Promise.all([
+      nameOf(b.workspace_id),
       db
         .from("comments")
         .select("*")
         .eq("board_id", b.id)
-        .eq("number", t.number)
+        .eq("number", n)
         .order("created_at"),
       db
         .from("activity")
         .select("actor, text, created_at, via")
         .eq("board_id", b.id)
-        .eq("number", t.number)
+        .eq("number", n)
         .order("created_at", { ascending: false })
         .limit(30),
       // Before the GitHub migration there's no table, and no links
@@ -608,11 +863,15 @@ export function actaFor(agent: Agent) {
         .from("task_links")
         .select("kind, ref, url, title, state, closes, extra")
         .eq("board_id", b.id)
-        .eq("number", t.number)
+        .eq("number", n)
         .order("updated_at", { ascending: false })
         .limit(20),
       db.from("github_repos").select("id", { count: "exact", head: true }).eq("board_id", b.id),
     ]);
+  }
+
+  async function detail(b: Board, t: TaskRow, read: ReturnType<typeof around>) {
+    const [who, { data: comments }, { data: activity }, { data: links }, { count: repos }] = await read;
     const issue = (links ?? []).find((l) => l.kind === "issue");
     const github = (links ?? []).map((l) =>
       compact({
@@ -796,7 +1055,7 @@ export function actaFor(agent: Agent) {
     },
 
     async tasks(ref: string, f: Filters) {
-      const b = await board(ref);
+      const b = await board(ref, true);
       const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
       const ready = await archiveReady(db);
       let q = db.from("tasks").select(await fields(), { count: "exact" }).eq("board_id", b.id);
@@ -842,8 +1101,12 @@ export function actaFor(agent: Agent) {
     },
 
     async task(ref: string, task: string) {
-      const b = await board(ref);
-      return detail(b, await row(b, task));
+      const b = await board(ref, true);
+      const n = numberOf(b, task);
+      const read = around(b, n);
+      // Left unread when the task turns out not to be there
+      read.catch(() => {});
+      return detail(b, await row(b, n), read);
     },
 
     async createTasks(ref: string, list: NewTask[]) {
@@ -905,165 +1168,7 @@ export function actaFor(agent: Agent) {
       };
     },
 
-    async updateTask(ref: string, task: string, p: TaskPatch) {
-      const b = await board(ref);
-      const t = await row(b, task);
-      const fields: Record<string, unknown> = {};
-      const notes: string[] = [];
-      const who = await nameOf(b.workspace_id);
-
-      if (p.title !== undefined && p.title.trim() && p.title.trim() !== t.title) {
-        fields.title = p.title.trim();
-        notes.push("renamed the task");
-      }
-      if (p.description !== undefined && p.description !== t.description) {
-        fields.description = p.description;
-        notes.push("edited the description");
-      }
-      let order: { number: number; position: number }[] = [];
-      if (p.status && p.status !== t.status) {
-        fields.status = p.status;
-        if (p.status === "done") fields.shipped_on = today();
-        else if (t.status === "done") fields.shipped_on = null;
-        notes.push(`moved it to ${statusTitle[p.status]}`);
-        order = [{ number: t.number, position: await columnSize(b, p.status) }];
-      }
-      const shipped = day(p.shipped, "shipped");
-      if (shipped !== undefined) {
-        if (shipped && ((fields.status as StatusCategory | undefined) ?? t.status) !== "done")
-          throw new Problem("Only done tasks have a shipped date. Set status to done as well.");
-        if (shipped !== ("shipped_on" in fields ? fields.shipped_on : t.shipped_on)) {
-          fields.shipped_on = shipped;
-          notes.push(shipped ? `set the shipped date to ${formatDue(shipped)}` : "removed the shipped date");
-        }
-      }
-      if (p.priority && p.priority !== t.priority) {
-        fields.priority = p.priority;
-        notes.push(`set priority to ${priorities.find((x) => x.id === p.priority)?.title}`);
-      }
-      if (p.size !== undefined && (p.size ?? null) !== t.size) {
-        fields.size = p.size ?? null;
-        notes.push(p.size ? `sized it ${p.size.toUpperCase()}` : "removed the size");
-      }
-      const project = pickProject(b, p.project);
-      if (project !== undefined && project !== t.project) {
-        fields.project = project;
-        notes.push(project ? `moved it to project ${project}` : "removed the project");
-      }
-      const assignee = await pickPerson(b, p.assignee);
-      if (assignee !== undefined && assignee !== t.assignee) {
-        fields.assignee = assignee;
-        notes.push(assignee ? `assigned ${who(assignee)}` : "removed the assignee");
-      }
-      for (const [field, column, word] of [
-        ["start", "start_on", "start date"],
-        ["due", "due_on", "due date"],
-      ] as const) {
-        const value = day(p[field], field);
-        if (value !== undefined && value !== t[column]) {
-          fields[column] = value;
-          notes.push(value ? `set the ${word} to ${formatDue(value)}` : `removed the ${word}`);
-        }
-      }
-      if (p.public !== undefined && p.public !== t.public) {
-        fields.public = p.public;
-        notes.push(p.public ? "added it to the public roadmap" : "took it off the public roadmap");
-      }
-      if (p.fields) {
-        const own = customIn(b, t.custom ?? {}, p.fields);
-        if (own.notes.length) {
-          fields.custom = own.next;
-          notes.push(...own.notes);
-        }
-      }
-      if (p.archived !== undefined && p.archived !== Boolean(t.archived_at)) {
-        if (!(await archiveReady(db)))
-          throw new Problem("Archiving needs the latest database migration. Ask the person who runs Acta to apply it.");
-        fields.archived_at = p.archived ? new Date().toISOString() : null;
-        notes.push(p.archived ? "archived the task" : "brought the task back from the archive");
-      }
-
-      let labels = p.labels ? pickLabels(b, p.labels) : [...t.labels];
-      for (const l of pickLabels(b, p.add_labels ?? [])) if (!labels.includes(l)) labels.push(l);
-      const drop = new Set(pickLabels(b, p.remove_labels ?? []));
-      labels = labels.filter((l) => !drop.has(l));
-      if (labels.join("\u0000") !== t.labels.join("\u0000")) {
-        fields.labels = labels;
-        for (const l of labels) if (!t.labels.includes(l)) notes.push(`added label ${l}`);
-        for (const l of t.labels) if (!labels.includes(l)) notes.push(`removed label ${l}`);
-      }
-
-      const subtasks = t.subtasks.map((s) => ({ ...s }));
-      const find = (ref: string) => {
-        const hit = subtasks.find((s) => s.id === ref || same(s.title, ref));
-        if (!hit)
-          throw new Problem(
-            `${taskId(b, t.number)} has no subtask “${ref}”. Its subtasks: ${subtasks.map((s) => `“${s.title}”`).join(", ") || "none"}.`,
-          );
-        return hit;
-      };
-      for (const ref of p.complete_subtasks ?? []) {
-        const s = find(ref);
-        if (!s.done) notes.push(`completed “${s.title}”`);
-        s.done = true;
-      }
-      for (const ref of p.reopen_subtasks ?? []) {
-        const s = find(ref);
-        if (s.done) notes.push(`reopened “${s.title}”`);
-        s.done = false;
-      }
-      for (const r of p.rename_subtasks ?? []) {
-        const s = find(r.subtask);
-        const title = r.title.trim().slice(0, 200);
-        if (!title || title === s.title) continue;
-        notes.push(`renamed subtask “${s.title}” to “${title}”`);
-        s.title = title;
-      }
-      for (const ref of p.remove_subtasks ?? []) {
-        const s = find(ref);
-        subtasks.splice(subtasks.indexOf(s), 1);
-        notes.push(`removed subtask “${s.title}”`);
-      }
-      for (const title of p.add_subtasks ?? []) {
-        if (!title.trim()) continue;
-        subtasks.push({ id: `s${randomUUID().slice(0, 8)}`, title: title.trim(), done: false });
-        notes.push(`added subtask “${title.trim()}”`);
-      }
-      if (JSON.stringify(subtasks) !== JSON.stringify(t.subtasks)) fields.subtasks = subtasks;
-
-      const places = [p.place, p.before, p.after].filter(Boolean).length;
-      if (places > 1) throw new Problem("Use only one of place, before and after.");
-      if (places) {
-        const status = (fields.status as StatusCategory | undefined) ?? t.status;
-        const column = await columnOrder(b, status, t.number);
-        let at = p.place === "top" ? 0 : column.length;
-        const next = p.before ?? p.after;
-        if (next) {
-          const other = numberOf(b, next);
-          const i = column.indexOf(other);
-          if (i === -1)
-            throw new Problem(
-              `${taskId(b, other)} isn’t in ${statusTitle[status]}. Place a task next to one in its own column.`,
-            );
-          at = p.before ? i : i + 1;
-        }
-        column.splice(at, 0, t.number);
-        order = column.map((number, position) => ({ number, position }));
-      }
-
-      if (!Object.keys(fields).length && !places) return { unchanged: true, task: summary(b, t, who) };
-      await apply(b, {
-        updated: Object.keys(fields).length ? [{ number: t.number, fields }] : [],
-        order,
-        activity: notes.map((text) => ({ id: randomUUID(), number: t.number, text })),
-      });
-      const placed = order.length > 1 ? order.findIndex((o) => o.number === t.number) + 1 : undefined;
-      return compact({
-        changed: notes,
-        place_in_column: placed && `${placed} of ${order.length}`,
-        task: summary(b, await row(b, t.number), who),
-      });
-    },
+    updateTask,
 
     async comment(ref: string, task: string, c: CommentInput) {
       const b = await board(ref);
@@ -1076,19 +1181,133 @@ export function actaFor(agent: Agent) {
       return { comment: made.id, task: taskId(b, t.number), url: taskUrl(b, t.number) };
     },
 
-    // Changes several tasks one after another. A task that can't change is reported and the rest carry on
+    // Changes several tasks as if one after another, in a handful of round trips: the tasks are read at once, each
+    // change is checked against the task as the ones before it left it, and they're saved together. A task that
+    // can't change is reported and the rest carry on
     async updateTasks(ref: string, list: (TaskPatch & { task: string })[]) {
-      const updated: Record<string, unknown>[] = [];
-      const failed: { task: string; problem: string }[] = [];
-      for (const { task, ...patch } of list) {
+      const outcomes: ({ updated: Record<string, unknown> } | { problem: string })[] = [];
+      const answer = () =>
+        compact({
+          board: ref,
+          updated: outcomes.flatMap((o) => ("updated" in o ? [o.updated] : [])),
+          failed: outcomes.flatMap((o, i) => ("problem" in o ? [{ task: list[i].task, problem: o.problem }] : [])),
+        });
+      // Each task on its own, read fresh, from the given one on. For when saving them together didn't work
+      const oneByOne = async (from: number) => {
+        for (let i = from; i < list.length; i++) {
+          const { task, ...patch } = list[i];
+          try {
+            outcomes[i] = { updated: { id: task, ...(await updateTask(ref, task, patch)) } };
+          } catch (error) {
+            if (!(error instanceof Problem)) throw error;
+            outcomes[i] = { problem: error.message };
+          }
+        }
+        return answer();
+      };
+
+      let b: Board;
+      try {
+        b = await board(ref, true);
+      } catch (error) {
+        if (!(error instanceof Problem)) throw error;
+        // It's the same board for every task, so each fails the same way
+        for (const i of list.keys()) outcomes[i] = { problem: error.message };
+        return answer();
+      }
+      const numbers = list.map(({ task }) => {
         try {
-          updated.push({ id: task, ...(await this.updateTask(ref, task, patch)) });
+          return numberOf(b, task);
+        } catch (error) {
+          if (error instanceof Problem) return error;
+          throw error;
+        }
+      });
+      const wanted = [...new Set(numbers.filter((n): n is number => typeof n === "number"))];
+      const targets = [...new Set(list.flatMap((p) => (p.status ? [p.status] : [])))];
+      const [read, who, sizes] = await Promise.all([
+        (async () =>
+          wanted.length
+            ? await db.from("tasks").select(await rowFields()).eq("board_id", b.id).in("number", wanted)
+            : { data: [], error: null })(),
+        nameOf(b.workspace_id),
+        Promise.all(targets.map(async (s) => [s, await columnSize(b, s)] as const)),
+      ]);
+      if (read.error) return oneByOne(0);
+
+      // The tasks and column sizes as the changes so far leave them
+      const current = new Map(((read.data ?? []) as unknown as FullRow[]).map((t) => [t.number, t]));
+      const counts = new Map<StatusCategory, number>(sizes);
+      type Waiting = { i: number; number: number; fields: Record<string, unknown>; notes: string[]; order: Order };
+      let waiting: (Waiting & { columns: StatusCategory[] })[] = [];
+
+      // Saves what's waiting in one go, and says where to carry on one by one if the database turned it down. Then
+      // none of it was saved, so going one by one from its first task does what doing them in turn always did
+      const save = async () => {
+        const batch = waiting;
+        waiting = [];
+        if (!batch.length) return null;
+        try {
+          await apply(b, {
+            updated: batch.flatMap((w) => (Object.keys(w.fields).length ? [{ number: w.number, fields: w.fields }] : [])),
+            order: batch.flatMap((w) => w.order),
+            activity: batch.flatMap((w) => logLines(w.number, w.notes)),
+          });
+          return null;
+        } catch (error) {
+          // Only a refusal from the database is retried task by task: it rolled the whole save back. Anything else,
+          // like a dropped connection, may have saved it all, and doing it again would add subtasks twice
+          if (error instanceof Problem) return batch[0].i;
+          throw error;
+        }
+      };
+
+      for (const [i, { task, ...p }] of list.entries()) {
+        const n = numbers[i];
+        if (n instanceof Problem) {
+          outcomes[i] = { problem: n.message };
+          continue;
+        }
+        try {
+          const t = found(b, n, current.get(n));
+          if (p.place || p.before || p.after) {
+            // Placing reads the column from the database, so changes waiting to move tasks into, out of or around
+            // that column are saved first
+            const status = p.status ?? t.status;
+            if (waiting.some((w) => w.columns.includes(status))) {
+              const from = await save();
+              if (from !== null) return oneByOne(from);
+            }
+          }
+          const plan = await changesFor(b, t, p, who, (status) => columnOrder(b, status, t.number));
+          if (!Object.keys(plan.fields).length && !plan.placed) {
+            outcomes[i] = { updated: { id: task, unchanged: true, task: summary(b, t, who) } };
+            continue;
+          }
+          // A move goes to the bottom of its new column, behind any moved there before it in this call
+          let order = plan.placed ?? [];
+          if (plan.moved) {
+            const size = counts.get(plan.moved)!;
+            if (!plan.placed) order = [{ number: t.number, position: size }];
+            counts.set(plan.moved, size + 1);
+            const left = counts.get(t.status);
+            if (left !== undefined) counts.set(t.status, left - 1);
+          }
+          const next = saved(t, plan.fields);
+          current.set(n, next);
+          const columns = [
+            ...(plan.moved ? [t.status, plan.moved] : []),
+            ...(plan.placed ? [plan.moved ?? t.status] : []),
+          ];
+          waiting.push({ i, number: n, fields: plan.fields, notes: plan.notes, order, columns });
+          outcomes[i] = { updated: { id: task, ...changed(b, next, plan.notes, order, who) } };
         } catch (error) {
           if (!(error instanceof Problem)) throw error;
-          failed.push({ task, problem: error.message });
+          outcomes[i] = { problem: error.message };
         }
       }
-      return compact({ board: ref, updated, failed });
+      const from = await save();
+      return from === null ? answer() : oneByOne(from);
     },
 
     // Sorts a column by a field, or puts the given tasks at its top in that order
@@ -1181,7 +1400,7 @@ export function actaFor(agent: Agent) {
         throw new Problem("This key can only edit comments it wrote. Add a new comment instead.");
       const { error } = await db.rpc("agent_edit_comment", { p_key: agent.hash, p_comment: id, p_body: body.trim() });
       if (error) throw dbProblem(error);
-      sendToGitHub(b.id);
+      flushGitHub(b.id);
       return { edited: id, task: taskId(b, c.number), url: taskUrl(b, c.number) };
     },
 
@@ -1243,6 +1462,9 @@ export function actaFor(agent: Agent) {
 
     async searchAll(f: Omit<Filters, "label" | "project" | "deleted">) {
       const list = await workspaces();
+      // Everyone in these workspaces, read while the boards are
+      const crowds = Promise.all(list.map((w) => people(w.id)));
+      crowds.catch(() => {});
       const { data: boards } = list.length
         ? await db
             .from("boards")
@@ -1260,7 +1482,7 @@ export function actaFor(agent: Agent) {
       );
       if (!spots.size) return { tasks: [], shown: 0, total: 0 };
 
-      const everyone = (await Promise.all(list.map((w) => people(w.id)))).flat();
+      const everyone = (await crowds).flat();
       const names = new Map(everyone.map((p) => [p.id, p.name]));
       let assignee: string | null | undefined;
       if (f.assignee !== undefined) {
@@ -1548,6 +1770,7 @@ export function actaFor(agent: Agent) {
           p_fields: fields,
         });
         if (error) throw dbProblem(error);
+        boards.clear();
       }
 
       let retagged = 0;

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { StatusMarker } from "@/components/board";
 import { Avatar, EmptyState } from "@/components/ui/display";
 import { DitherFill, type DitherTone } from "@/components/ui/dither";
@@ -11,6 +11,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { PixelCaret } from "@/components/ui/pixel";
 import { MONTHS, addDays, addMonths, diffDays, monthEnd, monthStart, parts, weekday } from "@/lib/dates";
 import {
+  boardMetaVersion,
   closed,
   formatDue,
   personById,
@@ -51,6 +52,25 @@ const accentFill = {
 
 type DragMode = "move" | "start" | "end";
 type Drag = { id: string; mode: DragMode; days: number };
+type Side = "left" | "right";
+type Accent = "lapis" | "pyrite" | "malachite" | "hematite";
+
+const sameEdges = (a: ReadonlyMap<string, Side>, b: ReadonlyMap<string, Side>) =>
+  a.size === b.size && [...b].every(([id, side]) => a.get(id) === side);
+
+// What a row may ask of the timeline. Every row gets the same object, whose methods reach the timeline's latest
+// state, so a change to one task draws one row
+type RowApi = {
+  open: (id: string) => void;
+  dispatch: (a: DemoAction) => void;
+  startDrag: (e: React.PointerEvent<HTMLElement>, t: Task, mode: DragMode) => void;
+  commit: (t: Task, patch: Pick<Task, "start" | "due">) => void;
+  barKey: (e: React.KeyboardEvent, t: Task) => void;
+  hover: (id: string, day: string) => void;
+  leave: (id: string) => void;
+  dragging: () => boolean;
+  scrollTo: (left: number) => void;
+};
 
 const span = (t: Task) => {
   const s = t.start ?? t.due;
@@ -71,7 +91,7 @@ function shifted(t: Task, mode: DragMode, days: number): Pick<Task, "start" | "d
   return { start: r.s, due: d < r.s ? r.s : d };
 }
 
-export function TimelineView({
+function TimelineViewBody({
   state,
   dispatch,
   visible,
@@ -94,6 +114,8 @@ export function TimelineView({
   filtered: boolean;
   onClearFilters: () => void;
   readOnly?: boolean;
+  /** Moves on when the board's people, labels or fields change, so what shows them is drawn again */
+  metaVersion?: number;
   lead?: (t: Task) => React.ReactNode;
   customGroups?: {
     key: string;
@@ -101,17 +123,21 @@ export function TimelineView({
     icon?: React.ReactNode;
     rows: Task[];
   }[];
-  accent?: "lapis" | "pyrite" | "malachite" | "hematite";
+  accent?: Accent;
 }) {
   const today = useToday() ?? FALLBACK_TODAY;
   const zoom = prefs.zoom ?? "month";
   const ppd = PPD[zoom];
+  const version = boardMetaVersion();
   const scrollRef = useRef<HTMLDivElement>(null);
   const cornerRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [ghost, setGhost] = useState<{ id: string; day: string } | null>(null);
   const [adding, setAdding] = useState<string | null>(null);
-  const [port, setPort] = useState({ left: 0, width: 0 });
+  // Bars scrolled out of sight get a pointer stuck to that edge. Which ones is worked out as the timeline scrolls,
+  // and only a bar crossing an edge draws anything again, so scrolling doesn't redraw every row each frame
+  const [edges, setEdges] = useState<ReadonlyMap<string, Side>>(() => new Map());
+  const measure = useRef(() => {});
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -119,14 +145,8 @@ export function TimelineView({
     let frame = 0;
     const read = () => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() =>
-        setPort({
-          left: el.scrollLeft,
-          width: el.clientWidth - (cornerRef.current?.offsetWidth ?? 300),
-        }),
-      );
+      frame = requestAnimationFrame(() => measure.current());
     };
-    read();
     el.addEventListener("scroll", read, { passive: true });
     const ro = new ResizeObserver(read);
     ro.observe(el);
@@ -192,8 +212,6 @@ export function TimelineView({
 
   const width = days * ppd;
   const x = (iso: string) => diffDays(first, iso) * ppd;
-  const dayAt = (clientX: number, el: HTMLElement) =>
-    addDays(first, Math.max(0, Math.floor((clientX - el.getBoundingClientRect().left) / ppd)));
 
   const scrollToToday = () => {
     const el = scrollRef.current;
@@ -234,7 +252,9 @@ export function TimelineView({
     let dx = 0;
     const move = (ev: PointerEvent) => {
       dx = ev.clientX - x0;
-      setDrag({ id: t.id, mode, days: Math.round(dx / ppd) });
+      // A bar moves a whole day at a time, so pointer moves within a day change nothing
+      const days = Math.round(dx / ppd);
+      setDrag((prev) => (prev?.id === t.id && prev.mode === mode && prev.days === days ? prev : { id: t.id, mode, days }));
     };
     const up = () => {
       el.removeEventListener("pointermove", move);
@@ -272,6 +292,69 @@ export function TimelineView({
       commit(t, shifted(t, e.shiftKey ? "end" : "move", step * (e.altKey ? 7 : 1)));
     }
   };
+
+  // Where each shown bar starts and ends, so a scroll only compares numbers to find the ones out of sight
+  const shown = useMemo(
+    () => groups.flatMap((g) => (prefs.collapsed.includes(g.key) ? [] : g.rows)),
+    [groups, prefs.collapsed],
+  );
+  useLayoutEffect(() => {
+    const ids: string[] = [];
+    const from: number[] = [];
+    const to: number[] = [];
+    for (const t of shown) {
+      const r = span(t);
+      if (!r) continue;
+      const live = drag?.id === t.id ? shiftedSpan(t, drag) : r;
+      ids.push(t.id);
+      from.push(diffDays(first, live.s) * ppd);
+      to.push(diffDays(first, live.d) * ppd + ppd);
+    }
+    measure.current = () => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const left = el.scrollLeft;
+      const right = left + el.clientWidth - (cornerRef.current?.offsetWidth ?? 300);
+      const next = new Map<string, Side>();
+      if (right > left)
+        for (let i = 0; i < ids.length; i++) {
+          if (to[i] < left) next.set(ids[i], "left");
+          else if (from[i] > right) next.set(ids[i], "right");
+        }
+      setEdges((prev) => (sameEdges(prev, next) ? prev : next));
+    };
+    measure.current();
+  }, [shown, drag, first, ppd]);
+
+  const handlers: RowApi = {
+    open: onOpen,
+    dispatch,
+    startDrag,
+    commit,
+    barKey: onBarKey,
+    hover: (id, day) => setGhost((g) => (g?.id === id && g.day === day ? g : { id, day })),
+    leave: (id) => setGhost((g) => (g?.id === id ? null : g)),
+    dragging: () => drag !== null,
+    scrollTo: (left) => scrollRef.current?.scrollTo({ left: Math.max(0, left), behavior: "smooth" }),
+  };
+  const latest = useRef(handlers);
+  useLayoutEffect(() => {
+    latest.current = handlers;
+  });
+  const api = useMemo<RowApi>(
+    () => ({
+      open: (id) => latest.current.open(id),
+      dispatch: (a) => latest.current.dispatch(a),
+      startDrag: (e, t, mode) => latest.current.startDrag(e, t, mode),
+      commit: (t, patch) => latest.current.commit(t, patch),
+      barKey: (e, t) => latest.current.barKey(e, t),
+      hover: (id, day) => latest.current.hover(id, day),
+      leave: (id) => latest.current.leave(id),
+      dragging: () => latest.current.dragging(),
+      scrollTo: (left) => latest.current.scrollTo(left),
+    }),
+    [],
+  );
 
   const unscheduled = rows.filter((t) => !span(t)).length;
   const toggle = (key: string) =>
@@ -484,111 +567,25 @@ export function TimelineView({
                     ? null
                     : g.rows.map((t) => {
                         n += 1;
-                        const r = span(t);
-                        const live = drag?.id === t.id && r ? { ...r, ...shiftedSpan(t, drag) } : r;
-                        const row = (
-                          <div key={t.id} className="group/row flex h-10">
-                            <div className="sticky left-0 z-10 flex w-[var(--left)] shrink-0 items-center gap-2.5 border-r border-b border-line bg-raised pr-2 pl-3 group-hover/row:bg-surface">
-                              {lead ? (
-                                lead(t)
-                              ) : (
-                                <span className="w-5 shrink-0 font-mono text-[11px] text-ink-3 tabular-nums">{n}</span>
-                              )}
-                              <StatusMarker status={t.status} />
-                              <button
-                                tabIndex={r ? -1 : 0}
-                                onClick={() => onOpen(t.id)}
-                                className={cn(
-                                  "min-w-0 truncate text-left text-sm outline-none hover:text-lapis focus-visible:ring-2 focus-visible:ring-lapis",
-                                  closed(t.status) && "text-ink-2",
-                                )}
-                              >
-                                {t.title}
-                              </button>
-                              {readOnly ? null : (
-                                <span className="ml-auto shrink-0 font-mono text-[11px] text-ink-3">{t.id}</span>
-                              )}
-                            </div>
-                            <div
-                              className="relative shrink-0 border-b border-line group-hover/row:bg-ink/[0.025]"
-                              style={{ width }}
-                              onPointerMove={(e) => {
-                                if (r || drag || readOnly) return;
-                                const day = dayAt(e.clientX, e.currentTarget);
-                                if (ghost?.id !== t.id || ghost.day !== day) setGhost({ id: t.id, day });
-                              }}
-                              onPointerLeave={() => ghost?.id === t.id && setGhost(null)}
-                              onClick={(e) => {
-                                if (r || readOnly) return;
-                                const day = dayAt(e.clientX, e.currentTarget);
-                                commit(t, {
-                                  start: day,
-                                  due: addDays(day, SPAN[zoom] - 1),
-                                });
-                                setGhost(null);
-                              }}
-                            >
-                              {live && port.width && x(live.d) + ppd < port.left ? (
-                                <EdgePointer
-                                  side="left"
-                                  at={port.left}
-                                  label={formatShort(live.d, today)}
-                                  onClick={() =>
-                                    scrollRef.current?.scrollTo({
-                                      left: Math.max(0, x(live.s) - 48),
-                                      behavior: "smooth",
-                                    })
-                                  }
-                                />
-                              ) : live && port.width && x(live.s) > port.left + port.width ? (
-                                <EdgePointer
-                                  side="right"
-                                  at={port.left + port.width}
-                                  label={formatShort(live.s, today)}
-                                  onClick={() =>
-                                    scrollRef.current?.scrollTo({
-                                      left: Math.max(0, x(live.s) - 48),
-                                      behavior: "smooth",
-                                    })
-                                  }
-                                />
-                              ) : null}
-                              {live ? (
-                                <Bar
-                                  task={t}
-                                  from={live.s}
-                                  to={live.d}
-                                  milestone={!t.start}
-                                  x={x}
-                                  ppd={ppd}
-                                  today={today}
-                                  dragging={drag?.id === t.id}
-                                  readOnly={readOnly}
-                                  accent={accent}
-                                  onOpen={() => onOpen(t.id)}
-                                  onPointerDown={(e, mode) => startDrag(e, t, mode)}
-                                  onKeyDown={(e) => onBarKey(e, t)}
-                                />
-                              ) : ghost?.id === t.id ? (
-                                <span
-                                  className="pointer-events-none absolute top-1.5 flex h-7 items-center gap-1.5 border border-dashed border-lapis bg-lapis-soft/60 px-2 text-xs whitespace-nowrap text-lapis-ink"
-                                  style={{
-                                    left: x(ghost.day),
-                                    width: Math.max(SPAN[zoom] * ppd - 2, 96),
-                                  }}
-                                >
-                                  <Icon name="plus" size="sm" /> Schedule
-                                </span>
-                              ) : null}
-                            </div>
-                          </div>
-                        );
-                        return readOnly ? (
-                          row
-                        ) : (
-                          <TaskMenu key={t.id} task={t} dispatch={dispatch} onOpen={onOpen}>
-                            {row}
-                          </TaskMenu>
+                        return (
+                          <TimelineRow
+                            key={t.id}
+                            task={t}
+                            n={n}
+                            lead={lead}
+                            readOnly={readOnly}
+                            first={first}
+                            ppd={ppd}
+                            width={width}
+                            today={today}
+                            zoom={zoom}
+                            accent={accent}
+                            drag={drag?.id === t.id ? drag : undefined}
+                            ghostDay={ghost?.id === t.id ? ghost.day : undefined}
+                            edge={edges.get(t.id)}
+                            version={version}
+                            api={api}
+                          />
                         );
                       })}
 
@@ -652,6 +649,123 @@ export function TimelineView({
     </div>
   );
 }
+
+// One task's row. It only draws again when something it shows changes: its task, a drag or hover on it, or its
+// bar scrolling past an edge
+const TimelineRow = memo(function TimelineRow({
+  task: t,
+  n,
+  lead,
+  readOnly,
+  first,
+  ppd,
+  width,
+  today,
+  zoom,
+  accent,
+  drag,
+  ghostDay,
+  edge,
+  api,
+}: {
+  task: Task;
+  n: number;
+  lead?: (t: Task) => React.ReactNode;
+  readOnly?: boolean;
+  first: string;
+  ppd: number;
+  width: number;
+  today: string;
+  zoom: Zoom;
+  accent: Accent;
+  // Set only on the row being dragged, or hovered with nothing scheduled
+  drag?: Drag;
+  ghostDay?: string;
+  edge?: Side;
+  // Moves on when the board's people and labels change
+  version: number;
+  api: RowApi;
+}) {
+  const x = (iso: string) => diffDays(first, iso) * ppd;
+  const dayAt = (clientX: number, el: HTMLElement) =>
+    addDays(first, Math.max(0, Math.floor((clientX - el.getBoundingClientRect().left) / ppd)));
+  const r = span(t);
+  const live = drag && r ? shiftedSpan(t, drag) : r;
+
+  const row = (
+    <div className="group/row flex h-10">
+      <div className="sticky left-0 z-10 flex w-[var(--left)] shrink-0 items-center gap-2.5 border-r border-b border-line bg-raised pr-2 pl-3 group-hover/row:bg-surface">
+        {lead ? lead(t) : <span className="w-5 shrink-0 font-mono text-[11px] text-ink-3 tabular-nums">{n}</span>}
+        <StatusMarker status={t.status} />
+        <button
+          tabIndex={r ? -1 : 0}
+          onClick={() => api.open(t.id)}
+          className={cn(
+            "min-w-0 truncate text-left text-sm outline-none hover:text-lapis focus-visible:ring-2 focus-visible:ring-lapis",
+            closed(t.status) && "text-ink-2",
+          )}
+        >
+          {t.title}
+        </button>
+        {readOnly ? null : <span className="ml-auto shrink-0 font-mono text-[11px] text-ink-3">{t.id}</span>}
+      </div>
+      <div
+        className="relative flex shrink-0 items-start border-b border-line group-hover/row:bg-ink/[0.025]"
+        style={{ width }}
+        onPointerMove={(e) => {
+          if (r || readOnly || api.dragging()) return;
+          api.hover(t.id, dayAt(e.clientX, e.currentTarget));
+        }}
+        onPointerLeave={() => api.leave(t.id)}
+        onClick={(e) => {
+          if (r || readOnly) return;
+          const day = dayAt(e.clientX, e.currentTarget);
+          api.commit(t, { start: day, due: addDays(day, SPAN[zoom] - 1) });
+          api.leave(t.id);
+        }}
+      >
+        {live && edge ? (
+          <EdgePointer
+            side={edge}
+            label={formatShort(edge === "left" ? live.d : live.s, today)}
+            onClick={() => api.scrollTo(x(live.s) - 48)}
+          />
+        ) : null}
+        {live ? (
+          <Bar
+            task={t}
+            from={live.s}
+            to={live.d}
+            milestone={!t.start}
+            x={x}
+            ppd={ppd}
+            today={today}
+            dragging={Boolean(drag)}
+            readOnly={readOnly}
+            accent={accent}
+            onOpen={() => api.open(t.id)}
+            onPointerDown={(e, mode) => api.startDrag(e, t, mode)}
+            onKeyDown={(e) => api.barKey(e, t)}
+          />
+        ) : ghostDay ? (
+          <span
+            className="pointer-events-none absolute top-1.5 flex h-7 items-center gap-1.5 border border-dashed border-lapis bg-lapis-soft/60 px-2 text-xs whitespace-nowrap text-lapis-ink"
+            style={{ left: x(ghostDay), width: Math.max(SPAN[zoom] * ppd - 2, 96) }}
+          >
+            <Icon name="plus" size="sm" /> Schedule
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+  return readOnly ? (
+    row
+  ) : (
+    <TaskMenu task={t} dispatch={api.dispatch} onOpen={api.open}>
+      {row}
+    </TaskMenu>
+  );
+});
 
 function shiftedSpan(t: Task, drag: Drag) {
   const next = shifted(t, drag.mode, drag.days);
@@ -803,17 +917,8 @@ function Bar({
   );
 }
 
-function EdgePointer({
-  side,
-  at,
-  label,
-  onClick,
-}: {
-  side: "left" | "right";
-  at: number;
-  label: string;
-  onClick: () => void;
-}) {
+// Sticks to the edge of the visible timeline by itself, so scrolling never has to move it
+function EdgePointer({ side, label, onClick }: { side: Side; label: string; onClick: () => void }) {
   return (
     <button
       onClick={(e) => {
@@ -822,10 +927,9 @@ function EdgePointer({
       }}
       aria-label={`Scroll to ${label}`}
       className={cn(
-        "absolute top-2.5 z-[5] flex h-5 items-center gap-1 border border-line-strong bg-raised px-1.5 font-mono text-[10px] text-ink-2 hover:border-ink-3 hover:text-ink",
-        side === "right" && "-translate-x-full",
+        "sticky z-[5] mt-2.5 flex h-5 shrink-0 items-center gap-1 border border-line-strong bg-raised px-1.5 font-mono text-[10px] text-ink-2 hover:border-ink-3 hover:text-ink",
+        side === "left" ? "left-[calc(var(--left)+6px)]" : "right-1.5 ml-auto",
       )}
-      style={{ left: side === "left" ? at + 6 : at - 6 }}
     >
       {side === "left" ? <Icon name="arrow-left" size="sm" /> : null}
       {label}
@@ -862,3 +966,6 @@ function AddInput({ label, onAdd, onClose }: { label: string; onAdd: (title: str
     />
   );
 }
+
+// Drawn again only when what it shows changes, not each time the page around it does
+export const TimelineView = memo(TimelineViewBody);

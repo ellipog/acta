@@ -17,6 +17,7 @@ import {
   taskJson,
   taskNumber,
 } from "./roadmap-json";
+import { liveRoadmap } from "./seo";
 import { publicHref } from "./slugs";
 import { createAdminClient, serviceReady } from "./supabase/admin";
 import { authReady, supabaseKey, supabaseUrl } from "./supabase/env";
@@ -74,7 +75,12 @@ type Ctx = {
   url: URL;
   use: KeyUse;
   send: (data: unknown, status?: number, cache?: string) => Response;
+  /** The roadmap, as this visitor sees it when there is one */
+  load: (visitor: string | null) => Promise<Roadmap>;
 };
+
+type Roadmap = { data: PublicRoadmapData; page: PublicPage };
+type Where = Pick<KeyUse, "board" | "workspace_slug" | "board_slug">;
 
 async function body(request: Request) {
   const text = await request.text();
@@ -103,17 +109,57 @@ function onFrom(value: unknown) {
   return value;
 }
 
-async function load(use: KeyUse, visitor: string | null): Promise<{ data: PublicRoadmapData; page: PublicPage }> {
-  const { data, error } = await anonDb().rpc("public_roadmap", {
-    p_workspace: use.workspace_slug,
-    p_board: use.board_slug,
-    p_visitor: visitor,
-  });
-  if (error) throw new Refusal(503, "The roadmap couldn’t be read just now. Try again.");
-  const r = data as PublicResult;
+const unread = () => new Refusal(503, "The roadmap couldn’t be read just now. Try again.");
+
+async function readRoadmap(where: Where, visitor: string | null): Promise<Roadmap> {
+  let r: PublicResult;
+  if (visitor) {
+    const { data, error } = await anonDb().rpc("public_roadmap", {
+      p_workspace: where.workspace_slug,
+      p_board: where.board_slug,
+      p_visitor: visitor,
+    });
+    if (error) throw unread();
+    r = data as PublicResult;
+  } else {
+    // Without a visitor it's the same for every caller, so it's the public page's own read, shared for a minute
+    try {
+      r = await liveRoadmap(where.workspace_slug, where.board_slug);
+    } catch {
+      throw unread();
+    }
+  }
   if (!r || isPrivate(r)) throw new Refusal(404, "This board’s roadmap isn’t published. Make it public to use the API.");
   return { data: r, page: roadmapPage(r) };
 }
+
+// The board each key reached last time on this server, so a read can start while the key is checked. The check
+// runs on every call and decides it: a key that no longer works gets its refusal, and the read is thrown away
+const lastBoard = new Map<string, Where>();
+
+function remember(token: string, use: KeyUse | null) {
+  if (!use) {
+    lastBoard.delete(token);
+    return;
+  }
+  if (lastBoard.size >= 1000 && !lastBoard.has(token)) lastBoard.clear();
+  lastBoard.set(token, { board: use.board, workspace_slug: use.workspace_slug, board_slug: use.board_slug });
+}
+
+/** A GET's read, started before the key check answers. Only the shared read without a visitor starts early: it's
+ * cached, so a caller the key check then turns away (over its limit, or from the wrong site) costs no extra
+ * database work. A read for one visitor waits for the check. Null when it doesn't start early */
+function readAhead(where: Where, url: URL) {
+  if (url.searchParams.get("visitor")) return null;
+  const visitor = null;
+  const result = readRoadmap(where, visitor);
+  // Its failure only matters if the route uses it, and then it's awaited there
+  result.catch(() => {});
+  return { where, visitor, result };
+}
+
+const sameBoard = (a: Where, b: Where) =>
+  a.board === b.board && a.workspace_slug === b.workspace_slug && a.board_slug === b.board_slug;
 
 // GETs without a visitor are the same for everyone, so browsers may keep them a little while
 const cacheFor = (visitor: string | null) => (visitor ? "no-store" : "private, max-age=30");
@@ -122,9 +168,9 @@ const routes: Record<string, Partial<Record<"GET" | "POST", Route>>> = {
   "": {
     GET: {
       write: false,
-      async run({ use, url, request, send }) {
+      async run({ use, url, request, send, load }) {
         const visitor = visitorFrom(url.searchParams.get("visitor"), false, use.board);
-        const { data, page } = await load(use, visitor);
+        const { data, page } = await load(visitor);
         const tasks = shownTasks(data, page);
         const count = (s: string) => tasks.filter((t) => stageFor(t.status) === s).length;
         return send(
@@ -166,11 +212,11 @@ const routes: Record<string, Partial<Record<"GET" | "POST", Route>>> = {
   tasks: {
     GET: {
       write: false,
-      async run({ use, url, send }) {
+      async run({ use, url, send, load }) {
         const visitor = visitorFrom(url.searchParams.get("visitor"), false, use.board);
         const q = readTaskQuery(url.searchParams);
         if (typeof q === "string") throw new Refusal(400, q);
-        const { data, page } = await load(use, visitor);
+        const { data, page } = await load(visitor);
         const all = shownTasks(data, page).map((t) => taskJson(data, page, t, { visitor: Boolean(visitor) }));
         return send(queryTasks(all, q), 200, cacheFor(visitor));
       },
@@ -179,10 +225,10 @@ const routes: Record<string, Partial<Record<"GET" | "POST", Route>>> = {
   "tasks/:id": {
     GET: {
       write: false,
-      async run({ use, url, send }) {
+      async run({ use, url, send, load }) {
         const visitor = visitorFrom(url.searchParams.get("visitor"), false, use.board);
         const n = taskNumber(param(url, 1), use.prefix);
-        const { data, page } = await load(use, visitor);
+        const { data, page } = await load(visitor);
         const t = n === null ? undefined : shownTasks(data, page).find((x) => x.number === n);
         if (!t) throw new Refusal(404, `There’s no ${param(url, 1)} on this roadmap.`);
         return send({ task: taskJson(data, page, t, { visitor: Boolean(visitor) }) }, 200, cacheFor(visitor));
@@ -215,11 +261,11 @@ const routes: Record<string, Partial<Record<"GET" | "POST", Route>>> = {
   ideas: {
     GET: {
       write: false,
-      async run({ use, url, send }) {
+      async run({ use, url, send, load }) {
         const visitor = visitorFrom(url.searchParams.get("visitor"), false, use.board);
         const sort = url.searchParams.get("sort") ?? "top";
         if (sort !== "top" && sort !== "new") throw new Refusal(400, "sort must be top or new.");
-        const { data, page } = await load(use, visitor);
+        const { data, page } = await load(visitor);
         const ideas = data.suggestions
           .map((s) => ideaJson(page, s, { visitor: Boolean(visitor) }))
           .sort((a, b) => (sort === "new" ? Date.parse(b.at) - Date.parse(a.at) : (b.votes ?? 0) - (a.votes ?? 0)));
@@ -346,6 +392,10 @@ export async function roadmapApi(request: Request) {
     );
   if (!roadmapKeyShape.test(token)) return fail(new Refusal(401, "That isn’t a roadmap key. They start with acta_pk_."));
 
+  // A key this server has seen before says which board to read, so a GET reads it while the key is checked
+  const known = route.write ? undefined : lastBoard.get(token);
+  const ahead = known ? readAhead(known, url) : null;
+
   const { data, error } = await adminDb().rpc("use_roadmap_key", {
     p_token: token,
     p_who: callerOf(request),
@@ -356,6 +406,7 @@ export async function roadmapApi(request: Request) {
     return fail(new Refusal(503, "The roadmap API isn’t available right now."));
   }
   const use = data as KeyUse | null;
+  remember(token, use);
   if (!use) return fail(new Refusal(401, "That roadmap key doesn’t work. It may have been rotated or revoked."));
   const c = roadmapCors(use.origins ?? [], origin);
   if (!c.allowed) return fail(new Refusal(403, `This key works only from ${use.origins.join(", ")}.`));
@@ -363,8 +414,12 @@ export async function roadmapApi(request: Request) {
   if (!use.allowed)
     return fail(new Refusal(429, "Too many calls. Wait a minute.", { "Retry-After": String(use.retry_after) }));
 
+  // The read that started early, if it was for this key's board and the same visitor, and otherwise one now
+  const load = (visitor: string | null) =>
+    ahead && ahead.visitor === visitor && sameBoard(ahead.where, use) ? ahead.result : readRoadmap(use, visitor);
+
   try {
-    return await route.run({ request, url, use, send });
+    return await route.run({ request, url, use, send, load });
   } catch (e) {
     if (e instanceof Refusal) return fail(e);
     console.error("Roadmap API", e);
