@@ -27,7 +27,8 @@ export type TaskRow = {
   start_on: string | null;
   due_on: string | null;
   assignee: string | null;
-  description: string;
+  // Missing from a board's own reads, which leave descriptions for each task's dialog to read
+  description?: string | null;
   subtasks: Subtask[];
   public: boolean;
   shipped_on: string | null;
@@ -273,7 +274,9 @@ export function diffBoards(base: BoardState, next: BoardState): Diff {
       d.created.push(id);
       if (b.voted) d.voted.push(id);
     } else {
-      const changed = syncedFields.filter((f) => !same(a[f], b[f]));
+      // A description one copy hasn't read is no change. Both copies read it at once, and until the other has, a
+      // save would send the empty one over it, or the real one back for nothing
+      const changed = syncedFields.filter((f) => !same(a[f], b[f]) && !(f === "description" && (a.brief || b.brief)));
       if (changed.length) d.updated.push({ id, fields: changed });
       if (Boolean(a.voted) !== Boolean(b.voted)) (b.voted ? d.voted : d.unvoted).push(id);
       if (a.position !== b.position && Number.isFinite(b.position)) d.placed.push(id);
@@ -302,6 +305,10 @@ export function diffBoards(base: BoardState, next: BoardState): Diff {
 
   return d;
 }
+
+/** The tasks a save would put back whole, as it does one an undo brings back, without the description this copy
+ * never read. Saved like that, the empty one would go over the real one, so the save waits until they're read */
+export const unreadBack = (d: Diff, state: BoardState) => d.created.filter((id) => state.tasks[id]?.brief);
 
 export function toWire(d: Diff, state: BoardState) {
   const n = taskNumber;
@@ -483,8 +490,19 @@ export type Change =
   | { kind: "uncomment"; id: string; task?: string }
   | { kind: "activity"; task: string; entry: Activity }
   | { kind: "unactivity"; id: string; task?: string }
-  // A task's whole thread and newest activity, as read when its dialog opens. complete: every activity line is in it
-  | { kind: "thread"; task: string; comments: Comment[]; activity: Activity[]; complete: boolean; had: Held }
+  // A task's whole thread and newest activity, and its description, as read when its dialog opens. complete: every
+  // activity line is in it
+  | {
+      kind: "thread";
+      task: string;
+      comments: Comment[];
+      activity: Activity[];
+      complete: boolean;
+      had: Held;
+      description?: string;
+    }
+  // Every public task, read whole for the public roadmap, for the descriptions of those held without one
+  | { kind: "public"; tasks: Task[] }
   // Comment counts and latest activity lines read for partial tasks, with what base held of each
   | { kind: "counts"; counts: Record<string, number>; latest: Record<string, Activity>; had: Record<string, string[]> }
   | { kind: "suggestion"; suggestion: Suggestion }
@@ -514,6 +532,8 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
       const prev = base.tasks[id];
       if (ev.row.deleted_at) return prev ? { kind: "task", id, remove: true } : { kind: "none" };
       const incoming = fromRow(ev.row);
+      // A row read without its description says nothing about it
+      const described = typeof ev.row.description === "string";
       if (!prev)
         return {
           kind: "task",
@@ -529,6 +549,7 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
             origin: ev.row.origin ?? undefined,
             // Its comments and activity follow on their own, and its dialog reads them in case any didn't
             partial: true,
+            ...(described ? {} : { brief: true as const }),
           },
         };
       const changed: Partial<Task> = {};
@@ -536,7 +557,13 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
       for (const f of [...syncedFields, ...stampedFields, "votes", "position"] as (keyof typeof incoming)[]) {
         // A row without the column, like one from before the closed times migration, says nothing about it
         if ((f === "closed" && !("closed_at" in ev.row)) || (f === "opened" && !ev.row.created_at)) continue;
+        if (f === "description" && !described) continue;
         if (!same(prev[f], incoming[f])) (changed as Record<string, unknown>)[f] = incoming[f];
+      }
+      // The description this copy hadn't read
+      if (prev.brief && described) {
+        changed.description = incoming.description;
+        changed.brief = undefined;
       }
       return Object.keys(changed).length ? { kind: "task", id, fields: changed } : { kind: "none" };
     }
@@ -666,7 +693,26 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
       const activity = settle(t.activity, c.activity, c.had.activity, c.complete);
       const whole: Task = { ...t, thread, comments: thread.length, activity };
       delete whole.partial;
+      // A description held already is as new as the read, or newer: the live feed brings every change to it. A task
+      // with no row left has none to read, and none a save could go over
+      if (t.brief) {
+        if (c.description !== undefined) whole.description = c.description;
+        delete whole.brief;
+      }
       return { ...state, tasks: { ...state.tasks, [c.task]: whole } };
+    }
+    case "public": {
+      // Those held without their description get it. Those not held come in first, as any read of tasks does
+      let tasks = state.tasks;
+      for (const t of c.tasks) {
+        const now = tasks[t.id];
+        if (!now?.brief || t.brief) continue;
+        if (tasks === state.tasks) tasks = { ...tasks };
+        const whole: Task = { ...now, description: t.description };
+        delete whole.brief;
+        tasks[t.id] = whole;
+      }
+      return { ...state, tasks, publicHeld: true };
     }
     case "counts": {
       let tasks = state.tasks;

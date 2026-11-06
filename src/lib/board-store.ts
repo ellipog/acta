@@ -35,6 +35,9 @@ export type Task = {
   // A board arrives with only its tasks' comment counts and latest activity, and reads the rest of a task's comments
   // and activity when its dialog opens. Until then thread and activity hold only what's come in since, and this is set
   partial?: true;
+  // A board arrives without its tasks' descriptions too, which can be most of its size, and reads one with the thread.
+  // Until then description is empty and this is set, so nothing shows or saves the empty one as though it were real
+  brief?: true;
   public?: boolean;
   votes?: number;
   voted?: boolean;
@@ -258,6 +261,9 @@ export type BoardState = {
   // The shelves of tasks held only in part, while the rest waits on the server (see board-shelves.ts). Missing when
   // the board holds every task, as the demo does
   gaps?: Gaps;
+  // Every public task is held, with its description, wherever its shelf has got to, for the public roadmap. Its shelves
+  // can be held only in part, as done and archived work often is
+  publicHeld?: true;
 };
 
 export const statuses: { id: StatusCategory; title: string; rock: string }[] = [

@@ -21,9 +21,10 @@ import type { LiveBoard, LiveFrame } from "./live";
 // A board comes as the first page of each shelf its view shows (see board-shelves.ts), with every shelf's count, and
 // the browser reads the rest of those shelves straight after. Shelves the view doesn't show wait on the server.
 //
-// Each task comes with its comment count and latest activity line, not its comments and activity, which can be most
-// of a board's size. Its Inbox gets the board's latest lines by other people, with the tasks they're on. The rest of
-// a task's thread is read when its dialog opens (readThread)
+// Each task comes with its comment count and latest activity line, not its comments, activity and description, which
+// can be most of a board's size. Its Inbox gets the board's latest lines by other people, with the tasks they're on.
+// The rest of a task is read when its dialog opens (readThread), and the public roadmap reads its tasks whole
+// (readPublic)
 
 // How many tasks of each shelf come with the board, enough to fill a column or a screen of rows and some way past
 export const FIRST = 100;
@@ -68,8 +69,16 @@ export type FirstRead = {
   limit: number;
 };
 
-// A task with its comment count, its latest activity line and whether you voted for it
-const taskColumns = "*, comments(count), activity(id, actor, text, created_at, via), task_votes(voter)";
+// A task's own columns but its description, which is read with its thread when its dialog opens (readThread). A
+// description can run to pages, and a board holds hundreds of tasks. A column added to tasks belongs here too.
+// These are plain strings to the type checker, as reads cast what they get, and its parse of a select this long
+// runs too deep
+const cardColumns: string =
+  "board_id, number, title, status, priority, size, project, labels, start_on, due_on, assignee, subtasks, public, " +
+  "shipped_on, archived_at, custom, created_at, closed_at, vote_count, position, origin, deleted_at";
+// With its comment count, its latest activity line and whether you voted for it
+const extras: string = "comments(count), activity(id, actor, text, created_at, via), task_votes(voter)";
+const taskColumns: string = `${cardColumns}, ${extras}`;
 const headOf = (s: Shelf) => `shelf_${s}`;
 
 type Filtering<Q> = {
@@ -211,14 +220,16 @@ export async function recentLines(supabase: SupabaseClient, boardId: string, meI
 // How many activity lines a task's dialog shows at most
 export const THREAD_ACTIVITY = 100;
 
-/** A task's whole thread and newest activity, for its dialog. Null when it couldn't be read */
+/** A task's description, whole thread and newest activity, for its dialog. Null when it couldn't be read. The
+ * description is missing when the task has no row left to read it from */
 export async function readThread(
   supabase: SupabaseClient,
   boardId: string,
   number: number,
   nameOf: (id: string | null) => string,
-): Promise<{ comments: Comment[]; activity: Activity[]; complete: boolean } | null> {
-  const [comments, activity] = await Promise.all([
+): Promise<{ comments: Comment[]; activity: Activity[]; complete: boolean; description?: string } | null> {
+  const [task, comments, activity] = await Promise.all([
+    supabase.from("tasks").select("description").eq("board_id", boardId).eq("number", number).maybeSingle(),
     supabase.from("comments").select("*").eq("board_id", boardId).eq("number", number).order("created_at"),
     supabase
       .from("activity")
@@ -228,13 +239,41 @@ export async function readThread(
       .order("created_at", { ascending: false })
       .limit(THREAD_ACTIVITY),
   ]);
-  if (comments.error || activity.error) return null;
+  if (task.error || comments.error || activity.error) return null;
   const lines = (activity.data ?? []) as Line[];
   return {
     comments: ((comments.data ?? []) as Parameters<typeof commentFrom>[0][]).map((c) => commentFrom(c, nameOf)),
     activity: lines.map((a) => activityFrom(a, nameOf)).reverse(),
     complete: lines.length < THREAD_ACTIVITY,
+    description: task.data ? ((task.data as { description: string | null }).description ?? "") : undefined,
   };
+}
+
+/** Every public task on a board but canceled ones, with its description, for the public roadmap. It shows them
+ * wherever their shelves have got to, and its notes and search come from their descriptions. Null when they couldn't
+ * be read */
+export async function readPublic(supabase: SupabaseClient, boardId: string, meId: string): Promise<NestedTask[] | null> {
+  const rows: NestedTask[] = [];
+  for (let after = 0; ; ) {
+    const { data, error } = await supabase
+      .from("tasks")
+      .select(`${cardColumns}, description, ${extras}`)
+      .eq("board_id", boardId)
+      .eq("public", true)
+      .neq("status", "canceled")
+      .is("deleted_at", null)
+      .gt("number", after)
+      .order("number")
+      .order("created_at", { referencedTable: "activity", ascending: false })
+      .limit(1, { referencedTable: "activity" })
+      .eq("task_votes.voter", `u:${meId}`)
+      .limit(PAGE);
+    if (error) return null;
+    const page = (data ?? []) as unknown as NestedTask[];
+    rows.push(...page);
+    if (page.length < PAGE) return rows;
+    after = page[page.length - 1].number;
+  }
 }
 
 /** Comment counts and latest activity lines of some of a board's tasks, or of all of them. Null when they couldn't
@@ -321,6 +360,8 @@ export function taskFrom(prefix: string, row: NestedTask, nameOf: (id: string | 
     thread: [],
     activity: [...known.values()].map((a) => activityFrom(a, nameOf)).sort((a, b) => a.at - b.at),
     partial: true,
+    // Only the public roadmap's read brings descriptions
+    ...(typeof row.description === "string" ? {} : { brief: true as const }),
   };
 }
 

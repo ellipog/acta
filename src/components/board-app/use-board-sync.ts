@@ -12,6 +12,7 @@ import {
   FIRST,
   PAGE,
   readCounts,
+  readPublic,
   readShelf,
   readTasks,
   readThread,
@@ -36,6 +37,7 @@ import {
   taskKey,
   taskNumber,
   toWire,
+  unreadBack,
   unsure,
   type ActivityRow,
   type BoardRow,
@@ -107,6 +109,7 @@ type Handlers = {
   recountShelves: () => Promise<void>;
   pump: () => void;
   loadLoose: () => Promise<void>;
+  loadThread: (id: string) => Promise<void>;
 };
 const idle = async () => {};
 
@@ -183,6 +186,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     recountShelves: idle,
     pump: () => {},
     loadLoose: idle,
+    loadThread: idle,
   });
 
   useEffect(() => {
@@ -421,6 +425,37 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     [boardId, meId, prefix, hold],
   );
 
+  // Reads every public task whole, for the public roadmap, which shows them wherever their shelves have got to. Those
+  // the board doesn't hold join it, and those it holds without their description get it. Once is enough: the live
+  // feed brings any task that's made public after
+  const readingPublic = useRef(false);
+  const loadPublic = useCallback(async () => {
+    if (!boardId || !meId || readingPublic.current || base.current?.publicHeld) return;
+    readingPublic.current = true;
+    const gen = generation.current;
+    try {
+      const supabase = await loadClient();
+      for (let tries = 0; tries < 5 && alive.current; tries++) {
+        const rows = await readPublic(supabase, boardId, meId);
+        if (generation.current !== gen || !alive.current) return;
+        if (!rows) {
+          await pause(1000 * 2 ** tries);
+          continue;
+        }
+        while (inflight.current && alive.current) await pause(100);
+        if (generation.current !== gen || !base.current) return;
+        hold(rows);
+        const tasks = rows.filter((r) => !gone.current.has(r.number)).map((r) => taskFrom(prefix, r, readName));
+        const change: BoardChange = { kind: "public", tasks };
+        base.current = apply(base.current, change);
+        dispatch({ type: "rebase", current: (b) => apply(b, change), history: replay(change) });
+        return;
+      }
+    } finally {
+      readingPublic.current = false;
+    }
+  }, [boardId, meId, prefix, readName, hold, dispatch]);
+
   const loadLoose = useCallback(async () => {
     const numbers = [...loose.current].slice(-LOOSE);
     loose.current.clear();
@@ -533,8 +568,9 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     }
   }, [boardId, dispatch, readAgain]);
 
-  // Reads a task's whole thread and newest activity, for its dialog. It lands in base, on screen and in every step
-  // of undo at once, so no copy of the board is left without it
+  // Reads a task's description, whole thread and newest activity, for its dialog. It lands in base, on screen and in
+  // every step of undo at once, so no copy of the board is left without it. A task an undo brought back is on screen
+  // and not in base, and reads its description all the same before it goes back (see flush)
   const loadThread = useCallback(
     async (id: string) => {
       if (!boardId || reading.current.has(id)) return;
@@ -546,8 +582,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
             await pause(300);
             continue;
           }
-          const task = base.current?.tasks[id];
-          if (!task?.partial) return;
+          const task = base.current?.tasks[id] ?? latest.current.tasks[id];
+          if (!task?.partial && !task?.brief) return;
           const saved = saves.current;
           const had = heldBy(task);
           const read = await readThread(supabase, boardId, taskNumber(id), readName);
@@ -671,8 +707,21 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
   const flush = useCallback(async () => {
     if (!boardId || !base.current || inflight.current) return;
     const target = latest.current;
-    if (emptyDiff(diffBoards(base.current, target))) {
+    const diff = diffBoards(base.current, target);
+    if (emptyDiff(diff)) {
       setStatus("saved");
+      return;
+    }
+    // A task that goes back whole, as one an undo brings back does, waits for the description this copy never read,
+    // and so does the rest of the save, which may hang on that task
+    const unread = unreadBack(diff, target);
+    if (unread.length) {
+      setStatus("saving");
+      if (timer.current) clearTimeout(timer.current);
+      void Promise.all(unread.map((id) => handlers.current.loadThread(id))).then(() => {
+        const still = unread.some((id) => latest.current.tasks[id]?.brief);
+        timer.current = setTimeout(() => void handlers.current.flush(), still ? 5000 : 0);
+      });
       return;
     }
     inflight.current = true;
@@ -743,7 +792,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
 
   // The subscription lives as long as the board is on screen, so it reads these through a ref
   useEffect(() => {
-    handlers.current = { receive, resync, catchUp, flush, remember, recount, recountShelves, pump, loadLoose };
+    handlers.current = { receive, resync, catchUp, flush, remember, recount, recountShelves, pump, loadLoose, loadThread };
   });
 
   useEffect(() => {
@@ -852,7 +901,11 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     // Closing the tab can't wait for a normal save, so this sends what's left with keepalive
     const save = () => {
       if (!base.current || !token.current || inflight.current) return;
-      const d = diffBoards(base.current, latest.current);
+      const all = diffBoards(base.current, latest.current);
+      // There's no time to read a description now, so a task that would go back without one stays deleted, as it
+      // is on the server, with the description it has there
+      const unread = new Set(unreadBack(all, latest.current));
+      const d = unread.size ? { ...all, created: all.created.filter((id) => !unread.has(id)) } : all;
       if (emptyDiff(d)) return;
       if (timer.current) clearTimeout(timer.current);
       void fetch(`${supabaseUrl}/rest/v1/rpc/apply_board_changes`, {
@@ -887,5 +940,5 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     };
   }, [boardId]);
 
-  return { status, here, knownAt, loadThread, want, preload, loadTasks, loading };
+  return { status, here, knownAt, loadThread, want, preload, loadTasks, loadPublic, loading };
 }

@@ -185,7 +185,7 @@ export function BoardApp({
     initDemo(live ? live.state : seedBoard(), full ? {} : { view }),
   );
   const { board: state, prefs, restored, synced } = demo;
-  const { status, here, knownAt, loadThread, want, preload, loadTasks, loading } = useBoardSync(
+  const { status, here, knownAt, loadThread, want, preload, loadTasks, loadPublic, loading } = useBoardSync(
     live,
     state,
     rawDispatch,
@@ -212,16 +212,21 @@ export function BoardApp({
   // The shelves of tasks this view shows are read, each to its end, and the rest stay on the server until it shows
   // them. Shelves whose size couldn't be counted are read too, as there's no telling what they hold. This waits for
   // the board's settings, so tasks the saved filters hide aren't read before they're known
-  const shown = useMemo(
-    () =>
-      shelvesShown({
-        view: prefs.view,
-        grouping: prefs.grouping,
-        collapsed: prefs.collapsed,
-        filters: prefs.filters,
-      }),
-    [prefs.view, prefs.grouping, prefs.collapsed, prefs.filters],
-  );
+  // The public roadmap reads its own tasks whole, and done work only once someone looks for a task to add to it
+  const [addingDone, setAddingDone] = useState(false);
+  const shown = useMemo(() => {
+    const out = shelvesShown({
+      view: prefs.view,
+      grouping: prefs.grouping,
+      collapsed: prefs.collapsed,
+      filters: prefs.filters,
+    });
+    return prefs.view === "public" && addingDone && !prefs.filters.hideDone ? [...out, "done" as const] : out;
+  }, [prefs.view, prefs.grouping, prefs.collapsed, prefs.filters, addingDone]);
+  const publicShown = Boolean(live) && prefs.view === "public";
+  useEffect(() => {
+    if (publicShown && !state.publicHeld) void loadPublic();
+  }, [publicShown, state.publicHeld, loadPublic]);
   const needKey = [...new Set([...shown, ...shelfList.filter((s) => state.gaps?.[s] && state.gaps[s]!.rest === undefined)])].join(",");
   useEffect(() => {
     if (live && (restored || !full)) want(needKey ? (needKey.split(",") as Shelf[]) : []);
@@ -232,8 +237,9 @@ export function BoardApp({
       if (!live) return;
       const next = { ...prefs, ...patch };
       preload(shelvesShown({ view: next.view, grouping: next.grouping, collapsed: next.collapsed, filters: next.filters }));
+      if (next.view === "public") void loadPublic();
     },
-    [live, prefs, preload],
+    [live, prefs, preload, loadPublic],
   );
   // A board's prefs follow the person signed in to their other devices. The demo's stay in this browser
   const prefsKey = live ? `prefs-${live.board.id}` : PREFS_KEY;
@@ -407,9 +413,9 @@ export function BoardApp({
   const [dialogUsed, setDialogUsed] = useState(false);
   if (openId && !dialogUsed) setDialogUsed(true);
 
-  // The board holds only each task's comment count and latest activity, so an open task reads the rest. It reads
-  // again if the board is read anew while it's open, as after a dropped connection
-  const openPartial = Boolean(openId && state.tasks[openId]?.partial);
+  // The board holds only each task's comment count, latest activity and no description, so an open task reads the
+  // rest. It reads again if the board is read anew while it's open, as after a dropped connection
+  const openPartial = Boolean(openId && (state.tasks[openId]?.partial || state.tasks[openId]?.brief));
   useEffect(() => {
     if (openId && openPartial) void loadThread(openId);
   }, [openId, openPartial, loadThread]);
@@ -425,7 +431,8 @@ export function BoardApp({
       if (was && was.id === id && wait) return;
       if (was) clearTimeout(was.timer);
       ahead.current = null;
-      if (!id || !stateNow.current.tasks[id]?.partial) return;
+      const t = id ? stateNow.current.tasks[id] : undefined;
+      if (!id || !(t?.partial || t?.brief)) return;
       const go = () => {
         ahead.current = null;
         void loadThread(id);
@@ -510,10 +517,13 @@ export function BoardApp({
     () => (t: Task) => found(t) && matches(t, filters) && shows(gaps, t),
     [found, filters, gaps],
   );
-  // Archived work stays on the public roadmap, so its preview shows it too
+  // Archived work stays on the public roadmap, so its preview shows it too. Once every public task is held, each
+  // shows wherever its shelf has got to, as the roadmap goes by stage and votes rather than the board's order
+  const publicHeld = state.publicHeld;
   const onRoadmap = useMemo(
-    () => (t: Task) => found(t) && matches(t, { ...filters, archived: true }) && shows(gaps, t),
-    [found, filters, gaps],
+    () => (t: Task) =>
+      found(t) && matches(t, { ...filters, archived: true }) && (shows(gaps, t) || Boolean(publicHeld && t.public)),
+    [found, filters, gaps, publicHeld],
   );
 
   // The task dialog steps through what the view shows, in board order
@@ -989,6 +999,7 @@ export function BoardApp({
                 dispatch={dispatch}
                 visible={onRoadmap}
                 onOpen={setOpenId}
+                onFindTasks={live ? () => setAddingDone(true) : undefined}
                 boardId={liveId}
                 canManage={allowed("roadmap")}
                 metaVersion={metaVersion}

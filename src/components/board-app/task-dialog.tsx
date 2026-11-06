@@ -150,6 +150,11 @@ function TaskBody({
     if (description !== task.description) update({ description }, "edited the description");
     setEditing(false);
   };
+  // Editing starts from the description as it is now, which may have come in, or changed, since the task opened
+  const editDescription = () => {
+    setDescription(task.description);
+    setEditing(true);
+  };
 
   const nav = "grid size-7 place-items-center text-ink-3 hover:bg-sunken hover:text-ink disabled:pointer-events-none disabled:opacity-30";
 
@@ -270,11 +275,14 @@ function TaskBody({
                     </Button>
                   </div>
                 </div>
+              ) : task.brief ? (
+                // The description is being read. It can't be edited until it's in, so an edit can't save over it
+                <Skeleton className="h-12" />
               ) : task.description ? (
                 <div className="group relative -mx-2 px-2 py-1 hover:bg-surface">
                   <Markdown source={task.description} />
                   <button
-                    onClick={() => setEditing(true)}
+                    onClick={editDescription}
                     aria-label="Edit description"
                     className="absolute top-1 right-1 grid size-7 place-items-center text-ink-3 opacity-0 group-hover:opacity-100 hover:bg-sunken hover:text-ink focus-visible:opacity-100 pointer-coarse:opacity-100"
                   >
@@ -282,7 +290,7 @@ function TaskBody({
                   </button>
                 </div>
               ) : (
-                <button onClick={() => setEditing(true)} className="text-sm text-ink-3 hover:text-ink">
+                <button onClick={editDescription} className="text-sm text-ink-3 hover:text-ink">
                   Add a description…
                 </button>
               )}

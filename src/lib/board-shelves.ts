@@ -95,10 +95,11 @@ export type ShelfView = {
   filters?: { hideDone?: boolean; archived?: boolean; status?: string[] };
 };
 
-/** The shelves a view shows. The board view shows each column that's open, the table and the roadmap each status
- * group that's open when they group by status and every status otherwise, and the public roadmap what's public,
- * archived work included. Done and canceled stay away while the filter hides them, and so does any status a status
- * filter leaves out. The backlog is a status from before the board had columns, which only the public roadmap shows */
+/** The shelves a view shows. The board view shows each column that's open, and the table and the roadmap each status
+ * group that's open when they group by status and every status otherwise. The public roadmap shows only what's
+ * public, which it reads on its own (readPublic), and open work, which it offers to add. Done and canceled stay away
+ * while the filter hides them, and so does any status a status filter leaves out. The backlog is a status from before
+ * the board had columns, which only the public roadmap shows */
 export function shelvesShown(v: ShelfView): Shelf[] {
   const view = v.view ?? "table";
   const grouping = v.grouping ?? "status";
@@ -109,7 +110,7 @@ export function shelvesShown(v: ShelfView): Shelf[] {
   for (const s of statusShelves) {
     if (!allowed(s)) continue;
     if (view === "public") {
-      if (s !== "canceled") out.push(s);
+      if (!closed(s)) out.push(s);
       continue;
     }
     if (s === "backlog") continue;
@@ -124,7 +125,7 @@ export function shelvesShown(v: ShelfView): Shelf[] {
     if (fold && folded.has(fold)) continue;
     out.push(s);
   }
-  if (f.archived || view === "public") out.push("archived");
+  if (f.archived && view !== "public") out.push("archived");
   return out;
 }
 

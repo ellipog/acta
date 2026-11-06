@@ -45,6 +45,13 @@ const fail = (code: string, message: string): never => {
   throw { code, message } satisfies Err;
 };
 
+// A task as a board's reads bring it, without its description, which its dialog reads with the thread
+function card(t: Row): Row {
+  const out = { ...t };
+  delete out.description;
+  return out;
+}
+
 export class FakeBoardServer {
   me = "11111111-1111-4111-8111-111111111111";
   prefix = "ACT";
@@ -118,7 +125,7 @@ export class FakeBoardServer {
     if (row.title.length > 500) fail("23514", "tasks_title_check");
     if (row.project && row.project.length > 60) fail("23514", "tasks_project_check");
     if (row.labels.length > 20) fail("23514", "tasks_labels_check");
-    if (row.description.length > 20_000) fail("23514", "tasks_description_check");
+    if ((row.description ?? "").length > 20_000) fail("23514", "tasks_description_check");
     if (new TextEncoder().encode(JSON.stringify(row.subtasks)).length > 20_000) fail("23514", "tasks_subtasks_check");
   }
 
@@ -263,7 +270,7 @@ export class FakeBoardServer {
   /** A task as a read of the board brings it, with its comment count, latest line and your vote */
   private nested(t: Row): NestedTask {
     return {
-      ...t,
+      ...card(t),
       vote_count: this.votes.filter((v) => v.number === t.number).length,
       comments: [{ count: this.comments.filter((c) => c.number === t.number).length }],
       activity: this.lines(t.number).slice(0, 1),
@@ -383,7 +390,7 @@ export class FakeBoardServer {
       roadmap_public: this.board.roadmap_public,
       page: this.board.page,
       tasks: live.map((t) => ({
-        ...t,
+        ...card(t),
         vote_count: this.votes.filter((v) => v.number === t.number).length,
         comments: [{ count: this.comments.filter((c) => c.number === t.number).length }],
         activity: this.lines(t.number).slice(0, 1),
@@ -404,10 +411,12 @@ export class FakeBoardServer {
     return { ...state, roadmap: { ...state.roadmap, page: pageFrom(this.board.name, this.board.slug, this.board.page) } };
   }
 
-  /** A task's thread and newest activity, as its dialog reads them */
+  /** A task's description, thread and newest activity, as its dialog reads them */
   read(number: number) {
     const lines = this.lines(number).slice(0, THREAD_ACTIVITY);
+    const task = this.tasks.get(number);
     return {
+      description: task ? ((task.description as string | null) ?? "") : undefined,
       comments: this.comments
         .filter((c) => c.number === number)
         .sort((a, b) => a.created_at.localeCompare(b.created_at))

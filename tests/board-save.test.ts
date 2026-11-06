@@ -209,6 +209,7 @@ describe("every edit reaches the database", () => {
       thread: [],
       activity: [],
       partial: true,
+      brief: true,
       public: true,
       votes: 0,
       voted: false,
@@ -221,18 +222,32 @@ describe("every edit reaches the database", () => {
       position: 0,
     } satisfies Required<Task>;
     // Comments, activity and votes have tables of their own, the id and origin are fixed when it's made, the
-    // database stamps when it opened and closed, the position goes with the card order, and whether its thread has
-    // been read is only this tab's to know
-    const elsewhere = ["id", "comments", "thread", "activity", "partial", "votes", "voted", "origin", "opened", "closed", "position"];
+    // database stamps when it opened and closed, the position goes with the card order, and whether its thread and
+    // description have been read is only this tab's to know
+    const elsewhere = [
+      "id",
+      "comments",
+      "thread",
+      "activity",
+      "partial",
+      "brief",
+      "votes",
+      "voted",
+      "origin",
+      "opened",
+      "closed",
+      "position",
+    ];
     expect(Object.keys(full).sort()).toEqual([...syncedFields, ...elsewhere].sort());
 
     server = new FakeBoardServer();
     const base = server.load();
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { id, comments, thread, activity, partial, votes, voted, opened, closed, position, ...fields } = full;
+    const { id, comments, thread, activity, partial, brief, votes, voted, opened, closed, position, ...fields } = full;
     const ui = run(base, { type: "add", status: "review", title: full.title, patch: fields });
     await saves(base, ui);
-    const back = server.load().tasks["ACT-1"];
+    // With its description, which its dialog reads
+    const back = server.loadWhole().tasks["ACT-1"];
     for (const f of syncedFields) expect([f, back[f]]).toEqual([f, ui.tasks["ACT-1"][f]]);
   });
 });

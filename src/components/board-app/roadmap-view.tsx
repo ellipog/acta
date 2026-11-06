@@ -80,6 +80,7 @@ function PublicRoadmapBody({
   dispatch,
   visible,
   onOpen,
+  onFindTasks,
   boardId,
   canManage = true,
 }: {
@@ -87,6 +88,8 @@ function PublicRoadmapBody({
   dispatch: (a: DemoAction) => void;
   visible: (t: Task) => boolean;
   onOpen: (id: string) => void;
+  /** Someone is looking for a task to add, which could be done work the board hasn't read */
+  onFindTasks?: () => void;
   // A live board's id, for its roadmap API keys. The demo has none
   boardId?: string;
   canManage?: boolean;
@@ -172,7 +175,7 @@ function PublicRoadmapBody({
       <div className="min-h-0 flex-1">
         {mode === "manage" ? (
           <div className="h-full overflow-y-auto">
-            <Manage state={state} dispatch={dispatch} visible={visible} onOpen={onOpen} />
+            <Manage state={state} dispatch={dispatch} visible={visible} onOpen={onOpen} onFindTasks={onFindTasks} />
           </div>
         ) : mode === "customize" ? (
           <Customize state={state} dispatch={dispatch} boardId={boardId} canManage={canManage} />
@@ -193,11 +196,13 @@ function Manage({
   dispatch,
   visible,
   onOpen,
+  onFindTasks,
 }: {
   state: BoardState;
   dispatch: (a: DemoAction) => void;
   visible: (t: Task) => boolean;
   onOpen: (id: string) => void;
+  onFindTasks?: () => void;
 }) {
   const now = useNow();
   // Each stage shows its first few straight away and the rest a moment later, drawn while nothing else is waiting,
@@ -401,6 +406,7 @@ function Manage({
             searchPlaceholder="Find a task"
             empty="No task matches"
             aria-label="Add a task to the roadmap"
+            onOpenChange={(open) => open && onFindTasks?.()}
             onValueChange={(id) => {
               publish(id, true);
               toast({

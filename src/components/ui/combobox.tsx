@@ -146,18 +146,26 @@ function List<V extends string>({
 export function Combobox<V extends string>({
   value,
   onValueChange,
+  onOpenChange,
   options,
   placeholder = "Choose…",
   ...shared
 }: Shared & {
   value: V | undefined;
   onValueChange: (value: V) => void;
+  onOpenChange?: (open: boolean) => void;
   options: SelectOption<V>[];
 }) {
   const { open, setOpen, awake, wake } = useWake(shared.variant);
   const current = options.find((o) => o.value === value);
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        onOpenChange?.(next);
+      }}
+    >
       <Trigger {...shared} onWake={awake ? undefined : wake}>
         {current ? (
           <>

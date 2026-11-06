@@ -76,13 +76,15 @@ describe("which shelves a view shows", () => {
     expect(shelvesShown({ filters: { status: ["review"] } })).toEqual(["review"]);
   });
 
-  test("the archive is read when it's shown, and for the public roadmap", () => {
+  test("the archive is read when it's shown", () => {
     expect(shelvesShown({})).not.toContain("archived");
     expect(shelvesShown({ filters: { archived: true } })).toContain("archived");
+  });
+
+  test("the public roadmap reads open work, and leaves done and archived work to its own read of what's public", () => {
     const page = shelvesShown({ view: "public" });
-    expect(page).toContain("archived");
-    expect(page).toContain("backlog");
-    expect(page).not.toContain("canceled");
+    expect(page).toEqual(["todo", "in_progress", "review", "backlog"]);
+    expect(shelvesShown({ view: "public", filters: { archived: true } })).not.toContain("archived");
   });
 
   test("a board opens with its saved filters, never ones left from last time", () => {
