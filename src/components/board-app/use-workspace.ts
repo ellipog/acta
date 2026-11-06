@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { slowNetwork } from "@/lib/board-ahead";
 import { boardPath, peekBoard, rememberBoard, rememberShell, roomAhead, setCounts, setMine } from "@/lib/board-cache";
 import { countTasks, fetchBoard, liveFrom } from "@/lib/board-load";
 import { viewShelves } from "@/lib/board-shelves-pref";
@@ -9,14 +10,8 @@ import { listen } from "@/lib/realtime";
 import { loadClient } from "@/lib/supabase/browser";
 
 // How many neighbouring boards load ahead of a click. Each is a board's tasks to download and convert, so only the
-// nearest few
+// nearest few. Any other board loads as the pointer rests on its link (see board-ahead.ts)
 const AHEAD = 3;
-
-// Loading ahead is a guess, so it's skipped for people saving data or on a slow connection
-function slowNetwork() {
-  const net = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
-  return Boolean(net?.saveData || (net?.effectiveType && /(^|-)2g$/.test(net.effectiveType)));
-}
 
 const hash = (text: string) => {
   let h = 0;

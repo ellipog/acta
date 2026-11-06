@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Dialog as D } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +30,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { inOrder, setBoardOrder, useBoardOrder } from "@/lib/account-prefs";
 import { boardIcon } from "@/lib/board-icons";
 import { addBoard, removeBoard, saveBoard } from "@/lib/board-actions";
+import { slowNetwork, startReading } from "@/lib/board-ahead";
 import { boardPath, peekBoard, useCounts } from "@/lib/board-cache";
 import { useBoardEdits } from "@/lib/board-edits";
 import { can, isManager, type BoardSummary, type LiveBoard } from "@/lib/live";
@@ -214,6 +215,17 @@ export function BoardLinks({
     row?.querySelectorAll<HTMLElement>("a, button")[was.at]?.focus();
   }, [kit, rowsId]);
 
+  // A board this tab doesn't hold is read as the pointer rests on its link, as it's pressed, or as the keyboard rests
+  // on it, so the click shows it at once, or at least sooner. The boards next door are read ahead already
+  const resting = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const unaim = () => clearTimeout(resting.current);
+  const aim = (slug: string, wait: number) => {
+    unaim();
+    if (slowNetwork()) return;
+    resting.current = setTimeout(() => startReading(ws, slug, { keep: true }), wait);
+  };
+  useEffect(() => unaim, []);
+
   const editable = (b: BoardSummary) => {
     if (b.id === live.board.id) return live.board;
     const cached = peekBoard(boardPath(ws, b.slug))?.board;
@@ -266,7 +278,16 @@ export function BoardLinks({
                 {inner}
               </button>
             ) : (
-              <Link href={href} className={cn(item(false), room)} onClick={onNavigate}>
+              <Link
+                href={href}
+                className={cn(item(false), room)}
+                onClick={onNavigate}
+                onPointerEnter={() => aim(b.slug, 80)}
+                onPointerLeave={unaim}
+                onPointerDown={() => aim(b.slug, 0)}
+                onFocus={() => aim(b.slug, 150)}
+                onBlur={unaim}
+              >
                 {inner}
               </Link>
             )}

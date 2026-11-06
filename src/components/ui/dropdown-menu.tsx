@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { DropdownMenu as M } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { menuContent, menuItem } from "./menu-styles";
@@ -8,6 +9,49 @@ import { Surface } from "./surface";
 
 export function DropdownMenu(props: React.ComponentProps<typeof M.Root>) {
   return <M.Root modal={false} {...props} />;
+}
+
+/**
+ * A menu for each item of a long list. Every menu listens to the whole page for key presses while it's drawn, so a
+ * list of hundreds made every key press anywhere slow, and drawing the list slow too. This is a plain button until
+ * it's first pressed, and becomes the menu then, open. trigger is the button's props, children the menu's content
+ */
+export function ListMenu({
+  trigger,
+  children,
+}: {
+  trigger: React.ComponentProps<"button">;
+  children: React.ReactNode;
+}) {
+  const [used, setUsed] = useState(false);
+  if (used)
+    return (
+      <DropdownMenu defaultOpen>
+        <M.Trigger {...trigger} />
+        {children}
+      </DropdownMenu>
+    );
+  return (
+    <button
+      type="button"
+      aria-haspopup="menu"
+      aria-expanded={false}
+      {...trigger}
+      onPointerDown={(e) => {
+        trigger.onPointerDown?.(e);
+        // As a menu's own button does: the left button opens it, and the press doesn't take focus from the menu
+        if (e.button !== 0 || e.ctrlKey) return;
+        e.preventDefault();
+        setUsed(true);
+      }}
+      onKeyDown={(e) => {
+        trigger.onKeyDown?.(e);
+        if (e.key !== "Enter" && e.key !== " " && e.key !== "ArrowDown") return;
+        e.preventDefault();
+        setUsed(true);
+      }}
+    />
+  );
 }
 export const DropdownMenuTrigger = M.Trigger;
 export const DropdownMenuSub = M.Sub;

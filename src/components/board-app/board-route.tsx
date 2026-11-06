@@ -2,7 +2,8 @@
 
 import { Suspense, use, useEffect, useState } from "react";
 import { notFound, redirect, useParams } from "next/navigation";
-import { boardPath, cachedBoard, cachedShell, forgetBoard } from "@/lib/board-cache";
+import { dropRead, startReading, takeRead } from "@/lib/board-ahead";
+import { boardPath, cachedBoard, forgetBoard } from "@/lib/board-cache";
 import { readLive } from "@/lib/board-load";
 import { viewShelves } from "@/lib/board-shelves-pref";
 import type { LiveBoard, LiveFrame } from "@/lib/live";
@@ -29,33 +30,14 @@ export function BoardRoute({ data }: { data: Promise<BoardResult> }) {
   );
 }
 
-// A read only waits this long for the server's answer to use it
-const EARLY = 30_000;
-// Reads of boards this tab doesn't hold, by address, begun before the server answers
-const started = new Map<string, { at: number; read: Promise<LiveBoard | null> }>();
 // One read for each answer, so drawing the page again waits on the same one
 const reads = new WeakMap<LiveFrame, Promise<LiveBoard>>();
-
-// The workspace this tab already knows says who's looking and which board the address is, which is all a read needs
-function startReading(workspace: string, board: string) {
-  const path = boardPath(workspace, board);
-  const shell = cachedShell(workspace);
-  const id = shell?.boards.find((b) => b.slug === board)?.id;
-  const early = started.get(path);
-  if (!shell || !id || (early && Date.now() - early.at < EARLY)) return;
-  const read = loadClient()
-    .then((client) => readLive(client, shell, id, viewShelves(id)))
-    .catch(() => null);
-  started.set(path, { at: Date.now(), read });
-}
 
 function readFor(frame: LiveFrame): Promise<LiveBoard> {
   let read = reads.get(frame);
   if (read) return read;
   const path = boardPath(frame.workspace.slug, frame.board.slug);
-  const early = started.get(path);
-  started.delete(path);
-  read = (early && Date.now() - early.at < EARLY ? early.read : Promise.resolve(null))
+  read = (takeRead(path) ?? Promise.resolve(null))
     // A read begun from the sidebar's list could have found another board at the address since
     .then(async (got) =>
       got?.board.id === frame.board.id
@@ -95,7 +77,7 @@ function Board({ data, start, path }: { data: Promise<BoardResult>; start: LiveB
   useEffect(() => {
     if (!holding) return;
     // Nothing read ahead is needed once the board is up
-    started.delete(path);
+    dropRead(path);
     let current = true;
     data.then(
       (result) => {

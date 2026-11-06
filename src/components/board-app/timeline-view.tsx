@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { StatusMarker } from "@/components/board";
 import { Avatar, EmptyState, Spinner } from "@/components/ui/display";
 import { DitherFill, type DitherTone } from "@/components/ui/dither";
@@ -24,12 +24,24 @@ import {
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
 import { fieldOptions, patchFor, valueOf, type Prefs, type Zoom } from "./fields";
+import { useLineHeights, useScrollRange } from "./scroll-window";
 import { reading, unseen, waiting, type ShelfInfo } from "./shelf-info";
-import { TaskMenu } from "./task-menu";
+import { addKey, headKey, piecesFor, placeItems, runsFor, tableItems } from "./table-window";
+import { TaskMenuList } from "./task-menu";
 
 const PPD: Record<Zoom, number> = { month: 40, quarter: 14, year: 4 };
 const SPAN: Record<Zoom, number> = { month: 5, quarter: 14, year: 30 };
 const FALLBACK_TODAY = "2026-10-25";
+
+// How tall each line is before one is measured: a group's header, a task, and the line that adds one. A read-only
+// timeline has no adding line. The ruler above them is as tall as RULER
+const LINES = { head: 36, row: 40, add: 36 };
+const READ_LINES = { ...LINES, add: 0 };
+const RULER = 56;
+
+/** The task of the row an element is in, if any */
+const rowOf = (el: EventTarget | null) =>
+  el instanceof Element ? (el.closest<HTMLElement>("[data-task]")?.dataset.task ?? null) : null;
 
 const look: Record<StatusCategory, { border: string; cap: string; tone: DitherTone }> = {
   backlog: {
@@ -142,6 +154,17 @@ function TimelineViewBody({
   // and only a bar crossing an edge draws anything again, so scrolling doesn't redraw every row each frame
   const [edges, setEdges] = useState<ReadonlyMap<string, Side>>(() => new Map());
   const measure = useRef(() => {});
+  // Kept as state too, as which rows are drawn follows its scroll position
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  const scrollerRef = useCallback((el: HTMLDivElement | null) => {
+    scrollRef.current = el;
+    setScroller(el);
+  }, []);
+  const [body, setBody] = useState<HTMLDivElement | null>(null);
+  // One menu for every row, opened for the row pressed (see TaskMenuList)
+  const [menu, setMenu] = useState<string | null>(null);
+  // The row holding focus stays drawn when the timeline scrolls away from it, so the keyboard doesn't lose its place
+  const [focused, setFocused] = useState<string | null>(null);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -381,12 +404,170 @@ function TimelineViewBody({
       collapsed: prefs.collapsed.includes(key) ? prefs.collapsed.filter((k) => k !== key) : [...prefs.collapsed, key],
     });
 
-  let n = 0;
+  // Only the lines in view and a margin around them are drawn, with an empty block as tall as the lines it skips
+  // standing in for each stretch left out, so a timeline of thousands of tasks scrolls like one of a screenful. Drawn
+  // wherever they are: the row being dragged, the row holding focus, and the group being added to
+  const { items, at } = useMemo(() => tableItems(groups, prefs.collapsed), [groups, prefs.collapsed]);
+  const groupOf = useMemo(() => new Map(groups.map((g) => [g.key, g])), [groups]);
+  const lines = useLineHeights(body, readOnly ? READ_LINES : LINES, "row");
+  const { tops, counts } = useMemo(() => placeItems(items, lines), [items, lines]);
+  const range = useScrollRange(scroller, tops, { offset: RULER, margin: 12, step: 12 });
+  const pieces = piecesFor(
+    runsFor(range, [drag?.id, focused, adding ? addKey(adding) : null].map((k) => (k ? at.get(k) : null)), items.length),
+    tops,
+    counts,
+  );
+
+  const header = (g: (typeof groups)[number]) => {
+    const collapsed = prefs.collapsed.includes(g.key);
+    const pts = g.rows.reduce((sum, t) => sum + (t.size ? sizePoints[t.size] : 0), 0);
+    let lo: string | undefined;
+    let hi: string | undefined;
+    for (const t of g.rows) {
+      const r = span(t);
+      if (!r) continue;
+      if (!lo || r.s < lo) lo = r.s;
+      if (!hi || r.d > hi) hi = r.d;
+    }
+    return (
+      <div key={headKey(g.key)} data-line="head" className="flex h-9 border-b border-line bg-sunken/70">
+        <div className="sticky left-0 z-10 flex w-[var(--left)] shrink-0 items-center gap-2.5 border-r border-line bg-sunken px-3">
+          <button
+            aria-expanded={!collapsed}
+            onClick={() => toggle(g.key)}
+            // A folded group's tasks are read as the pointer comes to it, so they're there when it opens
+            onPointerEnter={collapsed && g.shelf && g.waits ? () => shelves?.preload([g.shelf!]) : undefined}
+            onFocus={collapsed && g.shelf && g.waits ? () => shelves?.preload([g.shelf!]) : undefined}
+            className="flex min-w-0 items-center gap-2.5 outline-none focus-visible:ring-2 focus-visible:ring-lapis"
+          >
+            <PixelCaret className={cn("shrink-0 text-ink-3 transition-transform", collapsed && "-rotate-90")} />
+            {g.icon}
+            <span className="truncate text-sm font-medium">{g.title}</span>
+          </button>
+          <span className="font-mono text-[11px] text-ink-3">{g.rows.length + g.more}</span>
+          {!collapsed && g.shelf && reading(shelves, g.shelf) ? <Spinner label="Loading" /> : null}
+          {pts && !readOnly ? <span className="font-mono text-[11px] text-ink-3">· {pts} pt</span> : null}
+        </div>
+        <div className="relative shrink-0" style={{ width }}>
+          {lo && hi ? (
+            <Tooltip content={`${g.title}: ${formatShort(lo, today)} – ${formatShort(hi, today)}`}>
+              <span
+                className="absolute top-1/2 h-1.5 -translate-y-1/2 border border-ink-3"
+                style={{ left: x(lo), width: (diffDays(lo, hi) + 1) * ppd }}
+              >
+                <DitherFill level={50} tone="muted" className="absolute inset-0" />
+              </span>
+            </Tooltip>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+
+  const addLine = (g: (typeof groups)[number]) => (
+    <div key={addKey(g.key)} data-line="add" className="flex h-9">
+      <div className="sticky left-0 z-10 w-[var(--left)] shrink-0 border-r border-b border-line bg-raised">
+        {adding === g.key ? (
+          <AddInput
+            label={g.title ? `Add to ${g.title}` : "Add a task"}
+            onAdd={(title) => dispatch({ type: "add", status: "todo", title, patch: g.patch })}
+            onClose={() => setAdding(null)}
+          />
+        ) : (
+          <button
+            onClick={() => setAdding(g.key)}
+            className="flex h-full w-full items-center gap-2.5 px-3 text-left text-sm text-ink-3 hover:bg-surface hover:text-ink"
+          >
+            <Icon name="plus" size="sm" className="w-5" /> Add item
+          </button>
+        )}
+      </div>
+      <div className="shrink-0 border-b border-line" style={{ width }} />
+    </div>
+  );
+
+  const drawn: React.ReactNode[] = [];
+  for (const p of pieces) {
+    if (p.gap) {
+      drawn.push(<div key={`gap:${p.from}`} aria-hidden style={{ height: p.height }} />);
+      continue;
+    }
+    for (let i = p.from; i < p.to; i++) {
+      const it = items[i];
+      const g = groupOf.get(it.group)!;
+      if (it.kind === "head") drawn.push(header(g));
+      else if (it.kind === "add") {
+        if (!readOnly) drawn.push(addLine(g));
+      } else {
+        const t = g.rows[it.index];
+        drawn.push(
+          <TimelineRow
+            key={t.id}
+            task={t}
+            n={counts[i] + 1}
+            lead={lead}
+            readOnly={readOnly}
+            first={first}
+            ppd={ppd}
+            width={width}
+            today={today}
+            zoom={zoom}
+            accent={accent}
+            drag={drag?.id === t.id ? drag : undefined}
+            ghostDay={ghost?.id === t.id ? ghost.day : undefined}
+            edge={edges.get(t.id)}
+            version={version}
+            api={api}
+          />,
+        );
+      }
+    }
+  }
+
+  const lineList = (
+    <div ref={setBody} className="relative" onFocusCapture={(e) => setFocused(rowOf(e.target))}>
+      <Grid
+        months={months}
+        dayList={dayList}
+        first={first}
+        ppd={ppd}
+        zoom={zoom}
+        today={today}
+        width={width}
+        hidden={!rows.length}
+      />
+
+      {drawn}
+
+      {rows.length === 0 ? (
+        <div className="sticky left-0 w-[100cqw]">
+          <EmptyState
+            art="terrain-badlands-strata"
+            title={filtered ? "Nothing matches" : readOnly ? "Nothing scheduled yet" : "Nothing to plan yet"}
+            body={
+              filtered
+                ? "No task fits the search and filters."
+                : readOnly
+                  ? "Check back soon."
+                  : "Add a task, then drag it onto the timeline."
+            }
+            action={
+              filtered ? (
+                <Button size="sm" onClick={onClearFilters}>
+                  <Icon name="x" size="sm" /> Clear search and filters
+                </Button>
+              ) : undefined
+            }
+          />
+        </div>
+      ) : null}
+    </div>
+  );
 
   return (
     <div className="@container h-full">
       <div
-        ref={scrollRef}
+        ref={scrollerRef}
         className="relative h-full overflow-auto overscroll-contain [--left:min(300px,44cqw)]"
         onPointerLeave={() => setGhost(null)}
       >
@@ -429,152 +610,13 @@ function TimelineViewBody({
             <Ruler months={months} dayList={dayList} first={first} ppd={ppd} zoom={zoom} today={today} width={width} />
           </div>
 
-          <div className="relative">
-            <Grid
-              months={months}
-              dayList={dayList}
-              first={first}
-              ppd={ppd}
-              zoom={zoom}
-              today={today}
-              width={width}
-              hidden={!rows.length}
-            />
-
-            {groups.map((g) => {
-              const collapsed = prefs.collapsed.includes(g.key);
-              const pts = g.rows.reduce((sum, t) => sum + (t.size ? sizePoints[t.size] : 0), 0);
-              const spans = g.rows.map(span).filter(Boolean) as {
-                s: string;
-                d: string;
-              }[];
-              const lo = spans.map((r) => r.s).sort()[0];
-              const hi = spans
-                .map((r) => r.d)
-                .sort()
-                .at(-1);
-              return (
-                <Fragment key={g.key}>
-                  {g.title ? (
-                    <div className="flex h-9 border-b border-line bg-sunken/70">
-                      <div className="sticky left-0 z-10 flex w-[var(--left)] shrink-0 items-center gap-2.5 border-r border-line bg-sunken px-3">
-                        <button
-                          aria-expanded={!collapsed}
-                          onClick={() => toggle(g.key)}
-                          // A folded group's tasks are read as the pointer comes to it, so they're there when it opens
-                          onPointerEnter={collapsed && g.shelf && g.waits ? () => shelves?.preload([g.shelf!]) : undefined}
-                          onFocus={collapsed && g.shelf && g.waits ? () => shelves?.preload([g.shelf!]) : undefined}
-                          className="flex min-w-0 items-center gap-2.5 outline-none focus-visible:ring-2 focus-visible:ring-lapis"
-                        >
-                          <PixelCaret
-                            className={cn("shrink-0 text-ink-3 transition-transform", collapsed && "-rotate-90")}
-                          />
-                          {g.icon}
-                          <span className="truncate text-sm font-medium">{g.title}</span>
-                        </button>
-                        <span className="font-mono text-[11px] text-ink-3">{g.rows.length + g.more}</span>
-                        {!collapsed && g.shelf && reading(shelves, g.shelf) ? <Spinner label="Loading" /> : null}
-                        {pts && !readOnly ? <span className="font-mono text-[11px] text-ink-3">· {pts} pt</span> : null}
-                      </div>
-                      <div className="relative shrink-0" style={{ width }}>
-                        {lo && hi ? (
-                          <Tooltip content={`${g.title}: ${formatShort(lo, today)} – ${formatShort(hi, today)}`}>
-                            <span
-                              className="absolute top-1/2 h-1.5 -translate-y-1/2 border border-ink-3"
-                              style={{
-                                left: x(lo),
-                                width: (diffDays(lo, hi) + 1) * ppd,
-                              }}
-                            >
-                              <DitherFill level={50} tone="muted" className="absolute inset-0" />
-                            </span>
-                          </Tooltip>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {collapsed
-                    ? null
-                    : g.rows.map((t) => {
-                        n += 1;
-                        return (
-                          <TimelineRow
-                            key={t.id}
-                            task={t}
-                            n={n}
-                            lead={lead}
-                            readOnly={readOnly}
-                            first={first}
-                            ppd={ppd}
-                            width={width}
-                            today={today}
-                            zoom={zoom}
-                            accent={accent}
-                            drag={drag?.id === t.id ? drag : undefined}
-                            ghostDay={ghost?.id === t.id ? ghost.day : undefined}
-                            edge={edges.get(t.id)}
-                            version={version}
-                            api={api}
-                          />
-                        );
-                      })}
-
-                  {collapsed || readOnly ? null : (
-                    <div className="flex h-9">
-                      <div className="sticky left-0 z-10 w-[var(--left)] shrink-0 border-r border-b border-line bg-raised">
-                        {adding === g.key ? (
-                          <AddInput
-                            label={g.title ? `Add to ${g.title}` : "Add a task"}
-                            onAdd={(title) =>
-                              dispatch({
-                                type: "add",
-                                status: "todo",
-                                title,
-                                patch: g.patch,
-                              })
-                            }
-                            onClose={() => setAdding(null)}
-                          />
-                        ) : (
-                          <button
-                            onClick={() => setAdding(g.key)}
-                            className="flex h-full w-full items-center gap-2.5 px-3 text-left text-sm text-ink-3 hover:bg-surface hover:text-ink"
-                          >
-                            <Icon name="plus" size="sm" className="w-5" /> Add item
-                          </button>
-                        )}
-                      </div>
-                      <div className="shrink-0 border-b border-line" style={{ width }} />
-                    </div>
-                  )}
-                </Fragment>
-              );
-            })}
-
-            {rows.length === 0 ? (
-              <div className="sticky left-0 w-[100cqw]">
-                <EmptyState
-                  art="terrain-badlands-strata"
-                  title={filtered ? "Nothing matches" : readOnly ? "Nothing scheduled yet" : "Nothing to plan yet"}
-                  body={
-                    filtered
-                      ? "No task fits the search and filters."
-                      : readOnly
-                        ? "Check back soon."
-                        : "Add a task, then drag it onto the timeline."
-                  }
-                  action={
-                    filtered ? (
-                      <Button size="sm" onClick={onClearFilters}>
-                        <Icon name="x" size="sm" /> Clear search and filters
-                      </Button>
-                    ) : undefined
-                  }
-                />
-              </div>
-            ) : null}
-          </div>
+          {readOnly ? (
+            lineList
+          ) : (
+            <TaskMenuList tasks={state.tasks} taskAt={rowOf} open={menu} onOpenChange={setMenu} dispatch={dispatch} onOpen={onOpen}>
+              {lineList}
+            </TaskMenuList>
+          )}
         </div>
       </div>
     </div>
@@ -744,8 +786,8 @@ const TimelineRow = memo(function TimelineRow({
   const r = span(t);
   const live = drag && r ? shiftedSpan(t, drag) : r;
 
-  const row = (
-    <div className="group/row flex h-10">
+  return (
+    <div data-task={t.id} data-line="row" className="group/row flex h-10">
       <div className="sticky left-0 z-10 flex w-[var(--left)] shrink-0 items-center gap-2.5 border-r border-b border-line bg-raised pr-2 pl-3 group-hover/row:bg-surface">
         {lead ? lead(t) : <span className="w-5 shrink-0 font-mono text-[11px] text-ink-3 tabular-nums">{n}</span>}
         <StatusMarker status={t.status} />
@@ -809,13 +851,6 @@ const TimelineRow = memo(function TimelineRow({
         ) : null}
       </div>
     </div>
-  );
-  return readOnly ? (
-    row
-  ) : (
-    <TaskMenu task={t} dispatch={api.dispatch} onOpen={api.open}>
-      {row}
-    </TaskMenu>
   );
 });
 

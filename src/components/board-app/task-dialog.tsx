@@ -165,12 +165,24 @@ function TaskBody({
                   {index + 1} / {order.length}
                 </span>
                 <Tooltip content={<span>Previous <Kbd className="ml-1 border-ink-3 bg-transparent text-page">K</Kbd></span>}>
-                  <button aria-label="Previous task" disabled={!prev} onClick={() => prev && onOpen(prev)} className={nav}>
+                  <button
+                    aria-label="Previous task"
+                    disabled={!prev}
+                    onClick={() => prev && onOpen(prev)}
+                    data-task={prev ?? undefined}
+                    className={nav}
+                  >
                     <Icon name="chevron-up" size="sm" />
                   </button>
                 </Tooltip>
                 <Tooltip content={<span>Next <Kbd className="ml-1 border-ink-3 bg-transparent text-page">J</Kbd></span>}>
-                  <button aria-label="Next task" disabled={!next} onClick={() => next && onOpen(next)} className={nav}>
+                  <button
+                    aria-label="Next task"
+                    disabled={!next}
+                    onClick={() => next && onOpen(next)}
+                    data-task={next ?? undefined}
+                    className={nav}
+                  >
                     <Icon name="chevron-down" size="sm" />
                   </button>
                 </Tooltip>

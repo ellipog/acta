@@ -12,6 +12,8 @@ import {
   useSensor,
   useSensors,
   type CollisionDetection,
+  type KeyboardCoordinateGetter,
+  type UniqueIdentifier,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
@@ -49,8 +51,10 @@ import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
 import { Spinner } from "@/components/ui/display";
 import type { Prefs } from "./fields";
+import { placeCards, useCardSizes, useScrollRange, type CardSizes } from "./scroll-window";
 import { reading, unseen, waiting, type ShelfInfo } from "./shelf-info";
-import { TaskMenu } from "./task-menu";
+import { piecesFor, runsFor } from "./table-window";
+import { TaskMenuList } from "./task-menu";
 
 type Props = {
   state: BoardState;
@@ -70,8 +74,33 @@ type Columns = BoardState["columns"];
 // The same objects every time: new ones would make dnd-kit hand every card on the board a new context, and draw
 // them all again
 const pointer = { activationConstraint: { distance: 5 } };
+
+// Left and right carry a card to the next column over. dnd-kit's own arrows look for places further left or right
+// by their left edges, and the card being carried is tilted, so its edge sits a little left of the cards in its own
+// column and the one below it counted as being to the right. Only places whose middle is past the card's own edge
+// count as sideways
+const carry: KeyboardCoordinateGetter = (event, args) => {
+  const { collisionRect, droppableContainers } = args.context;
+  const right = event.code === "ArrowRight";
+  if ((!right && event.code !== "ArrowLeft") || !collisionRect) return sortableKeyboardCoordinates(event, args);
+  const mid = collisionRect.left + collisionRect.width / 2;
+  const across = (rect: { left: number; width: number } | undefined) => {
+    if (!rect) return false;
+    const at = rect.left + rect.width / 2;
+    return right ? at > mid + collisionRect.width / 2 : at < mid - collisionRect.width / 2;
+  };
+  // The places dnd-kit picks from, as the map it reads them through
+  const sideways = {
+    get: (id: UniqueIdentifier) => droppableContainers.get(id),
+    getNodeFor: (id: UniqueIdentifier) => droppableContainers.getNodeFor(id),
+    toArray: () => droppableContainers.toArray(),
+    getEnabled: () => droppableContainers.getEnabled().filter((c) => across(args.context.droppableRects.get(c.id))),
+  } as unknown as typeof droppableContainers;
+  return sortableKeyboardCoordinates(event, { ...args, context: { ...args.context, droppableContainers: sideways } });
+};
+
 const keyboard = {
-  coordinateGetter: sortableKeyboardCoordinates,
+  coordinateGetter: carry,
   keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space"] },
 };
 
@@ -79,6 +108,14 @@ const columnOf = (cols: Columns, id: string): StatusCategory | undefined => {
   if (id in cols) return id as StatusCategory;
   return (Object.keys(cols) as StatusCategory[]).find((c) => cols[c].includes(id));
 };
+
+/** The task of the card an element is in, if any */
+const cardOf = (el: EventTarget | null) =>
+  el instanceof Element ? (el.closest<HTMLElement>("[data-task]")?.dataset.task ?? null) : null;
+
+// The space between cards, and above the first one, in a column's list
+const GAP = 8;
+const PAD = 8;
 
 function BoardViewBody({ state, dispatch, visible, onOpen, prefs, setPrefs, metaVersion = 0, shelves }: Props) {
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -98,6 +135,11 @@ function BoardViewBody({ state, dispatch, visible, onOpen, prefs, setPrefs, meta
   const [start, setStart] = useState<StatusCategory | null>(null);
   const lastDrop = useRef(0);
   const sensors = useSensors(useSensor(PointerSensor, pointer), useSensor(KeyboardSensor, keyboard));
+  // One menu for every card, opened for the card pressed (see TaskMenuList)
+  const [menu, setMenu] = useState<string | null>(null);
+  // The card holding focus stays drawn when its column scrolls away from it, so the keyboard doesn't lose its place
+  const [focused, setFocused] = useState<string | null>(null);
+  const sizes = useCardSizes();
 
   const collapsed = (s: StatusCategory) => prefs?.collapsed.includes(`board:${s}`) ?? false;
   const toggleCollapsed = (s: StatusCategory) =>
@@ -215,55 +257,78 @@ function BoardViewBody({ state, dispatch, visible, onOpen, prefs, setPrefs, meta
       onDragEnd={onDragEnd}
       onDragCancel={finish}
     >
-      <div className="flex h-full snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain p-3 sm:snap-none">
-        {statuses.map((s) => {
-          const ids = columns[s.id].filter((id) => state.tasks[id] && visible(state.tasks[id]));
-          const points = ids.reduce((n, id) => n + (state.tasks[id].size ? sizePoints[state.tasks[id].size!] : 0), 0);
-          const hidden = closed(s.id) && hideDone;
-          // Cards still on the server count, and a column being read says how many are on their way
-          const more = unseen(shelves, s.id);
-          const expanded = !rail(s.id);
-          return (
-            <Column
-              key={s.id}
-              status={s.id}
-              title={s.title}
-              count={hidden ? 0 : ids.length + more}
-              points={points}
-              more={expanded && waiting(shelves, s.id) ? { count: more, loading: reading(shelves, s.id) } : undefined}
-              onPreload={shelves && !expanded ? () => shelves.preload([s.id]) : undefined}
-              collapsed={!expanded}
-              targeted={target === s.id && target !== start}
-              railHint={
-                hidden
-                  ? `${s.title} is hidden by the filter. Drop a card here, or click to show it`
-                  : s.id === "canceled" && !collapsed(s.id)
-                    ? "Drop a card here to cancel it"
+      <TaskMenuList
+        tasks={state.tasks}
+        taskAt={cardOf}
+        open={menu}
+        onOpenChange={setMenu}
+        dispatch={dispatch}
+        onOpen={open}
+      >
+        <div
+          onFocusCapture={(e) => setFocused(cardOf(e.target))}
+          className="flex h-full snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain p-3 sm:snap-none"
+        >
+          {statuses.map((s) => {
+            const ids = columns[s.id].filter((id) => state.tasks[id] && visible(state.tasks[id]));
+            const points = ids.reduce((n, id) => n + (state.tasks[id].size ? sizePoints[state.tasks[id].size!] : 0), 0);
+            const hidden = closed(s.id) && hideDone;
+            // Cards still on the server count, and a column being read says how many are on their way
+            const more = unseen(shelves, s.id);
+            const expanded = !rail(s.id);
+            return (
+              <Column
+                key={s.id}
+                status={s.id}
+                title={s.title}
+                count={hidden ? 0 : ids.length + more}
+                points={points}
+                more={expanded && waiting(shelves, s.id) ? { count: more, loading: reading(shelves, s.id) } : undefined}
+                onPreload={shelves && !expanded ? () => shelves.preload([s.id]) : undefined}
+                collapsed={!expanded}
+                targeted={target === s.id && target !== start}
+                railHint={
+                  hidden
+                    ? `${s.title} is hidden by the filter. Drop a card here, or click to show it`
+                    : s.id === "canceled" && !collapsed(s.id)
+                      ? "Drop a card here to cancel it"
+                      : undefined
+                }
+                onToggle={
+                  !setPrefs || !prefs
+                    ? undefined
+                    : hidden
+                      ? () => setPrefs({ filters: { ...prefs.filters, hideDone: false } })
+                      : // An empty Canceled has nothing to open up
+                        s.id === "canceled" && !collapsed(s.id) && rail(s.id)
+                        ? undefined
+                        : () => toggleCollapsed(s.id)
+                }
+                onArchive={
+                  // All of it, so only once all of it is here
+                  closed(s.id) && !waiting(shelves, s.id) && ids.some((id) => !state.tasks[id].archived)
+                    ? () => dispatch(archiveTasks(ids.filter((id) => !state.tasks[id].archived), true))
                     : undefined
-              }
-              onToggle={
-                !setPrefs || !prefs
-                  ? undefined
-                  : hidden
-                    ? () => setPrefs({ filters: { ...prefs.filters, hideDone: false } })
-                    : // An empty Canceled has nothing to open up
-                      s.id === "canceled" && !collapsed(s.id) && rail(s.id)
-                      ? undefined
-                      : () => toggleCollapsed(s.id)
-              }
-              onArchive={
-                // All of it, so only once all of it is here
-                closed(s.id) && !waiting(shelves, s.id) && ids.some((id) => !state.tasks[id].archived)
-                  ? () => dispatch(archiveTasks(ids.filter((id) => !state.tasks[id].archived), true))
-                  : undefined
-              }
-              dispatch={dispatch}
-            >
-              <Cards ids={ids} tasks={state.tasks} onOpen={open} dispatch={dispatch} version={metaVersion} />
-            </Column>
-          );
-        })}
-      </div>
+                }
+                dispatch={dispatch}
+              >
+                {(scroller) => (
+                  <Cards
+                    ids={ids}
+                    tasks={state.tasks}
+                    onOpen={open}
+                    version={metaVersion}
+                    scroller={scroller}
+                    sizes={sizes}
+                    carried={activeId}
+                    focused={focused}
+                  />
+                )}
+              </Column>
+            );
+          })}
+        </div>
+      </TaskMenuList>
       <DragOverlay dropAnimation={{ duration: 160, easing: "cubic-bezier(.2,.8,.2,1)" }}>
         {active ? <TaskCard task={active} dragging className="cursor-grabbing" /> : null}
       </DragOverlay>
@@ -310,18 +375,19 @@ function Column({
   onToggle?: () => void;
   onArchive?: () => void;
   dispatch: (a: DemoAction) => void;
-  children: React.ReactNode;
+  // The cards, drawn as far as the list scrolls
+  children: (scroller: HTMLDivElement | null) => React.ReactNode;
 }) {
   // The whole column takes drops, header included, so a card can be let go anywhere over it
   const { setNodeRef } = useDroppable({ id: status });
   const [composing, setComposing] = useState<"top" | "bottom" | null>(null);
   const [draft, setDraft] = useState("");
-  const listRef = useRef<HTMLDivElement>(null);
+  const [list, setList] = useState<HTMLDivElement | null>(null);
 
   const submit = () => {
     if (draft.trim()) {
       dispatch({ type: "add", status, title: draft.trim() });
-      requestAnimationFrame(() => listRef.current?.scrollTo({ top: listRef.current.scrollHeight }));
+      requestAnimationFrame(() => list?.scrollTo({ top: list.scrollHeight }));
     }
     setDraft("");
   };
@@ -447,14 +513,14 @@ function Column({
         </div>
       </header>
       <div
-        ref={listRef}
+        ref={setList}
         className={cn(
           "flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto p-2 transition-colors",
           targeted && "bg-lapis-soft/40",
         )}
       >
         {composing === "top" ? composer : null}
-        {children}
+        {children(list)}
         {more ? <MoreCards {...more} /> : null}
         {composing === "bottom" ? composer : null}
         {count === 0 && !more && !composing ? (
@@ -495,27 +561,49 @@ function MoreCards({ count, loading }: { count: number; loading: boolean }) {
 }
 
 // A column's cards. dnd-kit draws every card of a list again whenever its list of ids is a new array, so the
-// list is kept as the same array while the column holds the same cards in the same order
+// list is kept as the same array while the column holds the same cards in the same order.
+//
+// Only the cards in view and a margin around them are drawn, with an empty block as tall as the cards it skips
+// standing in for each stretch left out, so a column of thousands of done cards costs what a screenful does. dnd-kit
+// still sorts over every id, and measures each card as it's drawn, so a card carried down a long column lands where
+// it would among cards not drawn yet. The card being carried and the one holding focus stay drawn wherever they are
 function Cards({
   ids,
   tasks,
   onOpen,
-  dispatch,
   version,
+  scroller,
+  sizes,
+  carried,
+  focused,
 }: {
   ids: string[];
   tasks: BoardState["tasks"];
   onOpen: (id: string) => void;
-  dispatch: (a: DemoAction) => void;
   version: number;
+  scroller: HTMLDivElement | null;
+  sizes: CardSizes;
+  carried: string | null;
+  focused: string | null;
 }) {
   const key = ids.join(" ");
   const items = useMemo(() => (key ? key.split(" ") : []), [key]);
+  const tops = useMemo(() => placeCards(items, sizes.sizes, GAP), [items, sizes.sizes]);
+  const range = useScrollRange(scroller, tops, { offset: PAD, margin: 6, step: 8 });
+  const pinned = [carried, focused].map((id) => (id ? items.indexOf(id) : -1));
+  const drawn: React.ReactNode[] = [];
+  for (const p of piecesFor(runsFor(range, pinned, items.length), tops)) {
+    // The list's gap follows the block too, so it stands in for one gap fewer than it skips
+    if (p.gap) drawn.push(<div key={`gap:${p.from}`} aria-hidden className="shrink-0" style={{ height: p.height - GAP }} />);
+    else
+      for (let i = p.from; i < p.to; i++)
+        drawn.push(
+          <SortableTask key={items[i]} task={tasks[items[i]]} onOpen={onOpen} version={version} watch={sizes.watch} />,
+        );
+  }
   return (
     <SortableContext items={items} strategy={verticalListSortingStrategy}>
-      {items.map((id) => (
-        <SortableTask key={id} task={tasks[id]} onOpen={onOpen} dispatch={dispatch} version={version} />
-      ))}
+      {drawn}
     </SortableContext>
   );
 }
@@ -523,33 +611,46 @@ function Cards({
 const SortableTask = memo(function SortableTask({
   task,
   onOpen,
-  dispatch,
   version,
+  watch,
 }: {
   task: Task;
   onOpen: (id: string) => void;
-  dispatch: (a: DemoAction) => void;
   version: number;
+  watch: CardSizes["watch"];
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
+  // The card reports its height as it's drawn and whenever it changes, so the blocks standing in for cards not drawn
+  // are as tall as the cards would be
+  const ref = useCallback(
+    (el: HTMLDivElement | null) => {
+      setNodeRef(el);
+      if (!el) return;
+      const stop = watch(el);
+      return () => {
+        stop();
+        setNodeRef(null);
+      };
+    },
+    [setNodeRef, watch],
+  );
   return (
-    <TaskMenu task={task} dispatch={dispatch} onOpen={onOpen}>
-      <div
-        ref={setNodeRef}
-        style={{ transform: CSS.Translate.toString(transform), transition }}
-        {...attributes}
-        {...listeners}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") onOpen(task.id);
-          else listeners?.onKeyDown?.(e);
-        }}
-        onClick={() => onOpen(task.id)}
-        aria-label={`${task.id}: ${task.title}`}
-        className="relative shrink-0 cursor-grab outline-none focus-visible:ring-2 focus-visible:ring-lapis"
-      >
-        <CardFace task={task} dragging={isDragging} version={version} />
-      </div>
-    </TaskMenu>
+    <div
+      ref={ref}
+      data-task={task.id}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+      {...attributes}
+      {...listeners}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") onOpen(task.id);
+        else listeners?.onKeyDown?.(e);
+      }}
+      onClick={() => onOpen(task.id)}
+      aria-label={`${task.id}: ${task.title}`}
+      className="relative shrink-0 cursor-grab outline-none focus-visible:ring-2 focus-visible:ring-lapis"
+    >
+      <CardFace task={task} dragging={isDragging} version={version} />
+    </div>
   );
 });
 

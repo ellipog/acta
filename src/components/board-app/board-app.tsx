@@ -140,6 +140,12 @@ const views: { id: View; icon: IconName; label: string }[] = [
 
 const groupings: Grouping[] = ["status", "assignee", "priority", "size", "project"];
 
+/** The task an element shows, from the nearest data-task, or a table row's data-drop-row */
+const taskOf = (el: EventTarget | null) => {
+  const at = el instanceof Element ? el.closest<HTMLElement>("[data-task], [data-drop-row]") : null;
+  return at ? (at.dataset.task ?? at.dataset.dropRow ?? null) : null;
+};
+
 const tool = (on: boolean) =>
   cn(
     "flex h-8 shrink-0 items-center gap-1.5 border px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-lapis",
@@ -408,6 +414,29 @@ export function BoardApp({
     if (openId && openPartial) void loadThread(openId);
   }, [openId, openPartial, loadThread]);
 
+  // A task's thread is read ahead as the pointer settles on it, as a press starts, or as the keyboard rests on it,
+  // so it's usually there by the time the task opens. Anything marked with data-task counts: cards, rows, the
+  // roadmap's bars and the dialog's next and previous buttons. Passing over tasks on the way somewhere reads nothing
+  const ahead = useRef<{ id: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const readAhead = useCallback(
+    (target: EventTarget, wait: number) => {
+      const id = taskOf(target);
+      const was = ahead.current;
+      if (was && was.id === id && wait) return;
+      if (was) clearTimeout(was.timer);
+      ahead.current = null;
+      if (!id || !stateNow.current.tasks[id]?.partial) return;
+      const go = () => {
+        ahead.current = null;
+        void loadThread(id);
+      };
+      if (wait) ahead.current = { id, timer: setTimeout(go, wait) };
+      else go();
+    },
+    [loadThread],
+  );
+  useEffect(() => () => clearTimeout(ahead.current?.timer), []);
+
   useEffect(() => {
     const idle = window.requestIdleCallback ?? ((run: () => void) => setTimeout(run, 1500));
     const stop = window.cancelIdleCallback ?? clearTimeout;
@@ -606,6 +635,9 @@ export function BoardApp({
   return (
     <TooltipProvider>
       <div
+        onPointerOver={live ? (e) => readAhead(e.target, 120) : undefined}
+        onPointerDownCapture={live ? (e) => readAhead(e.target, 0) : undefined}
+        onFocus={live ? (e) => readAhead(e.target, 200) : undefined}
         className={cn(
           "flex overflow-hidden bg-page text-left text-ink",
           full ? "h-dvh" : "h-[36rem] border border-line-strong",
@@ -1354,6 +1386,7 @@ function Inbox({
               <li key={`${a.task.id}-${a.at}-${i}`}>
                 <button
                   onClick={() => onOpenTask(a.task.id)}
+                  data-task={a.task.id}
                   className="flex w-full items-start gap-2.5 px-3 py-2 text-left outline-none hover:bg-sunken focus-visible:bg-sunken"
                 >
                   {person ? (

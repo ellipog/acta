@@ -68,13 +68,19 @@ export function itemAt(tops: readonly number[], y: number) {
 export const MARGIN = 8;
 export const STEP = 10;
 
-/** The items to draw, [start, end), for the body seen from top to bottom */
-export function rangeFor(tops: readonly number[], top: number, bottom: number): [number, number] {
+/** The items to draw, [start, end), for the body seen from top to bottom. Lists of taller or shorter items than the
+ * table's can draw a different margin and move in a different step */
+export function rangeFor(
+  tops: readonly number[],
+  top: number,
+  bottom: number,
+  { margin = MARGIN, step = STEP }: { margin?: number; step?: number } = {},
+): [number, number] {
   const n = tops.length - 1;
   if (n <= 0) return [0, 0];
   const first = itemAt(tops, top);
   const last = itemAt(tops, Math.max(top, bottom));
-  return [Math.max(0, Math.floor((first - MARGIN) / STEP) * STEP), Math.min(n, Math.ceil((last + 1 + MARGIN) / STEP) * STEP)];
+  return [Math.max(0, Math.floor((first - margin) / step) * step), Math.min(n, Math.ceil((last + 1 + margin) / step) * step)];
 }
 
 /**
@@ -104,12 +110,20 @@ export function runsFor(range: [number, number], pinned: readonly (number | null
 
 export type Piece = { from: number; to: number } & ({ gap: false } | { gap: true; height: number; rows: number });
 
-/** The body from top to bottom: the runs drawn, and between them gaps as tall as what they skip */
-export function piecesFor(runs: readonly [number, number][], tops: readonly number[], counts: readonly number[]) {
+/** The body from top to bottom: the runs drawn, and between them gaps as tall as what they skip. Without counts, a
+ * gap's rows are how many items it skips */
+export function piecesFor(runs: readonly [number, number][], tops: readonly number[], counts?: readonly number[]) {
   const n = tops.length - 1;
   const pieces: Piece[] = [];
   const gap = (from: number, to: number) => {
-    if (to > from) pieces.push({ from, to, gap: true, height: tops[to] - tops[from], rows: counts[to] - counts[from] });
+    if (to > from)
+      pieces.push({
+        from,
+        to,
+        gap: true,
+        height: tops[to] - tops[from],
+        rows: counts ? counts[to] - counts[from] : to - from,
+      });
   };
   let at = 0;
   for (const [from, to] of runs) {

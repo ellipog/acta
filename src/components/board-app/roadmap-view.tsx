@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { StatusMarker } from "@/components/markers";
 import { Combobox } from "@/components/ui/combobox";
@@ -12,11 +12,10 @@ import { Icon } from "@/components/ui/icons";
 import { Input, Textarea } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
-  DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
+  ListMenu,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
@@ -72,6 +71,9 @@ const month = (iso?: string) => {
   return `${MONTHS[m - 1]} ${y}`;
 };
 type Mode = "manage" | "customize" | "preview";
+
+// How many tasks each stage of Manage shows in its first frame
+const FIRST_SHOWN = 30;
 
 function PublicRoadmapBody({
   state,
@@ -198,6 +200,9 @@ function Manage({
   onOpen: (id: string) => void;
 }) {
   const now = useNow();
+  // Each stage shows its first few straight away and the rest a moment later, drawn while nothing else is waiting,
+  // so opening the tab never waits on a long list of shipped work
+  const shown = useDeferredValue(Infinity, FIRST_SHOWN);
   const page = state.roadmap.page;
   const all = Object.values(state.tasks);
   const items = all.filter((t) => t.public && t.status !== "canceled" && visible(t));
@@ -236,7 +241,7 @@ function Manage({
                 ) : null}
               </header>
               <ul className="flex flex-col gap-2 p-2">
-                {list.map((t, i) => {
+                {list.slice(0, shown).map((t, i) => {
                   const shownMonth = id === "shipped" && (i === 0 || month(list[i - 1].shipped) !== month(t.shipped));
                   return (
                     <li key={t.id} className="contents">
@@ -271,13 +276,14 @@ function Manage({
                             <Vein votes={t.votes ?? 0} max={max} tone={stageMeta[id].tone} />
                           </div>
                         </div>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            aria-label={`${t.id} options`}
-                            className="-mt-1 -mr-1 grid size-7 shrink-0 place-items-center text-ink-3 opacity-0 outline-none group-hover:opacity-100 hover:bg-sunken hover:text-ink focus-visible:opacity-100 data-[state=open]:opacity-100 pointer-coarse:opacity-100"
-                          >
-                            <Icon name="dots" size="sm" />
-                          </DropdownMenuTrigger>
+                        <ListMenu
+                          trigger={{
+                            "aria-label": `${t.id} options`,
+                            className:
+                              "-mt-1 -mr-1 grid size-7 shrink-0 place-items-center text-ink-3 opacity-0 outline-none group-hover:opacity-100 hover:bg-sunken hover:text-ink focus-visible:opacity-100 data-[state=open]:opacity-100 pointer-coarse:opacity-100",
+                            children: <Icon name="dots" size="sm" />,
+                          }}
+                        >
                           <DropdownMenuContent align="end" className="w-52">
                             <DropdownMenuItem onSelect={() => onOpen(t.id)}>
                               <Icon name="panel" /> Open task
@@ -287,7 +293,7 @@ function Manage({
                               <Icon name="eye-off" /> Take off the roadmap
                             </DropdownMenuItem>
                           </DropdownMenuContent>
-                        </DropdownMenu>
+                        </ListMenu>
                       </article>
                     </li>
                   );
