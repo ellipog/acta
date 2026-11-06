@@ -22,6 +22,9 @@ const triggers = {
   cell: "h-full w-full px-3 text-sm",
 };
 
+// The keys that open a closed select, as Radix has them
+const openKeys = [" ", "Enter", "ArrowUp", "ArrowDown"];
+
 // Typing on a closed trigger picks the next option whose label starts with what was typed, as Radix does with
 // its items. A single letter pressed again moves on to the next match
 function nextMatch<V extends string>(options: SelectOption<V>[], value: V | undefined, text: string) {
@@ -61,6 +64,9 @@ export function Select<V extends string>({
   // Radix renders a closed Select's whole option list into a detached fragment, so its value can copy the chosen
   // item's text. A table row holds five of these, so the list mounts only while open and the value draws itself
   const [open, setOpen] = useState(false);
+  // A cell draws as a plain button until it's first used, and only then as the select, already open. A table row
+  // holds five of these and draws again as it scrolls into view, and each Radix select is a dozen components
+  const [awake, setAwake] = useState(!cell);
   const typed = useRef({ text: "", at: 0 });
   const typeahead = (e: React.KeyboardEvent) => {
     // The table turns typeahead off in its cells by preventing the key first
@@ -79,6 +85,68 @@ export function Select<V extends string>({
     if (next && next.value !== value) onValueChange(next.value);
   };
 
+  const triggerClass = cn(
+    "group flex min-w-0 items-center gap-2 text-left text-ink outline-none transition-colors disabled:opacity-50 data-[placeholder]:text-ink-3 data-[state=open]:border-lapis",
+    triggers[variant],
+    current?.muted && "text-ink-3",
+    className,
+  );
+  const valueClass =
+    "flex min-w-0 flex-1 items-center gap-2 truncate [&>span]:flex [&>span]:min-w-0 [&>span]:items-center [&>span]:gap-2";
+  const caret = (
+    <span
+      className={cn(
+        "text-ink-3 group-hover:text-ink-2",
+        cell && "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-data-[state=open]:opacity-100",
+      )}
+    >
+      <PixelCaret className="group-data-[state=open]:rotate-180" />
+    </span>
+  );
+
+  if (!awake) {
+    const wake = () => {
+      setAwake(true);
+      setOpen(true);
+    };
+    const empty = value === undefined || value === "";
+    // Looks and reads as the closed select it stands in for, and opens it the ways that one opens
+    return (
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={false}
+        id={id}
+        tabIndex={tabIndex}
+        aria-label={ariaLabel}
+        disabled={disabled}
+        data-state="closed"
+        data-placeholder={empty ? "" : undefined}
+        onPointerDown={(e) => {
+          if (e.pointerType !== "mouse" || e.button !== 0 || e.ctrlKey) return;
+          // Kept from focusing the button, which the open list is about to take the place of
+          e.preventDefault();
+          wake();
+        }}
+        // A touch or a pen
+        onClick={wake}
+        onKeyDown={(e) => {
+          typeahead(e);
+          if (!e.defaultPrevented && openKeys.includes(e.key)) {
+            e.preventDefault();
+            wake();
+          }
+        }}
+        className={triggerClass}
+      >
+        <span className={valueClass}>
+          <span>{empty ? placeholder : current ? <OptionText option={current} /> : null}</span>
+        </span>
+        {caret}
+      </button>
+    );
+  }
+
   return (
     <S.Root
       value={value}
@@ -87,31 +155,11 @@ export function Select<V extends string>({
       open={open}
       onOpenChange={setOpen}
     >
-      <S.Trigger
-        id={id}
-        tabIndex={tabIndex}
-        aria-label={ariaLabel}
-        onKeyDown={typeahead}
-        className={cn(
-          "group flex min-w-0 items-center gap-2 text-left text-ink outline-none transition-colors disabled:opacity-50 data-[placeholder]:text-ink-3 data-[state=open]:border-lapis",
-          triggers[variant],
-          current?.muted && "text-ink-3",
-          className,
-        )}
-      >
-        <span className="flex min-w-0 flex-1 items-center gap-2 truncate [&>span]:flex [&>span]:min-w-0 [&>span]:items-center [&>span]:gap-2">
+      <S.Trigger id={id} tabIndex={tabIndex} aria-label={ariaLabel} onKeyDown={typeahead} className={triggerClass}>
+        <span className={valueClass}>
           <S.Value placeholder={placeholder}>{current ? <OptionText option={current} /> : undefined}</S.Value>
         </span>
-        <S.Icon asChild>
-          <span
-            className={cn(
-              "text-ink-3 group-hover:text-ink-2",
-              cell && "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-data-[state=open]:opacity-100",
-            )}
-          >
-            <PixelCaret className="group-data-[state=open]:rotate-180" />
-          </span>
-        </S.Icon>
+        <S.Icon asChild>{caret}</S.Icon>
       </S.Trigger>
       {open ? (
         <S.Portal>

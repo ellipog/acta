@@ -303,37 +303,60 @@ export function DatePicker({
   const today = useToday();
   const state = due ? dueState(value, today) : null;
   const cell = variant === "cell";
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
+  // A cell draws as a plain button until it's first used, then as the popover, already open. A table draws its
+  // rows as they scroll into view, and two of these in every row is a lot of Radix to set up for each
+  const [awake, setAwake] = useState(!cell);
+  const triggerClass = cn(
+    "group flex min-w-0 items-center gap-2 text-left outline-none transition-colors data-[state=open]:border-lapis",
+    triggers[variant],
+    className,
+  );
+  const face = (
+    <>
+      {cell && !value ? null : (
+        <Icon name="calendar" size="sm" className={cn("shrink-0", state === "overdue" ? "text-hematite" : "text-ink-3")} />
+      )}
+      <span
+        className={cn(
+          "flex-1 truncate",
+          value ? cn("font-mono text-[13px]", state ? dueTone[state] : "text-ink") : "text-ink-3",
+        )}
+      >
+        {value ? (cell ? formatShort(value, today) : formatDate(value)) : placeholder}
+        {state === "overdue" && !cell ? <span className="ml-1.5 font-sans text-[11px]">Overdue</span> : null}
+        {state === "today" ? <span className="ml-1.5 font-sans text-[11px]">Today</span> : null}
+      </span>
+      <PixelCaret
+        className={cn(
+          "text-ink-3 group-data-[state=open]:rotate-180",
+          cell && "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-data-[state=open]:opacity-100",
+        )}
+      />
+    </>
+  );
+  if (!awake)
+    return (
+      <button
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={false}
+        data-state="closed"
         id={id}
         tabIndex={tabIndex}
         aria-label={ariaLabel}
-        className={cn(
-          "group flex min-w-0 items-center gap-2 text-left outline-none transition-colors data-[state=open]:border-lapis",
-          triggers[variant],
-          className,
-        )}
+        onClick={() => {
+          setAwake(true);
+          setOpen(true);
+        }}
+        className={triggerClass}
       >
-        {cell && !value ? null : (
-          <Icon name="calendar" size="sm" className={cn("shrink-0", state === "overdue" ? "text-hematite" : "text-ink-3")} />
-        )}
-        <span
-          className={cn(
-            "flex-1 truncate",
-            value ? cn("font-mono text-[13px]", state ? dueTone[state] : "text-ink") : "text-ink-3",
-          )}
-        >
-          {value ? (cell ? formatShort(value, today) : formatDate(value)) : placeholder}
-          {state === "overdue" && !cell ? <span className="ml-1.5 font-sans text-[11px]">Overdue</span> : null}
-          {state === "today" ? <span className="ml-1.5 font-sans text-[11px]">Today</span> : null}
-        </span>
-        <PixelCaret
-          className={cn(
-            "text-ink-3 group-data-[state=open]:rotate-180",
-            cell && "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-data-[state=open]:opacity-100",
-          )}
-        />
+        {face}
+      </button>
+    );
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger id={id} tabIndex={tabIndex} aria-label={ariaLabel} className={triggerClass}>
+        {face}
       </PopoverTrigger>
       <PopoverContent onOpenAutoFocus={(e) => e.preventDefault()}>
         <Calendar

@@ -9,7 +9,8 @@ import { rangeFor } from "./table-window";
 // Before a list's scroller is known, as on the server, a tall screenful is drawn
 const FIRST_VIEW = 1200;
 
-type Range = { offset?: number; margin?: number; step?: number };
+// first is how much of the list is drawn before its scroller is known
+type Range = { offset?: number; margin?: number; step?: number; first?: number };
 
 /**
  * The stretch of a list to draw, [start, end), following its scroller. tops are where each item starts, with where
@@ -20,9 +21,9 @@ type Range = { offset?: number; margin?: number; step?: number };
 export function useScrollRange(
   scroller: HTMLElement | null,
   tops: readonly number[],
-  { offset = 0, margin, step }: Range = {},
+  { offset = 0, margin, step, first = FIRST_VIEW }: Range = {},
 ): [number, number] {
-  const at = useRef({ top: 0, height: FIRST_VIEW });
+  const at = useRef({ top: 0, height: first });
   const subscribe = useCallback(
     (changed: () => void) => {
       if (!scroller) return () => {};
@@ -46,7 +47,7 @@ export function useScrollRange(
   const range = useSyncExternalStore(
     subscribe,
     () => key(at.current.top, at.current.height),
-    () => key(0, FIRST_VIEW),
+    () => key(0, first),
   );
   const [start, end] = range.split(":").map(Number);
   return [start, end];

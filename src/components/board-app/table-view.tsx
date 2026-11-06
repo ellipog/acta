@@ -3,14 +3,12 @@
 import {
   createContext,
   memo,
-  useCallback,
   useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 import { SubtaskCells } from "@/components/board";
 import { Badge } from "@/components/ui/badge";
@@ -87,7 +85,6 @@ import {
   headAbove,
   piecesFor,
   placeItems,
-  rangeFor,
   runsFor,
   tableItems,
   type Drop,
@@ -95,6 +92,7 @@ import {
   type Item,
 } from "./table-window";
 import { TaskMenuList } from "./task-menu";
+import { useScrollRange } from "./scroll-window";
 
 type Group = {
   key: string;
@@ -299,29 +297,9 @@ function TableViewBody({
   const { items, at } = useMemo(() => tableItems(groups, prefs.collapsed), [groups, prefs.collapsed]);
   const { tops, counts } = useMemo(() => placeItems(items, heights), [items, heights]);
 
-  // Which items are drawn follows the scroll position. It's read as an outside store, so a scroll draws the table
-  // again only when it moves the range, and does so before the frame is painted
-  const watch = useCallback(
-    (changed: () => void) => {
-      if (!scroller) return () => {};
-      scroller.addEventListener("scroll", changed, { passive: true });
-      const ro = new ResizeObserver(changed);
-      ro.observe(scroller);
-      return () => {
-        scroller.removeEventListener("scroll", changed);
-        ro.disconnect();
-      };
-    },
-    [scroller],
-  );
-  // The header row, as tall as a task's, covers the top of the view
-  const rangeKey = (top: number, height: number) => rangeFor(tops, top - heights.row, top + height - heights.row).join(":");
-  const range = useSyncExternalStore(
-    watch,
-    () => (scroller ? rangeKey(scroller.scrollTop, scroller.clientHeight) : rangeKey(0, FIRST_VIEW)),
-    () => rangeKey(0, FIRST_VIEW),
-  );
-  const [start, end] = range.split(":").map(Number);
+  // Which items are drawn follows the scroll position, and the table draws again only when it moves the range. The
+  // header row, as tall as a task's, covers the top of the view
+  const [start, end] = useScrollRange(scroller, tops, { offset: heights.row, first: FIRST_VIEW });
 
   const columns = withFieldColumns(prefs.columns);
   const cols = [
@@ -1074,7 +1052,9 @@ function TableViewBody({
           paste(cell.row, cell.col, e.clipboardData.getData("text/plain"));
         }}
         data-scrolled={scrolledX || undefined}
-        className="group/scroller min-h-0 flex-1 overflow-auto overscroll-contain"
+        // Opaque, so the browser can scroll it on its own thread without losing its subpixel text, rather than
+        // painting the table again for every frame of a scroll
+        className="group/scroller min-h-0 flex-1 overflow-auto overscroll-contain bg-page"
       >
         <table
           role="grid"
@@ -1335,7 +1315,7 @@ const TableRow = memo(function TableRow({
         return (
           <span onClick={() => api.open(t.id)} className="flex h-full min-w-0 cursor-pointer items-center gap-2 px-3">
             {by && last ? (
-              <Tooltip content={`${by.who}${by.via ? ` via ${by.via}` : ""} ${last.text}`}>
+              <Tooltip hover content={`${by.who}${by.via ? ` via ${by.via}` : ""} ${last.text}`}>
                 <span className="flex min-w-0 items-center gap-2">
                   <Avatar name={by.who} src={by.person?.avatar} tone={by.person?.tone} size="xs" />
                   <span className="truncate text-sm">{by.who}</span>
@@ -1456,7 +1436,7 @@ function UpdatedAgo({ task }: { task: Task }) {
   const now = useContext(Now);
   const last = task.activity.at(-1);
   return last && now ? (
-    <Tooltip content={`${last.who} ${last.text}`}>
+    <Tooltip hover content={`${last.who} ${last.text}`}>
       <span className="font-mono text-[11px] text-ink-3">{timeAgo(last.at, now)}</span>
     </Tooltip>
   ) : null;
@@ -1546,7 +1526,7 @@ function TitleCell({
         </span>
       ) : null}
       <span className="ml-auto flex shrink-0 opacity-0 group-hover/row:opacity-100 pointer-coarse:hidden">
-        <Tooltip content="Rename">
+        <Tooltip hover content="Rename">
           <button
             tabIndex={-1}
             aria-label={`Rename ${task.id}`}
@@ -1559,7 +1539,7 @@ function TitleCell({
             <Icon name="pencil" size="sm" />
           </button>
         </Tooltip>
-        <Tooltip content="Open">
+        <Tooltip hover content="Open">
           <button
             tabIndex={-1}
             aria-label={`Open ${task.id}`}

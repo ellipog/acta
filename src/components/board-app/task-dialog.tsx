@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { Dialog as D } from "radix-ui";
 import { Icon } from "@/components/ui/icons";
 import { PixelTick } from "@/components/ui/pixel";
@@ -103,6 +103,9 @@ function TaskBody({
   const prev = index > 0 ? order[index - 1] : null;
   const next = index >= 0 && index < order.length - 1 ? order[index + 1] : null;
   const thread = task.thread ?? [];
+  // A long thread draws its first comments with the rest of the task and the others a moment after, so the task
+  // shows at once rather than once every comment is laid out
+  const drawn = useDeferredValue(thread.length, Math.min(thread.length, FIRST_COMMENTS));
   const earlier = Math.max(0, task.comments - thread.length);
   const activity = [...task.activity].reverse();
   // Only the latest activity is loaded, so its first entry is the creation only on a task without much history
@@ -357,11 +360,12 @@ function TaskBody({
                 </p>
               ) : null}
               <ol className="mt-3 space-y-4">
-                {thread.map((c) => {
+                {thread.slice(0, Math.max(drawn, Math.min(thread.length, FIRST_COMMENTS))).map((c) => {
                   // A comment brought over from elsewhere shows who wrote it there, then who added it here
                   const person = c.from ? undefined : people.find((p) => p.name.startsWith(c.who));
                   return (
-                    <li key={c.id} className="flex gap-3">
+                    // Comments out of view are laid out and painted only as they scroll near
+                    <li key={c.id} className="flex gap-3 [contain-intrinsic-size:auto_4rem] [content-visibility:auto]">
                       {person ? (
                         <Avatar name={person.name} src={person.avatar} tone={person.tone} size="sm" />
                       ) : (
@@ -554,6 +558,9 @@ function TaskBody({
     </div>
   );
 }
+
+// How many comments a task shows as it opens, before the rest of a long thread
+const FIRST_COMMENTS = 12;
 
 const fullTime = (at: number) => new Date(at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 

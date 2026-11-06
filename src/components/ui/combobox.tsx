@@ -26,6 +26,18 @@ type Shared = {
   "aria-label"?: string;
 };
 
+// A cell draws as a plain button until it's first used, then as the popover, already open. A table draws its rows
+// as they scroll into view, and the Radix popover is a lot to set up for every row
+function useWake(variant: Shared["variant"]) {
+  const [open, setOpen] = useState(false);
+  const [awake, setAwake] = useState(variant !== "cell");
+  const wake = () => {
+    setAwake(true);
+    setOpen(true);
+  };
+  return { open, setOpen, awake, wake };
+}
+
 function Trigger({
   variant = "field",
   id,
@@ -33,14 +45,16 @@ function Trigger({
   tabIndex,
   "aria-label": ariaLabel,
   children,
-}: Shared & { children: React.ReactNode }) {
-  return (
-    <PopoverTrigger
-      id={id}
-      tabIndex={tabIndex}
-      aria-label={ariaLabel}
-      className={cn("group flex min-w-0 items-center gap-2 text-left text-ink outline-none transition-colors", triggers[variant], className)}
-    >
+  onWake,
+}: Shared & { children: React.ReactNode; onWake?: () => void }) {
+  const props = {
+    id,
+    tabIndex,
+    "aria-label": ariaLabel,
+    className: cn("group flex min-w-0 items-center gap-2 text-left text-ink outline-none transition-colors", triggers[variant], className),
+  };
+  const face = (
+    <>
       <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">{children}</span>
       <PixelCaret
         className={cn(
@@ -48,8 +62,16 @@ function Trigger({
           variant === "cell" && "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-data-[state=open]:opacity-100",
         )}
       />
-    </PopoverTrigger>
+    </>
   );
+  // Asleep, it looks and reads as the closed popover's button it stands in for
+  if (onWake)
+    return (
+      <button type="button" aria-haspopup="dialog" aria-expanded={false} data-state="closed" onClick={onWake} {...props}>
+        {face}
+      </button>
+    );
+  return <PopoverTrigger {...props}>{face}</PopoverTrigger>;
 }
 
 function match(value: string, search: string, keywords?: string[]) {
@@ -132,11 +154,11 @@ export function Combobox<V extends string>({
   onValueChange: (value: V) => void;
   options: SelectOption<V>[];
 }) {
-  const [open, setOpen] = useState(false);
+  const { open, setOpen, awake, wake } = useWake(shared.variant);
   const current = options.find((o) => o.value === value);
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <Trigger {...shared}>
+      <Trigger {...shared} onWake={awake ? undefined : wake}>
         {current ? (
           <>
             {current.icon}
@@ -175,10 +197,11 @@ export function MultiSelect<V extends string>({
   options: SelectOption<V>[];
   renderValue?: (chosen: SelectOption<V>[]) => React.ReactNode;
 }) {
+  const { open, setOpen, awake, wake } = useWake(shared.variant);
   const chosen = options.filter((o) => value.includes(o.value));
   return (
-    <Popover>
-      <Trigger {...shared}>
+    <Popover open={open} onOpenChange={setOpen}>
+      <Trigger {...shared} onWake={awake ? undefined : wake}>
         {chosen.length ? (
           (renderValue?.(chosen) ?? <span className="truncate">{chosen.map((o) => o.label).join(", ")}</span>)
         ) : (
