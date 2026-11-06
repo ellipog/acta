@@ -2,14 +2,16 @@ import "server-only";
 import { cache } from "react";
 import { cookies, headers } from "next/headers";
 import {
-  boardColumns,
   boardInfo,
   boardQuery,
   boardState,
+  countShelves,
   countTasks,
+  firstRead,
   recentLines,
   type NestedBoard,
 } from "./board-load";
+import { shelvesFor, type ShelfView } from "./board-shelves";
 import type { Label, Priority, Size, StatusCategory } from "./board-store";
 import { taskKey, type TaskRow } from "./board-sync";
 import type { DitherName } from "./dither-assets";
@@ -156,21 +158,53 @@ export const getWorkspace = cache(async (slug: string) => {
   return { me: session.me, workspace, workspaces, boards: contents.boards, members: contents.members };
 });
 
+// How each of your boards is set to show, as far as it decides which of its tasks to read: its view, grouping,
+// folded columns and saved filters. All of them come at once, as the board's id isn't known yet when this starts.
+// Before the settings migration runs there are none, and boards open as they do by default
+const getViews = cache(async () => {
+  const auth = await getAuth();
+  if (!auth) return new Map<string, ShelfView & { keptFilters?: ShelfView["filters"] }>();
+  const { data, error } = await auth.supabase
+    .from("user_prefs")
+    .select("key, view:value->>view, grouping:value->>grouping, collapsed:value->collapsed, keptFilters:value->keptFilters")
+    .eq("user_id", auth.id)
+    .like("key", "prefs-%");
+  const rows = (error ? [] : (data ?? [])) as unknown as {
+    key: string;
+    view: string | null;
+    grouping: string | null;
+    collapsed: unknown;
+    keptFilters: unknown;
+  }[];
+  return new Map(
+    rows.map((r) => [
+      r.key.slice("prefs-".length),
+      {
+        view: r.view ?? undefined,
+        grouping: r.grouping ?? undefined,
+        collapsed: Array.isArray(r.collapsed) ? r.collapsed.filter((k): k is string => typeof k === "string") : [],
+        keptFilters: r.keptFilters && typeof r.keptFilters === "object" ? (r.keptFilters as ShelfView["filters"]) : {},
+      },
+    ]),
+  );
+});
+
 export const loadBoard = cache(async (workspaceSlug: string, boardSlug: string): Promise<LiveBoard | null> => {
   const auth = await getAuth();
   if (!auth) return null;
-  // The Inbox's lines are read by the board's id, which the sidebar's list of boards already has
-  const id = getWorkspace(workspaceSlug).then((ws) => ws?.boards.find((b) => b.slug === boardSlug)?.id);
-  const [ws, { data }, recent] = await Promise.all([
-    getWorkspace(workspaceSlug),
-    boardQuery(auth.supabase, auth.id, `${boardColumns}, workspaces!inner(slug)`)
-      .eq("workspaces.slug", workspaceSlug)
-      .eq("slug", boardSlug)
-      .maybeSingle(),
-    id.then((boardId) => (boardId ? recentLines(auth.supabase, boardId, auth.id) : [])),
+  // The workspace's list of boards says which board this is, and your settings for it which shelves it shows. Both
+  // are read at once, and then the board, its counts and its Inbox
+  const [ws, views] = await Promise.all([getWorkspace(workspaceSlug), getViews()]);
+  const boardId = ws?.boards.find((b) => b.slug === boardSlug)?.id;
+  if (!ws || !boardId) return null;
+  const shelves = shelvesFor(views.get(boardId));
+  const [{ data }, counts, recent] = await Promise.all([
+    boardQuery(auth.supabase, auth.id, shelves).eq("id", boardId).maybeSingle(),
+    countShelves(auth.supabase, boardId),
+    recentLines(auth.supabase, boardId, auth.id),
   ]);
-  const board = data as unknown as NestedBoard | null;
-  if (!ws || !board) return null;
+  if (!data) return null;
+  const { board, first } = firstRead(data as unknown as Record<string, unknown>, shelves, counts);
 
   const names = new Map(ws.members.map((m) => [m.id, m.name]));
   const nameOf = (id: string | null) => (id && names.get(id)) || "Former member";
@@ -182,7 +216,7 @@ export const loadBoard = cache(async (workspaceSlug: string, boardSlug: string):
     boards: ws.boards,
     members: ws.members,
     board: boardInfo(board),
-    state: boardState(board, nameOf, recent),
+    state: boardState(board, nameOf, recent, first),
     at: Date.now(),
   };
 });
@@ -337,24 +371,4 @@ export async function openBoard(workspace: string, board: string): Promise<Board
   if (await getWorkspace(workspace)) return { go: `/${workspace}` };
   if (await lastBoardIn(workspace)) return { go: "/home?stale" };
   return { missing: true };
-}
-
-export async function readBoard(supabase: Client, boardId: string, meId: string) {
-  const [{ data }, { data: members }, recent] = await Promise.all([
-    boardQuery(supabase, meId).eq("id", boardId).maybeSingle(),
-    supabase
-      .from("members")
-      .select("user_id, profiles (name), workspaces!inner(boards!inner(id))")
-      .eq("workspaces.boards.id", boardId),
-    recentLines(supabase, boardId, meId),
-  ]);
-  const board = data as unknown as NestedBoard | null;
-  if (!board) return null;
-  const names = new Map(
-    (members ?? []).map((m) => [
-      m.user_id,
-      (m.profiles as unknown as { name: string | null } | null)?.name || "Member",
-    ]),
-  );
-  return boardState(board, (id) => (id && names.get(id)) || "Former member", recent);
 }

@@ -47,7 +47,9 @@ import {
 } from "@/lib/board-store";
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
+import { Spinner } from "@/components/ui/display";
 import type { Prefs } from "./fields";
+import { reading, unseen, waiting, type ShelfInfo } from "./shelf-info";
 import { TaskMenu } from "./task-menu";
 
 type Props = {
@@ -59,6 +61,8 @@ type Props = {
   setPrefs?: (patch: Partial<Prefs>) => void;
   /** Moves on when the board's people, labels or fields change, so cards that show them are drawn again */
   metaVersion?: number;
+  /** The shelves of tasks a live board holds in part, and how many each has */
+  shelves?: ShelfInfo;
 };
 
 type Columns = BoardState["columns"];
@@ -76,7 +80,7 @@ const columnOf = (cols: Columns, id: string): StatusCategory | undefined => {
   return (Object.keys(cols) as StatusCategory[]).find((c) => cols[c].includes(id));
 };
 
-function BoardViewBody({ state, dispatch, visible, onOpen, prefs, setPrefs, metaVersion = 0 }: Props) {
+function BoardViewBody({ state, dispatch, visible, onOpen, prefs, setPrefs, metaVersion = 0, shelves }: Props) {
   const [activeId, setActiveId] = useState<string | null>(null);
   // Where the cards are while one is carried. Nothing is saved until it's dropped, so a drag is one change
   // that one undo takes back, and a cancelled drag leaves no trace
@@ -194,7 +198,9 @@ function BoardViewBody({ state, dispatch, visible, onOpen, prefs, setPrefs, meta
     if (wide) return !wide.has(s);
     if (collapsed(s)) return true;
     if (closed(s) && hideDone) return true;
-    if (s === "canceled") return !state.columns.canceled.some((id) => state.tasks[id] && visible(state.tasks[id]));
+    // Canceled opens out once something's in it, read here or still on the server
+    if (s === "canceled")
+      return !state.columns.canceled.some((id) => state.tasks[id] && visible(state.tasks[id])) && !waiting(shelves, s);
     return false;
   };
   const target = activeId ? columnOf(columns, activeId) : undefined;
@@ -214,14 +220,19 @@ function BoardViewBody({ state, dispatch, visible, onOpen, prefs, setPrefs, meta
           const ids = columns[s.id].filter((id) => state.tasks[id] && visible(state.tasks[id]));
           const points = ids.reduce((n, id) => n + (state.tasks[id].size ? sizePoints[state.tasks[id].size!] : 0), 0);
           const hidden = closed(s.id) && hideDone;
+          // Cards still on the server count, and a column being read says how many are on their way
+          const more = unseen(shelves, s.id);
+          const expanded = !rail(s.id);
           return (
             <Column
               key={s.id}
               status={s.id}
               title={s.title}
-              count={hidden ? 0 : ids.length}
+              count={hidden ? 0 : ids.length + more}
               points={points}
-              collapsed={rail(s.id)}
+              more={expanded && waiting(shelves, s.id) ? { count: more, loading: reading(shelves, s.id) } : undefined}
+              onPreload={shelves && !expanded ? () => shelves.preload([s.id]) : undefined}
+              collapsed={!expanded}
               targeted={target === s.id && target !== start}
               railHint={
                 hidden
@@ -241,7 +252,8 @@ function BoardViewBody({ state, dispatch, visible, onOpen, prefs, setPrefs, meta
                       : () => toggleCollapsed(s.id)
               }
               onArchive={
-                closed(s.id) && ids.some((id) => !state.tasks[id].archived)
+                // All of it, so only once all of it is here
+                closed(s.id) && !waiting(shelves, s.id) && ids.some((id) => !state.tasks[id].archived)
                   ? () => dispatch(archiveTasks(ids.filter((id) => !state.tasks[id].archived), true))
                   : undefined
               }
@@ -273,6 +285,8 @@ function Column({
   title,
   count,
   points,
+  more,
+  onPreload,
   collapsed,
   targeted,
   railHint,
@@ -285,6 +299,10 @@ function Column({
   title: string;
   count: number;
   points: number;
+  // Cards still to come from the server, below the ones showing
+  more?: { count: number; loading: boolean };
+  // Reads the column's first cards ahead of it opening, as the pointer comes to the rail
+  onPreload?: () => void;
   collapsed: boolean;
   // A card being carried would land here
   targeted: boolean;
@@ -328,6 +346,8 @@ function Column({
         {onToggle ? (
           <button
             onClick={onToggle}
+            onPointerEnter={onPreload}
+            onFocus={onPreload}
             aria-label={railHint ?? `Expand ${title}`}
             className="flex w-full flex-1 flex-col items-center gap-3 pt-3 text-ink-2 hover:bg-sunken hover:text-ink"
           >
@@ -435,8 +455,9 @@ function Column({
       >
         {composing === "top" ? composer : null}
         {children}
+        {more ? <MoreCards {...more} /> : null}
         {composing === "bottom" ? composer : null}
-        {count === 0 && !composing ? (
+        {count === 0 && !more && !composing ? (
           <button
             onClick={() => setComposing("bottom")}
             className="group flex flex-1 flex-col items-center justify-center gap-3 py-6 text-xs text-ink-3 hover:text-ink-2"
@@ -454,6 +475,22 @@ function Column({
         ) : null}
       </div>
     </section>
+  );
+}
+
+// Where a column's cards still on the server will come, as many card-shaped places as are on their way, up to a few
+function MoreCards({ count, loading }: { count: number; loading: boolean }) {
+  return (
+    <div role="status" aria-live="polite" className="flex shrink-0 flex-col gap-2">
+      {Array.from({ length: Math.min(3, Math.max(1, count)) }, (_, i) => (
+        <span key={i} className="h-16 shrink-0 border border-dashed border-line bg-raised/40" aria-hidden />
+      ))}
+      <span className="flex h-6 items-center gap-2 px-1 font-mono text-[11px] text-ink-3">
+        {loading ? <Spinner label="Loading" /> : null}
+        {count ? `${count.toLocaleString()} more` : "More"}
+        {loading ? " on the way" : ""}
+      </span>
+    </div>
   );
 }
 

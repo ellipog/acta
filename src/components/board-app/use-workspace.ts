@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { boardPath, peekBoard, rememberBoard, rememberShell, roomAhead, setCounts, setMine } from "@/lib/board-cache";
 import { countTasks, fetchBoard, liveFrom } from "@/lib/board-load";
+import { viewShelves } from "@/lib/board-shelves-pref";
 import type { LiveBoard } from "@/lib/live";
 import { listen } from "@/lib/realtime";
 import { loadClient } from "@/lib/supabase/browser";
@@ -117,7 +118,8 @@ export function useWorkspace(live: LiveBoard | undefined) {
         // Boards read ahead only fill free room in the cache, never push out ones that were looked at
         if (stopped || !roomAhead()) return;
         if (peekBoard(boardPath(here.workspace.slug, b.slug))) continue;
-        const fetched = await fetchBoard(client, here.me.id, b.id).catch(() => null);
+        // Only what that board's view shows, the same as opening it reads
+        const fetched = await fetchBoard(client, here.me.id, b.id, viewShelves(b.id)).catch(() => null);
         if (!fetched || stopped) continue;
         // The answer can land in the middle of a click, so turning it into a board waits for idle again
         await pause();

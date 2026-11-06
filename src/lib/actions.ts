@@ -11,7 +11,7 @@ import { roadmapTag } from "./seo";
 import { boardPrefixFor, boardSlugFor, boardSlugProblem, slugify, slugProblem } from "./slugs";
 import { createAdminClient, serviceReady } from "./supabase/admin";
 import { createClient } from "./supabase/server";
-import { getAuth, readBoard } from "./workspace";
+import { getAuth } from "./workspace";
 
 export type ActionResult = { ok: boolean; message: string } | null;
 
@@ -247,11 +247,6 @@ export async function joinWorkspace(_: ActionResult, form: FormData): Promise<Ac
   const { data, error } = await supabase.rpc("accept_invite", { p_token: token });
   if (error) return { ok: false, message: "This invite link no longer works. Ask for a new one." };
   redirect(`/${data as string}`);
-}
-
-export async function fetchBoardState(boardId: string) {
-  const { supabase, user } = await signedIn();
-  return readBoard(supabase, boardId, user.id);
 }
 
 /** A board's public roadmap was published, unpublished, edited, or lost a task. The copy visitors share is

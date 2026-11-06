@@ -4,6 +4,7 @@ import { Suspense, use, useEffect, useState } from "react";
 import { notFound, redirect, useParams } from "next/navigation";
 import { boardPath, cachedBoard, cachedShell, forgetBoard } from "@/lib/board-cache";
 import { readLive } from "@/lib/board-load";
+import { viewShelves } from "@/lib/board-shelves-pref";
 import type { LiveBoard, LiveFrame } from "@/lib/live";
 import { loadClient } from "@/lib/supabase/browser";
 import type { BoardResult } from "@/lib/workspace";
@@ -43,7 +44,7 @@ function startReading(workspace: string, board: string) {
   const early = started.get(path);
   if (!shell || !id || (early && Date.now() - early.at < EARLY)) return;
   const read = loadClient()
-    .then((client) => readLive(client, shell, id))
+    .then((client) => readLive(client, shell, id, viewShelves(id)))
     .catch(() => null);
   started.set(path, { at: Date.now(), read });
 }
@@ -56,7 +57,11 @@ function readFor(frame: LiveFrame): Promise<LiveBoard> {
   started.delete(path);
   read = (early && Date.now() - early.at < EARLY ? early.read : Promise.resolve(null))
     // A read begun from the sidebar's list could have found another board at the address since
-    .then(async (got) => (got?.board.id === frame.board.id ? got : readLive(await loadClient(), frame, frame.board.id)))
+    .then(async (got) =>
+      got?.board.id === frame.board.id
+        ? got
+        : readLive(await loadClient(), frame, frame.board.id, viewShelves(frame.board.id)),
+    )
     .then(
       // The server's details are newer than whatever the read started from
       (got) => (got ? { ...frame, state: got.state, at: got.at } : whole()),

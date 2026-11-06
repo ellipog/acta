@@ -3,10 +3,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/toast";
-import { fetchBoardState, roadmapChanged } from "@/lib/actions";
+import { roadmapChanged } from "@/lib/actions";
 import { rememberBoard } from "@/lib/board-cache";
-import { readCounts, readThread } from "@/lib/board-load";
-import { defaultPage, type Activity, type BoardState } from "@/lib/board-store";
+import {
+  boardState,
+  countShelves,
+  fetchBoard,
+  FIRST,
+  PAGE,
+  readCounts,
+  readShelf,
+  readTasks,
+  readThread,
+  taskFrom,
+  type FirstRead,
+  type NestedTask,
+} from "@/lib/board-load";
+import { shelfList, shelfOf, type Place, type Shelf } from "@/lib/board-shelves";
+import { defaultPage, type Activity, type BoardState, type Task } from "@/lib/board-store";
 import { revert, saveChanges } from "@/lib/board-save";
 import {
   absorb,
@@ -90,8 +104,19 @@ type Handlers = {
   flush: () => Promise<void>;
   remember: () => void;
   recount: () => Promise<void>;
+  recountShelves: () => Promise<void>;
+  pump: () => void;
+  loadLoose: () => Promise<void>;
 };
 const idle = async () => {};
+
+// Tasks a live line or comment needs that the board hasn't read, for its Inbox, read together a moment later. Only
+// the newest few matter there
+const LOOSE = 40;
+// A task number held by a request, in chunks short enough for an address
+const CHUNK = 150;
+
+const placeOf = (row: NestedTask) => ({ position: row.position, number: row.number });
 
 export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dispatch: (a: DemoAction) => void) {
   const [status, setStatus] = useState<SaveStatus>("saved");
@@ -128,6 +153,25 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
   // Tasks whose counts and latest activity are to be read again, or null for every partial task
   const recounting = useRef<Set<number> | null | undefined>(undefined);
   const recountTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Task numbers deleted lately, here or by someone else. A page of a shelf read before a deletion landed still has
+  // the task, and mustn't bring it back
+  const gone = useRef(new Set<number>());
+  // The shelves the view shows, each read on to its end, and the ones being read now
+  const wanted = useRef<Shelf[]>([]);
+  const running = useRef(new Set<Shelf>());
+  const [loading, setLoading] = useState<ReadonlySet<Shelf>>(() => new Set());
+  // Shelves that couldn't be read, and when they gave up, so they wait a while before trying again
+  const resting = useRef(new Map<Shelf, number>());
+  // Moves on each time the board is read again whole, so reads begun before then stop
+  const generation = useRef(0);
+  const resyncing = useRef(false);
+  // Moves with every task that comes in, so a count of the shelves can tell it may be out of date
+  const taskEvents = useRef(0);
+  const shelfTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tasks the Inbox needs that the board hasn't read
+  const loose = useRef(new Set<number>());
+  const looseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const alive = useRef(true);
   // The newest callbacks, for timers and the long-lived subscription
   const handlers = useRef<Handlers>({
     receive: () => {},
@@ -136,7 +180,17 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     flush: idle,
     remember: () => {},
     recount: idle,
+    recountShelves: idle,
+    pump: () => {},
+    loadLoose: idle,
   });
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     liveRef.current = live;
@@ -180,17 +234,45 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     recountTimer.current = setTimeout(() => void handlers.current.recount(), 400);
   }, []);
 
+  // The shelves' counts are read again a moment after a change to a task this copy hadn't read, which could have
+  // come from any of them
+  const recountShelvesLater = useCallback(() => {
+    if (shelfTimer.current) clearTimeout(shelfTimer.current);
+    shelfTimer.current = setTimeout(() => void handlers.current.recountShelves(), 600);
+  }, []);
+
+  // A task the Inbox needs, read with any others a moment later
+  const looseLater = useCallback((n: number) => {
+    loose.current.add(n);
+    if (looseTimer.current) return;
+    looseTimer.current = setTimeout(() => {
+      looseTimer.current = null;
+      void handlers.current.loadLoose();
+    }, 500);
+  }, []);
+
   // Someone else's change, applied to what's saved and to what's on screen. A card someone moved comes with its new
   // position and goes where that says, among the cards here, so a move is one change however long the column
   const receive = useCallback(
     (ev: RemoteEvent) => {
       if (!base.current) return;
       if (ev.table === "comments" || ev.table === "activity") threadEvents.current++;
+      if (ev.table === "tasks") {
+        taskEvents.current++;
+        if (ev.row.deleted_at) gone.current.add(ev.row.number);
+        else gone.current.delete(ev.row.number);
+      }
       if (inflight.current) {
         queue.current.push(ev);
         return;
       }
       const before = base.current;
+      const number = ev.table === "tasks" ? ev.row.number : ev.table === "suggestions" || ev.table === "boards" ? null : ev.row?.number;
+      const unread = before.gaps && number != null && !before.tasks[taskKey(prefix, number)];
+      // A task this copy hadn't read came off some shelf, which has one fewer on the server now. A new one didn't
+      if (unread && ev.table === "tasks" && !ev.fresh) recountShelvesLater();
+      // A line or a comment on a task the board hasn't read is news for the Inbox, which needs the task
+      if (unread && ev.table !== "tasks") looseLater(number);
       const change = sent.current.screen(resolve(before, ev, ctx));
       if (change.kind === "none") return;
       if (change.kind === "task" && change.add && latest.current.tasks[change.id] && !before.tasks[change.id]) {
@@ -205,23 +287,251 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       const recount = unsure(before, base.current, change);
       if (recount) recountLater(recount === "all" ? undefined : recount);
     },
-    [ctx, dispatch, prefix, recountLater],
+    [ctx, dispatch, prefix, recountLater, recountShelvesLater, looseLater],
   );
 
-  // Reads the whole board again, keeping changes that haven't saved yet. For after a dropped connection. Threads
-  // that were read come back partial, and are read again when their dialog opens
-  const resync = useCallback(async () => {
-    if (!boardId || inflight.current) return;
-    const started = Date.now();
-    const read = await fetchBoardState(boardId).catch(() => null);
-    if (!read || inflight.current || !base.current) return;
-    const before = base.current;
-    const fresh = keepOwn(read, before);
-    base.current = fresh;
-    dispatch({ type: "rebase", current: (b) => absorb(fresh, b, diffBoards(before, b)), history: null });
-    syncedAt.current = started;
-    caughtUp.current = true;
+  // Tasks read from the server join what's saved, what's on screen and every step of undo at once, so no copy of the
+  // board is left without them. A task already held stays as it is, as it's as new as anything a read can bring. at
+  // is the shelf the read was of, and how far down it came
+  const hold = useCallback(
+    (rows: NestedTask[], at?: { shelf: Shelf; through?: Place; whole: boolean }) => {
+      const before = base.current;
+      if (!before) return;
+      const tasks: Task[] = rows
+        .filter((r) => !gone.current.has(r.number) && !before.tasks[taskKey(prefix, r.number)])
+        .map((r) => taskFrom(prefix, r, readName));
+      // A task made here that hasn't saved yet can have the number of one someone else just made. Ours moves on
+      let free = tasks.reduce((n, t) => Math.max(n, taskNumber(t.id) + 1), Math.max(latest.current.next, before.next));
+      for (const t of tasks)
+        if (latest.current.tasks[t.id]) {
+          const to = taskKey(prefix, free++);
+          dispatch({ type: "rebase", current: (b) => renumber(b, t.id, to), history: rename(t.id, to) });
+        }
+      const change: BoardChange = { kind: "held", tasks, ...at };
+      base.current = apply(before, change);
+      dispatch({ type: "rebase", current: (b) => apply(b, change), history: replay(change) });
+    },
+    [dispatch, prefix, readName],
+  );
+
+  // Reads on down a shelf from where it got to, a page at a time, each showing as it lands. pages is how many, for
+  // reading ahead of a shelf being shown. Trouble reaching the database is tried again after a pause, longer each time
+  const readOn = useCallback(
+    async (shelf: Shelf, pages = Infinity) => {
+      if (!boardId || !meId || running.current.has(shelf) || !base.current?.gaps?.[shelf]) return;
+      running.current.add(shelf);
+      setLoading((now) => new Set(now).add(shelf));
+      const gen = generation.current;
+      try {
+        const supabase = await loadClient();
+        for (let page = 0, tries = 0; page < pages && alive.current; ) {
+          const gap = base.current?.gaps?.[shelf];
+          if (!gap || generation.current !== gen) return;
+          const size = gap.through ? PAGE : FIRST;
+          const rows = await readShelf(supabase, boardId, meId, shelf, gap.through, size);
+          if (generation.current !== gen || !alive.current) return;
+          if (!rows) {
+            if (++tries >= 5) {
+              resting.current.set(shelf, Date.now());
+              return;
+            }
+            await pause(1000 * 2 ** tries);
+            continue;
+          }
+          tries = 0;
+          // A save going out can hold some of these tasks, and its answer says which
+          while (inflight.current && alive.current) await pause(100);
+          if (generation.current !== gen) return;
+          const whole = rows.length < size;
+          hold(rows, { shelf, through: rows.length ? placeOf(rows[rows.length - 1]) : gap.through, whole });
+          if (whole) return;
+          page++;
+        }
+      } finally {
+        running.current.delete(shelf);
+        setLoading((now) => {
+          const next = new Set(now);
+          next.delete(shelf);
+          return next;
+        });
+        // What the view shows may have moved on meanwhile, or the board been read again
+        setTimeout(() => handlers.current.pump(), 0);
+      }
+    },
+    [boardId, meId, hold],
+  );
+
+  // Starts reading each shelf the view shows that isn't held whole and isn't being read already
+  const pump = useCallback(() => {
+    const gaps = base.current?.gaps;
+    if (!alive.current || resyncing.current || !gaps) return;
+    for (const s of wanted.current) {
+      if (!gaps[s] || running.current.has(s)) continue;
+      const gaveUp = resting.current.get(s);
+      if (gaveUp && Date.now() - gaveUp < 30_000) {
+        setTimeout(() => handlers.current.pump(), 30_000 - (Date.now() - gaveUp));
+        continue;
+      }
+      resting.current.delete(s);
+      void readOn(s);
+    }
+  }, [readOn]);
+
+  /** The shelves the view shows. Each is read on to its end, its first page straight away */
+  const want = useCallback(
+    (shelves: Shelf[]) => {
+      wanted.current = shelves;
+      pump();
+    },
+    [pump],
+  );
+
+  /** Reads the first page of shelves the view is about to show, as when the pointer comes to what shows them, so they
+   * show at once when it's pressed */
+  const preload = useCallback(
+    (shelves: Shelf[]) => {
+      const gaps = base.current?.gaps;
+      for (const s of shelves) if (gaps?.[s] && !gaps[s]!.through) void readOn(s, 1);
+    },
+    [readOn],
+  );
+
+  /** Reads tasks the board doesn't hold, by number, like one a link opens or one the Inbox needs. Resolves once
+   * they're in, or once they can't be read */
+  const loadTasks = useCallback(
+    async (numbers: number[]) => {
+      if (!boardId || !meId) return;
+      const supabase = await loadClient();
+      for (let tries = 0; tries < 3 && alive.current; tries++) {
+        const missing = [...new Set(numbers)].filter((n) => !base.current?.tasks[taskKey(prefix, n)]);
+        if (!missing.length) return;
+        const reads = [];
+        for (let i = 0; i < missing.length; i += CHUNK)
+          reads.push(readTasks(supabase, boardId, meId, missing.slice(i, i + CHUNK)));
+        const got = await Promise.all(reads);
+        if (got.some((r) => !r)) {
+          await pause(1000 * 2 ** tries);
+          continue;
+        }
+        while (inflight.current && alive.current) await pause(100);
+        hold(got.flatMap((r) => r!));
+        return;
+      }
+    },
+    [boardId, meId, prefix, hold],
+  );
+
+  const loadLoose = useCallback(async () => {
+    const numbers = [...loose.current].slice(-LOOSE);
+    loose.current.clear();
+    await loadTasks(numbers);
+  }, [loadTasks]);
+
+  // Reads how many tasks each shelf has again. What the server has that isn't held here is a shelf's rest. A save or
+  // a task coming in meanwhile could put the two out of step, so either reads it again
+  const recountShelves = useCallback(async () => {
+    if (!boardId || !base.current?.gaps) return;
+    const supabase = await loadClient();
+    for (let tries = 0; tries < 5 && alive.current; tries++) {
+      if (inflight.current) {
+        await pause(300);
+        continue;
+      }
+      const seen = taskEvents.current;
+      const saved = saves.current;
+      const counts = await countShelves(supabase, boardId);
+      if (!counts) return;
+      if (inflight.current || saves.current !== saved || taskEvents.current !== seen) {
+        await pause(300);
+        continue;
+      }
+      const at = base.current;
+      if (!at?.gaps) return;
+      const held = new Map<Shelf, number>();
+      for (const t of Object.values(at.tasks)) held.set(shelfOf(t), (held.get(shelfOf(t)) ?? 0) + 1);
+      const gaps = Object.fromEntries(
+        (Object.keys(at.gaps) as Shelf[]).map((s) => [
+          s,
+          { rest: (counts[s]?.count ?? 0) - (held.get(s) ?? 0), tail: counts[s]?.tail ?? undefined },
+        ]),
+      );
+      const change: BoardChange = { kind: "gaps", gaps };
+      base.current = apply(at, change);
+      dispatch({ type: "rebase", current: (b) => apply(b, change), history: replay(change) });
+      return;
+    }
   }, [boardId, dispatch]);
+
+  // The board read again: each shelf held whole is read whole again, and of the others the tasks held, so nothing
+  // on screen goes missing. Where those shelves had got to in order can't be known any more, so the view's shelves
+  // read on from their start again, passing over what's held
+  const readAgain = useCallback(
+    async (state: BoardState) => {
+      if (!boardId || !meId) return null;
+      const supabase = await loadClient();
+      const whole = shelfList.filter((s) => !state.gaps?.[s]);
+      const numbers = Object.values(state.tasks)
+        .filter((t) => state.gaps?.[shelfOf(t)])
+        .map((t) => taskNumber(t.id));
+      const readAll = async (s: Shelf) => {
+        const rows: NestedTask[] = [];
+        for (let after: Place | undefined; ; ) {
+          const page = await readShelf(supabase, boardId, meId, s, after, PAGE);
+          if (!page) throw new Error(`The ${s} shelf couldn’t be read`);
+          rows.push(...page);
+          if (page.length < PAGE) return rows;
+          after = placeOf(page[page.length - 1]);
+        }
+      };
+      const chunks: number[][] = [];
+      for (let i = 0; i < numbers.length; i += CHUNK) chunks.push(numbers.slice(i, i + CHUNK));
+      const [fetched, shelves, held] = await Promise.all([
+        fetchBoard(supabase, meId, boardId, []),
+        Promise.all(whole.map(readAll)),
+        Promise.all(
+          chunks.map(async (c) => {
+            const rows = await readTasks(supabase, boardId, meId, c);
+            if (!rows) throw new Error("Tasks couldn’t be read");
+            return rows;
+          }),
+        ),
+      ]);
+      if (!fetched) return null;
+      const read: FirstRead["read"] = {};
+      whole.forEach((s, i) => (read[s] = shelves[i].length));
+      // In board order, as a read of the board brings its tasks
+      const tasks = [...shelves.flat(), ...held.flat()].sort((a, b) => a.position - b.position || a.number - b.number);
+      return boardState({ ...fetched.board, tasks }, readName, fetched.recent, {
+        counts: fetched.first.counts,
+        read,
+        through: {},
+        limit: Infinity,
+      });
+    },
+    [boardId, meId, readName],
+  );
+
+  // Reads the board again, keeping changes that haven't saved yet. For after a dropped connection. Threads that were
+  // read come back partial, and are read again when their dialog opens. Shelves being read stop, and carry on after
+  const resync = useCallback(async () => {
+    if (!boardId || inflight.current || resyncing.current || !base.current) return;
+    const started = Date.now();
+    resyncing.current = true;
+    const gen = ++generation.current;
+    try {
+      const read = await readAgain(base.current).catch(() => null);
+      if (!read || inflight.current || !base.current || generation.current !== gen) return;
+      const before = base.current;
+      const fresh = keepOwn(read, before);
+      base.current = fresh;
+      dispatch({ type: "rebase", current: (b) => absorb(fresh, b, diffBoards(before, b)), history: null });
+      syncedAt.current = started;
+      caughtUp.current = true;
+    } finally {
+      resyncing.current = false;
+      handlers.current.pump();
+    }
+  }, [boardId, dispatch, readAgain]);
 
   // Reads a task's whole thread and newest activity, for its dialog. It lands in base, on screen and in every step
   // of undo at once, so no copy of the board is left without it
@@ -282,7 +592,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       const seen = threadEvents.current;
       const saved = saves.current;
       const had = Object.fromEntries(ids.map((id) => [id, (at.tasks[id].thread ?? []).map((c) => c.id)]));
-      const rows = await readCounts(supabase, boardId, which ? ids.map(taskNumber) : undefined);
+      // Every partial task's, by number while there are few enough to name
+      const rows = await readCounts(supabase, boardId, which || ids.length <= CHUNK ? ids.map(taskNumber) : undefined);
       if (!rows || !base.current) return;
       if (inflight.current || saves.current !== saved || threadEvents.current !== seen) {
         await pause(300);
@@ -381,6 +692,9 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     for (const part of result.saved) {
       sent.current.record(part, result.goal);
       for (const u of part.uncomments) dropped.current.add(u.id);
+      // A shelf read from before this save mustn't bring back what it deleted
+      for (const id of part.deleted) gone.current.add(taskNumber(id));
+      for (const id of part.created) gone.current.delete(taskNumber(id));
     }
     if (
       result.saved.some(
@@ -429,7 +743,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
 
   // The subscription lives as long as the board is on screen, so it reads these through a ref
   useEffect(() => {
-    handlers.current = { receive, resync, catchUp, flush, remember, recount };
+    handlers.current = { receive, resync, catchUp, flush, remember, recount, recountShelves, pump, loadLoose };
   });
 
   useEffect(() => {
@@ -441,7 +755,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
 
   useEffect(
     () => () => {
-      if (recountTimer.current) clearTimeout(recountTimer.current);
+      for (const t of [recountTimer, shelfTimer, looseTimer]) if (t.current) clearTimeout(t.current);
+      looseTimer.current = null;
     },
     [],
   );
@@ -466,7 +781,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
         change: (table, p) => {
           const { receive } = handlers.current;
           if (table === "tasks") {
-            if (p.new && "number" in p.new) receive({ table: "tasks", row: p.new as never });
+            if (p.new && "number" in p.new)
+              receive({ table: "tasks", row: p.new as never, fresh: p.eventType === "INSERT" });
           } else if (table === "boards") {
             if (p.eventType !== "UPDATE") return;
             const next = p.new as { name?: string; labels?: unknown; projects?: unknown };
@@ -571,5 +887,5 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     };
   }, [boardId]);
 
-  return { status, here, knownAt, loadThread };
+  return { status, here, knownAt, loadThread, want, preload, loadTasks, loading };
 }

@@ -2,7 +2,7 @@
 
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { StatusMarker } from "@/components/board";
-import { Avatar, EmptyState } from "@/components/ui/display";
+import { Avatar, EmptyState, Spinner } from "@/components/ui/display";
 import { DitherFill, type DitherTone } from "@/components/ui/dither";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
 import { fieldOptions, patchFor, valueOf, type Prefs, type Zoom } from "./fields";
+import { reading, unseen, waiting, type ShelfInfo } from "./shelf-info";
 import { TaskMenu } from "./task-menu";
 
 const PPD: Record<Zoom, number> = { month: 40, quarter: 14, year: 4 };
@@ -104,6 +105,7 @@ function TimelineViewBody({
   lead,
   customGroups,
   accent = "lapis",
+  shelves,
 }: {
   state: BoardState;
   dispatch: (a: DemoAction) => void;
@@ -124,6 +126,8 @@ function TimelineViewBody({
     rows: Task[];
   }[];
   accent?: Accent;
+  /** The shelves of tasks a live board holds in part, and how many each has */
+  shelves?: ShelfInfo;
 }) {
   const today = useToday() ?? FALLBACK_TODAY;
   const zoom = prefs.zoom ?? "month";
@@ -175,7 +179,9 @@ function TimelineViewBody({
   const groups = useMemo(() => {
     if (!rows.length) return [];
     if (customGroups)
-      return customGroups.filter((g) => g.rows.length).map((g) => ({ ...g, rows: [...g.rows].sort(order), patch: {} }));
+      return customGroups
+        .filter((g) => g.rows.length)
+        .map((g) => ({ ...g, rows: [...g.rows].sort(order), patch: {}, shelf: undefined, more: 0, waits: false }));
     const sorted = [...rows].sort(order);
     if (prefs.grouping === "none")
       return [
@@ -185,19 +191,32 @@ function TimelineViewBody({
           icon: null as React.ReactNode,
           rows: sorted,
           patch: {},
+          shelf: undefined,
+          more: 0,
+          waits: false,
         },
       ];
     const field = prefs.grouping;
-    return fieldOptions[field]
-      .map((o) => ({
-        key: `t:${field}:${o.value}`,
-        title: o.label,
-        icon: o.icon,
-        rows: sorted.filter((t) => valueOf(t, field)[0] === o.value),
-        patch: patchFor(field, o.value),
-      }))
-      .filter((g) => g.rows.length);
-  }, [rows, prefs.grouping, customGroups]);
+    return (
+      fieldOptions[field]
+        .map((o) => {
+          // Grouped by status, a group is a shelf of tasks, and a folded one may not have been read at all
+          const shelf = field === "status" && !readOnly ? (o.value as Task["status"]) : undefined;
+          const waits = Boolean(shelf && shelves?.allows(shelf) && waiting(shelves, shelf));
+          return {
+            key: `t:${field}:${o.value}`,
+            title: o.label,
+            icon: o.icon,
+            rows: sorted.filter((t) => valueOf(t, field)[0] === o.value),
+            patch: patchFor(field, o.value),
+            shelf,
+            more: waits ? unseen(shelves, shelf!) : 0,
+            waits,
+          };
+        })
+        .filter((g) => g.rows.length || g.waits)
+    );
+  }, [rows, prefs.grouping, customGroups, readOnly, shelves]);
 
   const { first, days } = useMemo(() => {
     const dates = (readOnly ? rows : Object.values(state.tasks)).flatMap(
@@ -442,6 +461,9 @@ function TimelineViewBody({
                         <button
                           aria-expanded={!collapsed}
                           onClick={() => toggle(g.key)}
+                          // A folded group's tasks are read as the pointer comes to it, so they're there when it opens
+                          onPointerEnter={collapsed && g.shelf && g.waits ? () => shelves?.preload([g.shelf!]) : undefined}
+                          onFocus={collapsed && g.shelf && g.waits ? () => shelves?.preload([g.shelf!]) : undefined}
                           className="flex min-w-0 items-center gap-2.5 outline-none focus-visible:ring-2 focus-visible:ring-lapis"
                         >
                           <PixelCaret
@@ -450,7 +472,8 @@ function TimelineViewBody({
                           {g.icon}
                           <span className="truncate text-sm font-medium">{g.title}</span>
                         </button>
-                        <span className="font-mono text-[11px] text-ink-3">{g.rows.length}</span>
+                        <span className="font-mono text-[11px] text-ink-3">{g.rows.length + g.more}</span>
+                        {!collapsed && g.shelf && reading(shelves, g.shelf) ? <Spinner label="Loading" /> : null}
                         {pts && !readOnly ? <span className="font-mono text-[11px] text-ink-3">· {pts} pt</span> : null}
                       </div>
                       <div className="relative shrink-0" style={{ width }}>

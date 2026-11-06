@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { boardTotal, shelfCounts } from "./board-shelves";
 import type { BoardState } from "./board-store";
 import type { LiveBoard } from "./live";
 
@@ -48,7 +49,9 @@ export function roomAhead() {
  * looked at only takes free room, and doesn't count as used */
 export function rememberBoard(live: LiveBoard, state: BoardState, at: number, { ahead = false } = {}) {
   const path = boardPath(live.workspace.slug, live.board.slug);
-  setCount(live.board.id, Object.keys(state.tasks).length);
+  // Archived tasks don't count, and neither do they beside the board's name. Tasks still on the server do
+  const total = boardTotal(shelfCounts(state));
+  if (total !== undefined) setCount(live.board.id, total);
   const entry = { ...live, state, at, cachedAt: Date.now() };
   if (ahead) {
     if (boards.has(path) || roomAhead()) boards.set(path, entry);

@@ -1,4 +1,14 @@
-import { boardState, THREAD_ACTIVITY, type BoardLine, type NestedBoard } from "@/lib/board-load";
+import {
+  boardState,
+  FIRST,
+  PAGE,
+  THREAD_ACTIVITY,
+  type BoardLine,
+  type FirstRead,
+  type NestedBoard,
+  type NestedTask,
+} from "@/lib/board-load";
+import type { Place, Shelf, ShelfCounts } from "@/lib/board-shelves";
 import { pageFrom, type BoardState, type Label, type PublicPage } from "@/lib/board-store";
 import type { Wire } from "@/lib/board-save";
 import { activityFrom, apply, commentFrom, heldBy, taskNumber, type Change, type TaskRow } from "@/lib/board-sync";
@@ -241,6 +251,114 @@ export class FakeBoardServer {
       .filter((a) => a.number === number)
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
       .map((a) => ({ id: a.id, actor: a.actor, text: a.text, created_at: a.created_at, via: null }));
+  }
+
+  /** Tasks not deleted, in board order */
+  private live() {
+    return [...this.tasks.values()]
+      .filter((t) => !t.deleted_at)
+      .sort((a, b) => a.position - b.position || a.number - b.number);
+  }
+
+  /** A task as a read of the board brings it, with its comment count, latest line and your vote */
+  private nested(t: Row): NestedTask {
+    return {
+      ...t,
+      vote_count: this.votes.filter((v) => v.number === t.number).length,
+      comments: [{ count: this.comments.filter((c) => c.number === t.number).length }],
+      activity: this.lines(t.number).slice(0, 1),
+      task_votes: this.votes.filter((v) => v.number === t.number && v.voter === this.me).map((v) => ({ voter: v.voter })),
+    };
+  }
+
+  private recent(): BoardLine[] {
+    const live = this.live();
+    return this.activity
+      .filter((a) => a.actor !== this.me && live.some((t) => t.number === a.number))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .slice(0, 20)
+      .map((a) => ({
+        id: a.id,
+        number: a.number,
+        actor: a.actor,
+        text: a.text,
+        created_at: a.created_at,
+        via: null,
+        task: this.nested(live.find((t) => t.number === a.number)!),
+      }));
+  }
+
+  /** What board_shelves counts */
+  counts(): ShelfCounts {
+    const out: ShelfCounts = {};
+    for (const t of this.live()) {
+      const s: Shelf = t.archived_at ? "archived" : t.status;
+      const c = (out[s] ??= { count: 0, tail: null });
+      c.count++;
+      c.tail = Math.max(c.tail ?? -Infinity, t.position);
+    }
+    return out;
+  }
+
+  /** A page of a shelf in board order after a place on it, as readShelf reads it */
+  page(shelf: Shelf, after?: Place, limit = PAGE): NestedTask[] {
+    return this.live()
+      .filter((t) => (shelf === "archived" ? Boolean(t.archived_at) : !t.archived_at && t.status === shelf))
+      .filter((t) => !after || t.position > after.position || (t.position === after.position && t.number > after.number))
+      .slice(0, limit)
+      .map((t) => this.nested(t));
+  }
+
+  /** Tasks by number, as readTasks reads them */
+  pick(numbers: number[]): NestedTask[] {
+    return this.live()
+      .filter((t) => numbers.includes(t.number))
+      .map((t) => this.nested(t));
+  }
+
+  /** The board as a visit reads it now: the first page of each shelf the view shows, every shelf's count, and the
+   * Inbox's lines with their tasks. counts: false is a database without the shelves migration */
+  loadShelves(shelves: Shelf[], { limit = FIRST, counts = true }: { limit?: number; counts?: boolean } = {}) {
+    const heads = shelves.map((s) => this.page(s, undefined, limit));
+    const read: FirstRead["read"] = {};
+    const through: FirstRead["through"] = {};
+    shelves.forEach((s, i) => {
+      read[s] = heads[i].length;
+      const last = heads[i].at(-1);
+      if (last) through[s] = { position: last.position, number: last.number };
+    });
+    const board: NestedBoard = { ...this.nestedBoard(), tasks: heads.flat() };
+    const state = boardState(board, this.nameOf, this.recent(), {
+      counts: counts ? this.counts() : null,
+      read,
+      through,
+      limit,
+    });
+    return { ...state, roadmap: { ...state.roadmap, page: pageFrom(this.board.name, this.board.slug, this.board.page) } };
+  }
+
+  private nestedBoard(): Omit<NestedBoard, "tasks"> {
+    return {
+      id: this.board.id,
+      slug: this.board.slug,
+      name: this.board.name,
+      prefix: this.prefix,
+      next_number: this.board.next_number,
+      labels: this.board.labels,
+      projects: [],
+      roadmap_public: this.board.roadmap_public,
+      page: this.board.page,
+      suggestions: this.ideas.map((s) => ({
+        id: s.id,
+        board_id: this.board.id,
+        title: s.title,
+        details: s.details,
+        by_name: s.by_name,
+        created_at: s.created_at,
+        vote_count: this.ideaVotes.filter((v) => v.id === s.id).length,
+        suggestion_votes: this.ideaVotes.filter((v) => v.id === s.id && v.voter === this.me).map((v) => ({ voter: v.voter })),
+      })),
+    };
   }
 
   /** The board as the app reads it on a fresh visit: each task's comment count and latest activity line, and the

@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { MultiSelect } from "@/components/ui/combobox";
 import { Checkbox } from "@/components/ui/controls";
 import { Calendar, DatePicker, dueState, useToday } from "@/components/ui/date-picker";
-import { Avatar, AvatarStack, EmptyState } from "@/components/ui/display";
+import { Avatar, AvatarStack, EmptyState, Spinner } from "@/components/ui/display";
 import { DitherFill, type DitherTone } from "@/components/ui/dither";
 import { Icon } from "@/components/ui/icons";
 import {
@@ -78,6 +78,7 @@ import {
 } from "./fields";
 import { CustomFieldInput } from "./custom-fields";
 import { FieldsMenu } from "./fields-menu";
+import { reading, unseen, waiting, type ShelfInfo } from "./shelf-info";
 import { planDrop, planStep } from "./table-drop";
 import {
   addKey,
@@ -102,6 +103,9 @@ type Group = {
   rows: Task[];
   patch: Partial<Task>;
   note?: string;
+  // Grouped by status, the shelf of tasks the group is, when some of it is still on the server
+  shelf?: StatusCategory;
+  more?: { count: number; loading: boolean };
 };
 
 // Every line of the body is a 36px cell and its border at the default text size. The real heights are measured once
@@ -202,6 +206,7 @@ function TableViewBody({
   setPrefs,
   filtered,
   onClearFilters,
+  shelves,
 }: {
   state: BoardState;
   dispatch: (a: BoardAction) => void;
@@ -213,6 +218,8 @@ function TableViewBody({
   onClearFilters: () => void;
   /** Moves on when the board's people, labels or fields change, so what shows them is drawn again */
   metaVersion?: number;
+  /** The shelves of tasks a live board holds in part, and how many each has */
+  shelves?: ShelfInfo;
 }) {
   const { grouping, sort } = prefs;
   const today = useToday();
@@ -249,25 +256,39 @@ function TableViewBody({
     if (!rows.length && filtered) return [];
     if (grouping === "none") return [{ key: "all", title: "", rows, patch: {} }];
     const filteringThis = grouping !== "size" && (prefs.filters[grouping]?.length ?? 0) > 0;
-    return fieldOptions[grouping]
-      .map((o) => ({
-        key: `${grouping}:${o.value}`,
-        title: o.label,
-        icon: o.icon,
-        rows: rows.filter((r) => valueOf(r, grouping)[0] === o.value),
-        patch: patchFor(grouping, o.value),
-        note: noteFor(grouping, o.value),
-      }))
-      // Canceled only shows once something is in it
-      .filter(
-        (g) =>
-          g.rows.length ||
-          (grouping === "status" &&
-            !filteringThis &&
-            g.key !== "status:canceled" &&
-            !(prefs.filters.hideDone && g.key === "status:done")),
-      );
-  }, [rows, grouping, prefs.filters, filtered]);
+    return (
+      fieldOptions[grouping]
+        .map((o): Group => {
+          // Grouped by status, a group is a shelf of tasks, and those still on the server count and are on their way
+          const shelf = grouping === "status" ? (o.value as StatusCategory) : undefined;
+          const only = prefs.filters.status;
+          const hidden = shelf && ((closed(shelf) && prefs.filters.hideDone) || (only?.length && !only.includes(shelf)));
+          return {
+            key: `${grouping}:${o.value}`,
+            title: o.label,
+            icon: o.icon,
+            rows: rows.filter((r) => valueOf(r, grouping)[0] === o.value),
+            patch: patchFor(grouping, o.value),
+            note: noteFor(grouping, o.value),
+            shelf,
+            more:
+              shelf && !hidden && waiting(shelves, shelf)
+                ? { count: unseen(shelves, shelf), loading: reading(shelves, shelf) }
+                : undefined,
+          };
+        })
+        // Canceled only shows once something is in it
+        .filter(
+          (g) =>
+            g.rows.length ||
+            g.more ||
+            (grouping === "status" &&
+              !filteringThis &&
+              g.key !== "status:canceled" &&
+              !(prefs.filters.hideDone && g.key === "status:done")),
+        )
+    );
+  }, [rows, grouping, prefs.filters, filtered, shelves]);
 
   const { navRows, rowIndex } = useMemo(() => {
     const ids = groups.flatMap((g) => (prefs.collapsed.includes(g.key) ? [] : g.rows.map((r) => r.id)));
@@ -944,15 +965,18 @@ function TableViewBody({
                   collapsed: collapsed ? prefs.collapsed.filter((k) => k !== g.key) : [...prefs.collapsed, g.key],
                 })
               }
+              // A folded group's tasks are read as the pointer comes to it, so they're there when it opens
+              onPointerEnter={collapsed && g.shelf && g.more ? () => shelves?.preload([g.shelf!]) : undefined}
+              onFocus={collapsed && g.shelf && g.more ? () => shelves?.preload([g.shelf!]) : undefined}
               className="flex h-7 items-center gap-2.5 pr-1.5 outline-none focus-visible:ring-2 focus-visible:ring-lapis"
             >
               <PixelCaret className={cn("text-ink-3 transition-transform", collapsed && "-rotate-90")} />
               {g.icon}
               <span className="text-sm font-medium">{g.title}</span>
             </button>
-            <span className="font-mono text-[11px] text-ink-3">{g.rows.length}</span>
+            <span className="font-mono text-[11px] text-ink-3">{g.rows.length + (g.more?.count ?? 0)}</span>
             {pts ? <span className="font-mono text-[11px] text-ink-3">· {pts} pt</span> : null}
-            {(g.key === "status:done" || g.key === "status:canceled") && g.rows.some((r) => !r.archived) ? (
+            {(g.key === "status:done" || g.key === "status:canceled") && !g.more && g.rows.some((r) => !r.archived) ? (
               <Tooltip content={`Archive everything in ${g.title}`}>
                 <button
                   onClick={() =>
@@ -999,6 +1023,7 @@ function TableViewBody({
           lit={lit(g.key)}
           span={span}
           open={adding === g.key}
+          more={g.more}
           label={g.title ? `Add to ${g.title}` : "Add a task"}
           onOpen={() => setAdding(g.key)}
           onClose={() => setAdding(null)}
@@ -1558,6 +1583,7 @@ function AddRow({
   lit,
   span,
   open,
+  more,
   label,
   onOpen,
   onClose,
@@ -1569,6 +1595,8 @@ function AddRow({
   lit: boolean;
   span: number;
   open: boolean;
+  // Tasks of the group still to come from the server
+  more?: { count: number; loading: boolean };
   label: string;
   onOpen: () => void;
   onClose: () => void;
@@ -1630,7 +1658,15 @@ function AddRow({
       <td
         colSpan={span - 2}
         className={cn("h-9 border-b border-line bg-raised", lit && "shadow-[inset_0_2px_0_var(--lapis)]")}
-      />
+      >
+        {more ? (
+          <span role="status" className="sticky left-[var(--sticky-width)] flex h-9 items-center gap-2 px-3 font-mono text-[11px] whitespace-nowrap text-ink-3">
+            {more.loading ? <Spinner label="Loading" /> : null}
+            {more.count ? `${more.count.toLocaleString()} more` : "More"}
+            {more.loading ? " on the way" : ""}
+          </span>
+        ) : null}
+      </td>
     </tr>
   );
 }

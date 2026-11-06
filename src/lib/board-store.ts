@@ -1,3 +1,5 @@
+import type { Gaps } from "./board-shelves";
+
 // canceled is closed without being done, for work that won't happen
 export type StatusCategory = "backlog" | "todo" | "in_progress" | "review" | "done" | "canceled";
 export type Priority = "urgent" | "high" | "medium" | "low" | "none";
@@ -253,6 +255,9 @@ export type BoardState = {
   tasks: Record<string, Task>;
   columns: Record<StatusCategory, string[]>;
   roadmap: { public: boolean; suggestions: Suggestion[]; page: PublicPage };
+  // The shelves of tasks held only in part, while the rest waits on the server (see board-shelves.ts). Missing when
+  // the board holds every task, as the demo does
+  gaps?: Gaps;
 };
 
 export const statuses: { id: StatusCategory; title: string; rock: string }[] = [
@@ -936,6 +941,24 @@ export function slotIn(ids: string[], tasks: Record<string, Task>, id: string): 
   return rest;
 }
 
+/** A column with more of its tasks put among those it lists, each where its position says. The column is in board
+ * order already, so the new ones are sorted and the two lists merged */
+export function mergeIds(ids: string[], tasks: Record<string, Task>, more: string[]): string[] {
+  if (!more.length) return ids;
+  const have = new Set(ids);
+  const add = [...new Set(more)]
+    .filter((id) => tasks[id] && !have.has(id))
+    .sort((a, b) => (sitsAbove(tasks[a], tasks[b]) ? -1 : sitsAbove(tasks[b], tasks[a]) ? 1 : 0));
+  const out: string[] = [];
+  let i = 0;
+  for (const id of ids) {
+    while (i < add.length && tasks[id] && sitsAbove(tasks[add[i]], tasks[id])) out.push(add[i++]);
+    out.push(id);
+  }
+  while (i < add.length) out.push(add[i++]);
+  return out;
+}
+
 /** `count` positions in order, strictly between `lo` and `hi`. A missing end is open, so cards there go one past
  * the card at the top or bottom. Null when they don't fit */
 export function positionsBetween(lo: number | undefined, hi: number | undefined, count: number): number[] | null {
@@ -957,9 +980,12 @@ export function positionsBetween(lo: number | undefined, hi: number | undefined,
  * Positions for a column's cards, listed top to bottom, so that ordering by position gives that order. As many
  * cards keep their position as can: the longest run of them that's already in order, leaving out any marked as
  * moved. The others go between the neighbours that stay, though cards that already fit there keep theirs. When
- * some won't fit, the whole column is numbered again
+ * some won't fit, the whole column is numbered again.
+ *
+ * floor is for a column held only in part: the last position among the cards it doesn't hold. Cards at the end of
+ * the list go after it, so a card moved to the end of the column lands at its true end
  */
-export function positionsFor(cards: Placing[]): number[] {
+export function positionsFor(cards: Placing[], floor?: number): number[] {
   const n = cards.length;
   // The longest run in order, by patience sorting: tails[k] ends the best run of k + 1 cards found so far, and
   // ahead links each card to the one before it in its run
@@ -992,11 +1018,14 @@ export function positionsFor(cards: Placing[]): number[] {
     const lo = i > 0 ? cards[i - 1] : undefined;
     const hi = j < n ? cards[j] : undefined;
     const run = cards.slice(i, j);
+    const end = !hi && finite(floor);
     const fits =
       run.every((c, k) => finite(c.position) && (k ? above(run[k - 1], c) : !lo || above(lo, c))) &&
-      (!hi || above(run[run.length - 1], hi));
+      (!hi || above(run[run.length - 1], hi)) &&
+      (!end || run[0].position! > floor!);
     if (!fits) {
-      const between = positionsBetween(lo?.position, hi?.position, run.length);
+      const from = end ? (lo && finite(lo.position) ? Math.max(lo.position, floor!) : floor) : lo?.position;
+      const between = positionsBetween(from, hi?.position, run.length);
       if (!between) return cards.map((_, k) => k);
       between.forEach((p, k) => (out[i + k] = p));
     }
@@ -1039,7 +1068,9 @@ function placeMoved(before: BoardState, after: BoardState, moved?: string): Boar
       moved: id === moved || !was.has(id),
     }));
     if (!cards.some((c) => c.moved) && inOrder(cards)) continue;
-    const next = positionsFor(cards);
+    // A column with tasks still on the server ends after the last of them
+    const gap = after.gaps?.[s];
+    const next = positionsFor(cards, gap && gap.rest !== 0 ? gap.tail : undefined);
     ids.forEach((id, i) => {
       if (next[i] === cards[i].position || !tasks[id]) return;
       if (tasks === after.tasks) tasks = { ...tasks };

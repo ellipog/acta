@@ -33,6 +33,18 @@ import {
 } from "@/lib/board-store";
 import { onPref, readPref, syncPrefs, writePref } from "@/lib/account-prefs";
 import { rememberBoard, setCount, setMine } from "@/lib/board-cache";
+import {
+  boardTotal,
+  shelfCounts,
+  shelfList,
+  shelvesShown,
+  shows,
+  statusShelves,
+  totalOf,
+  type Shelf,
+  type ShelfCount,
+} from "@/lib/board-shelves";
+import type { ShelfInfo } from "./shelf-info";
 import { settleEdits, useBoardEdits, withEdits } from "@/lib/board-edits";
 import { can, metaFor, type LiveBoard, type Permission } from "@/lib/live";
 import { authReady } from "@/lib/supabase/env";
@@ -167,25 +179,56 @@ export function BoardApp({
     initDemo(live ? live.state : seedBoard(), full ? {} : { view }),
   );
   const { board: state, prefs, restored, synced } = demo;
-  const { status, here, knownAt, loadThread } = useBoardSync(live, state, rawDispatch);
+  const { status, here, knownAt, loadThread, want, preload, loadTasks, loading } = useBoardSync(
+    live,
+    state,
+    rawDispatch,
+  );
   useWorkspace(full ? live : undefined);
   const liveId = live?.board.id;
+  // How many tasks each shelf has, counting those still on the server
+  const counts = useMemo(() => shelfCounts(state), [state]);
   const { taskCount, mineCount } = useMemo(() => {
-    let all = 0;
     let mine = 0;
-    for (const t of Object.values(state.tasks)) {
-      if (t.archived) continue;
-      all++;
-      if (t.assignee === me.id && !closed(t.status)) mine++;
-    }
-    return { taskCount: all, mineCount: mine };
-  }, [state.tasks]);
+    for (const t of Object.values(state.tasks))
+      if (!t.archived && t.assignee === me.id && !closed(t.status)) mine++;
+    // Yours can only be counted here once every open shelf is held whole
+    const open = statusShelves.filter((s) => !closed(s));
+    return { taskCount: boardTotal(counts), mineCount: open.some((s) => state.gaps?.[s]) ? undefined : mine };
+  }, [state.tasks, state.gaps, counts]);
   useEffect(() => {
-    if (liveId) setCount(liveId, taskCount);
+    if (liveId && taskCount !== undefined) setCount(liveId, taskCount);
   }, [liveId, taskCount]);
   useEffect(() => {
-    if (liveId) setMine({ [liveId]: mineCount });
+    if (liveId && mineCount !== undefined) setMine({ [liveId]: mineCount });
   }, [liveId, mineCount]);
+
+  // The shelves of tasks this view shows are read, each to its end, and the rest stay on the server until it shows
+  // them. Shelves whose size couldn't be counted are read too, as there's no telling what they hold. This waits for
+  // the board's settings, so tasks the saved filters hide aren't read before they're known
+  const shown = useMemo(
+    () =>
+      shelvesShown({
+        view: prefs.view,
+        grouping: prefs.grouping,
+        collapsed: prefs.collapsed,
+        filters: prefs.filters,
+      }),
+    [prefs.view, prefs.grouping, prefs.collapsed, prefs.filters],
+  );
+  const needKey = [...new Set([...shown, ...shelfList.filter((s) => state.gaps?.[s] && state.gaps[s]!.rest === undefined)])].join(",");
+  useEffect(() => {
+    if (live && (restored || !full)) want(needKey ? (needKey.split(",") as Shelf[]) : []);
+  }, [live, restored, full, needKey, want]);
+  // What a view would show, read ahead as the pointer comes to whatever switches to it
+  const preloadView = useCallback(
+    (patch: Partial<Prefs>) => {
+      if (!live) return;
+      const next = { ...prefs, ...patch };
+      preload(shelvesShown({ view: next.view, grouping: next.grouping, collapsed: next.collapsed, filters: next.filters }));
+    },
+    [live, prefs, preload],
+  );
   // A board's prefs follow the person signed in to their other devices. The demo's stay in this browser
   const prefsKey = live ? `prefs-${live.board.id}` : PREFS_KEY;
   const setPrefs = useCallback((patch: Partial<Prefs>) => rawDispatch({ type: "prefs", patch }), []);
@@ -327,18 +370,32 @@ export function BoardApp({
   useLayoutEffect(() => {
     stateNow.current = state;
   });
+  // A task the board hasn't read, like a done one while done is hidden, is read first, and opens once it's in
+  const prefixNow = live?.board.prefix;
   useEffect(() => {
     if (!full || !restored) return;
-    const fromLink = () => {
-      const id = decodeURIComponent(location.hash.slice(1));
-      if (!id || !stateNow.current.tasks[id]) return;
+    let current = true;
+    const open = (id: string) => {
       setOpenId(id);
       history.replaceState(history.state, "", location.pathname + location.search);
     };
+    const fromLink = () => {
+      const id = decodeURIComponent(location.hash.slice(1));
+      if (!id) return;
+      if (stateNow.current.tasks[id]) return open(id);
+      const n = Number(id.slice(id.lastIndexOf("-") + 1));
+      if (!prefixNow || id !== `${prefixNow}-${n}` || !stateNow.current.gaps) return;
+      void loadTasks([n]).then(() => {
+        if (current && stateNow.current.tasks[id] && decodeURIComponent(location.hash.slice(1)) === id) open(id);
+      });
+    };
     fromLink();
     window.addEventListener("hashchange", fromLink);
-    return () => window.removeEventListener("hashchange", fromLink);
-  }, [full, restored]);
+    return () => {
+      current = false;
+      window.removeEventListener("hashchange", fromLink);
+    };
+  }, [full, restored, prefixNow, loadTasks]);
 
   // The dialog mounts the first time a task opens and then stays, so it can animate closed
   const [dialogUsed, setDialogUsed] = useState(false);
@@ -418,9 +475,17 @@ export function BoardApp({
       t.id.toLowerCase().includes(q) ||
       (t.project ?? "").toLowerCase().includes(q);
   }, [searching]);
-  const visible = useMemo(() => (t: Task) => found(t) && matches(t, filters), [found, filters]);
+  // A shelf still being read shows only as far as it's come in board order, so nothing shows out of place
+  const gaps = state.gaps;
+  const visible = useMemo(
+    () => (t: Task) => found(t) && matches(t, filters) && shows(gaps, t),
+    [found, filters, gaps],
+  );
   // Archived work stays on the public roadmap, so its preview shows it too
-  const onRoadmap = useMemo(() => (t: Task) => found(t) && matches(t, { ...filters, archived: true }), [found, filters]);
+  const onRoadmap = useMemo(
+    () => (t: Task) => found(t) && matches(t, { ...filters, archived: true }) && shows(gaps, t),
+    [found, filters, gaps],
+  );
 
   // The task dialog steps through what the view shows, in board order
   const dialogOrder = useMemo(
@@ -435,6 +500,24 @@ export function BoardApp({
 
   const filterCount = Object.keys(tidyFilters(filters)).length;
   const filtered = Boolean(searching.trim()) || filterCount > 0;
+  // Hiding done work or showing the archive keeps every count whole. Search and the other filters don't
+  const narrowed = Boolean(searching.trim()) || filterFields.some((f) => filters[f]?.length);
+  const { hideDone, status: onlyStatus } = filters;
+  const shelfInfo = useMemo<ShelfInfo | undefined>(
+    () =>
+      live
+        ? {
+            counts,
+            loading,
+            narrowed,
+            preload,
+            allows: (s) =>
+              s === "archived" ||
+              (!(hideDone && closed(s)) && (!onlyStatus?.length || onlyStatus.includes(s))),
+          }
+        : undefined,
+    [live, counts, loading, narrowed, preload, hideDone, onlyStatus],
+  );
   const setFilter = (field: FilterField, values: string[]) => setPrefs({ filters: { ...filters, [field]: values } });
   const clearFilters = useCallback(() => {
     setQuery("");
@@ -495,6 +578,7 @@ export function BoardApp({
       full={full}
       live={live}
       state={state}
+      counts={counts}
       prefs={prefs}
       setPrefs={setPrefs}
       onOpenTask={(id) => {
@@ -636,6 +720,8 @@ export function BoardApp({
                   role="tab"
                   aria-selected={prefs.view === v.id}
                   aria-label={v.label}
+                  onPointerEnter={() => preloadView({ view: v.id })}
+                  onFocus={() => preloadView({ view: v.id })}
                   onClick={() => setPrefs({ view: v.id })}
                   className={cn(
                     "group/tab -mb-px flex h-full items-center gap-1.5 border-b-2 px-2.5 text-sm outline-none focus-visible:bg-sunken",
@@ -680,6 +766,8 @@ export function BoardApp({
               </label>
               <FilterMenu
                 state={state}
+                counts={live ? counts : undefined}
+                preload={(patch) => preloadView({ filters: { ...filters, ...patch } })}
                 filters={filters}
                 setFilter={setFilter}
                 setFilters={(patch) => setPrefs({ filters: { ...filters, ...patch } })}
@@ -743,6 +831,8 @@ export function BoardApp({
                   <span className="ml-1.5">Done hidden</span>
                   <button
                     aria-label="Show done tasks"
+                    onPointerEnter={() => preloadView({ filters: { ...filters, hideDone: false } })}
+                    onFocus={() => preloadView({ filters: { ...filters, hideDone: false } })}
                     onClick={() => setPrefs({ filters: { ...filters, hideDone: false } })}
                     className={chipClose}
                   >
@@ -835,6 +925,7 @@ export function BoardApp({
                 filtered={filtered}
                 onClearFilters={clearFilters}
                 metaVersion={metaVersion}
+                shelves={shelfInfo}
               />
             ) : prefs.view === "board" ? (
               <BoardView
@@ -845,6 +936,7 @@ export function BoardApp({
                 prefs={prefs}
                 setPrefs={setPrefs}
                 metaVersion={metaVersion}
+                shelves={shelfInfo}
               />
             ) : prefs.view === "roadmap" ? (
               <TimelineView
@@ -857,6 +949,7 @@ export function BoardApp({
                 filtered={filtered}
                 onClearFilters={clearFilters}
                 metaVersion={metaVersion}
+                shelves={shelfInfo}
               />
             ) : (
               <PublicRoadmap
@@ -919,6 +1012,10 @@ function Presence({ visitors }: { visitors?: Visitor[] }) {
 
 type FilterMenuProps = {
   state: BoardState;
+  // How many tasks each shelf has, counting those still on the server, for a live board
+  counts?: Record<Shelf, ShelfCount>;
+  // Reads ahead what a change to the filters would show
+  preload: (patch: Filters) => void;
   filters: Filters;
   setFilter: (field: FilterField, values: string[]) => void;
   setFilters: (patch: Filters) => void;
@@ -951,6 +1048,8 @@ function FilterMenu(props: FilterMenuProps) {
 
 function FilterMenuItems({
   state,
+  counts,
+  preload,
   filters,
   setFilter,
   setFilters,
@@ -963,8 +1062,13 @@ function FilterMenuItems({
 }: FilterMenuProps) {
   const everything = Object.values(state.tasks);
   const all = filters.archived ? everything : everything.filter((t) => !t.archived);
-  const archived = everything.length - everything.filter((t) => !t.archived).length;
-  const finished = all.filter((t) => closed(t.status)).length;
+  // Done and archived work still on the server counts too. The rest of the menu counts what the board holds
+  const whole = (s: Shelf) => (counts ? (totalOf(counts[s]) ?? counts[s].held) : undefined);
+  const archived = whole("archived") ?? everything.length - everything.filter((t) => !t.archived).length;
+  const finished =
+    counts && !filters.archived
+      ? whole("done")! + whole("canceled")!
+      : all.filter((t) => closed(t.status)).length;
   // How many tasks hold each value of each field, in one pass
   const tally = new Map<string, number>();
   for (const t of all)
@@ -976,6 +1080,8 @@ function FilterMenuItems({
         checked={Boolean(filters.hideDone)}
         onCheckedChange={(on) => setFilters({ hideDone: on })}
         onSelect={(e) => e.preventDefault()}
+        onPointerEnter={() => filters.hideDone && preload({ hideDone: false })}
+        onFocus={() => filters.hideDone && preload({ hideDone: false })}
       >
         <Icon name="eye-off" /> Hide done
         <span className="ml-auto pl-2 font-mono text-[11px] text-ink-3">{finished}</span>
@@ -984,6 +1090,8 @@ function FilterMenuItems({
         checked={Boolean(filters.archived)}
         onCheckedChange={(on) => setFilters({ archived: on })}
         onSelect={(e) => e.preventDefault()}
+        onPointerEnter={() => !filters.archived && preload({ archived: true })}
+        onFocus={() => !filters.archived && preload({ archived: true })}
       >
         <Icon name="archive" /> Show archived
         <span className="ml-auto pl-2 font-mono text-[11px] text-ink-3">{archived}</span>
@@ -1042,6 +1150,7 @@ function Sidebar({
   full,
   live,
   state,
+  counts,
   prefs,
   setPrefs,
   onOpenTask,
@@ -1052,6 +1161,7 @@ function Sidebar({
   full: boolean;
   live?: LiveBoard;
   state: BoardState;
+  counts: Record<Shelf, ShelfCount>;
   prefs: Prefs;
   setPrefs: (patch: Partial<Prefs>) => void;
   onOpenTask: (id: string) => void;
@@ -1059,10 +1169,12 @@ function Sidebar({
   keep: () => void;
   onReset: () => void;
 }) {
-  // Archived tasks are put away, so they count for neither the board nor its progress
+  // Archived tasks are put away, so they count for neither the board nor its progress. Tasks still on the server
+  // count, as far as they're known
   const current = Object.values(state.tasks).filter((t) => !t.archived);
-  const total = current.length;
-  const progress = boardProgress(current, Boolean(prefs.filters.hideDone));
+  const byStatus = (s: StatusCategory) => totalOf(counts[s]) ?? counts[s].held;
+  const total = statusShelves.reduce((n, s) => n + byStatus(s), 0);
+  const progress = boardProgress(byStatus, Boolean(prefs.filters.hideDone));
   const mine = current.filter((t) => t.assignee === me.id && !closed(t.status)).length;
   // On a real workspace My tasks is its own page. The demo has one board, so there it filters
   const onlyMine = !live && prefs.filters.assignee?.length === 1 && prefs.filters.assignee[0] === me.id;
@@ -1371,7 +1483,7 @@ function Shortcuts({ open, onOpenChange }: { open: boolean; onOpenChange: (o: bo
 // The sidebar's progress. Normally how much of the planned work is done. With done work hidden, how much of what's
 // left is underway, in review then in progress, in the colours their columns use. Canceled work isn't left to do,
 // so it counts for neither
-function boardProgress(tasks: Task[], hideDone: boolean) {
+function boardProgress(count: (s: StatusCategory) => number, hideDone: boolean) {
   const cells = (parts: [number, string][], of: number) => {
     const out: string[] = [];
     let at = 0;
@@ -1385,14 +1497,14 @@ function boardProgress(tasks: Task[], hideDone: boolean) {
   // A board's own name for a status is kept as written. The usual ones read as part of the sentence
   const word = (s: StatusCategory) =>
     statusTitle[s] === defaultStatusTitle[s] ? statusTitle[s].toLowerCase() : statusTitle[s];
-  const count = (s: StatusCategory) => tasks.filter((t) => t.status === s).length;
+  const all = statusShelves.reduce((n, s) => n + count(s), 0);
 
   if (!hideDone) {
     const done = count("done");
-    const planned = tasks.length - count("canceled");
+    const planned = all - count("canceled");
     return { text: `${done} of ${planned} ${word("done")}`, cells: cells([[done, "bg-malachite"]], planned) };
   }
-  const open = tasks.filter((t) => !closed(t.status)).length;
+  const open = all - count("done") - count("canceled");
   const review = count("review");
   const doing = count("in_progress");
   const underway = review + doing;

@@ -1,4 +1,6 @@
+import { shelfOf, type Gap, type Gaps, type Place, type Shelf } from "./board-shelves";
 import {
+  mergeIds,
   slotIn,
   type Activity,
   type BoardState,
@@ -469,7 +471,13 @@ export function renumber(state: BoardState, from: string, to: string): BoardStat
 export type Held = { comments: string[]; activity: string[] };
 
 export type Change =
-  | { kind: "task"; id: string; remove?: boolean; add?: Task; fields?: Partial<Task> }
+  // fresh: a task just made, rather than one this copy hadn't read
+  | { kind: "task"; id: string; remove?: boolean; add?: Task; fields?: Partial<Task>; fresh?: boolean }
+  // Tasks read from the server that this copy didn't hold: a page of a shelf, read in board order up to through, or
+  // tasks something needed by number. whole: the shelf has nothing more to read
+  | { kind: "held"; tasks: Task[]; shelf?: Shelf; through?: Place; whole?: boolean }
+  // The shelves' counts read again, as how many tasks each still has on the server and where the last of them sits
+  | { kind: "gaps"; gaps: Partial<Record<Shelf, Pick<Gap, "rest" | "tail">>> }
   // fresh: the comment is known to be new since the board was read, so it adds to the count of a partial thread
   | { kind: "comment"; task: string; comment: Comment; fresh?: boolean }
   | { kind: "uncomment"; id: string; task?: string }
@@ -486,7 +494,8 @@ export type Change =
 
 // A removed comment or activity line comes as old. Live, that holds only its id. Catching up reads where it was too
 export type RemoteEvent =
-  | { table: "tasks"; row: TaskRow }
+  // fresh: the row was just inserted, so it's a new task rather than one this copy hadn't read
+  | { table: "tasks"; row: TaskRow; fresh?: boolean }
   | { table: "comments"; row?: CommentRow; old?: { id: string; number?: number }; fresh?: boolean }
   | { table: "activity"; row?: ActivityRow; old?: { id: string; number?: number } }
   | { table: "suggestions"; row?: SuggestionRow; old?: { id: string } }
@@ -509,6 +518,7 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
         return {
           kind: "task",
           id,
+          fresh: ev.fresh,
           add: {
             id,
             ...incoming,
@@ -588,6 +598,8 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
           next: Math.max(state.next, taskNumber(c.id) + 1),
           tasks,
           columns: { ...state.columns, [c.add.status]: slotIn(state.columns[c.add.status] ?? [], tasks, c.id) },
+          // A task this copy hadn't read was one of its shelf's rest. A new one never was
+          gaps: c.fresh ? state.gaps : heldOne(state.gaps, [c.add]),
         };
       }
       if (!prev || !c.fields) return state;
@@ -681,6 +693,51 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
       }
       return tasks === state.tasks ? state : { ...state, tasks };
     }
+    case "held": {
+      // A task already held stays as it is, newer than anything a read that started earlier can bring
+      let tasks = state.tasks;
+      const added: Task[] = [];
+      for (const t of c.tasks) {
+        if (tasks[t.id]) continue;
+        if (tasks === state.tasks) tasks = { ...tasks };
+        tasks[t.id] = t;
+        added.push(t);
+      }
+      let gaps = heldOne(state.gaps, added);
+      const gap = c.shelf ? gaps?.[c.shelf] : undefined;
+      if (c.shelf && gap) {
+        if (c.whole) {
+          gaps = { ...gaps };
+          delete gaps[c.shelf];
+          if (!Object.keys(gaps).length) gaps = undefined;
+        } else if (c.through && (!gap.through || placeAbove(gap.through, c.through))) {
+          // Reading only moves on down the shelf
+          gaps = { ...gaps, [c.shelf]: { ...gap, through: c.through } };
+        }
+      }
+      if (!added.length && gaps === state.gaps) return state;
+      let columns = state.columns;
+      const byStatus = new Map<StatusCategory, string[]>();
+      for (const t of added) byStatus.set(t.status, [...(byStatus.get(t.status) ?? []), t.id]);
+      if (byStatus.size) {
+        columns = { ...columns };
+        for (const [s, ids] of byStatus) columns[s] = mergeIds(columns[s] ?? [], tasks, ids);
+      }
+      const next = added.reduce((n, t) => Math.max(n, taskNumber(t.id) + 1), state.next);
+      return { ...state, next, tasks, columns, gaps };
+    }
+    case "gaps": {
+      // Only reading a shelf to its end shows it's held whole, so a count never closes a gap, however low it reads
+      if (!state.gaps) return state;
+      let gaps = state.gaps;
+      for (const [s, g] of Object.entries(c.gaps) as [Shelf, Pick<Gap, "rest" | "tail">][]) {
+        const now = gaps[s];
+        if (!now || (now.rest === g.rest && now.tail === g.tail)) continue;
+        if (gaps === state.gaps) gaps = { ...gaps };
+        gaps[s] = { ...now, rest: g.rest === undefined ? undefined : Math.max(0, g.rest), tail: g.tail };
+      }
+      return gaps === state.gaps ? state : { ...state, gaps };
+    }
     case "suggestion": {
       const list = state.roadmap.suggestions;
       const i = list.findIndex((s) => s.id === c.suggestion.id);
@@ -705,6 +762,25 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
     }
   }
 }
+
+/** The gaps once some tasks that were on the server are held here, each of them one fewer in its shelf's rest. A
+ * shelf only counts as held whole once it's been read to its end, so a rest that reaches nothing keeps its gap */
+function heldOne(gaps: Gaps | undefined, added: Task[]): Gaps | undefined {
+  if (!gaps || !added.length) return gaps;
+  let out = gaps;
+  for (const t of added) {
+    const s = shelfOf(t);
+    const g = out[s];
+    if (!g?.rest) continue;
+    if (out === gaps) out = { ...gaps };
+    out[s] = { ...g, rest: g.rest - 1 };
+  }
+  return out;
+}
+
+/** Whether one place on a shelf is above another */
+export const placeAbove = (a: Place, b: Place) =>
+  a.position < b.position || (a.position === b.position && a.number < b.number);
 
 /** The partial tasks a change from the server leaves unsure of their comment count or latest activity line, to be
  * read again. "all" when it can't tell which. after is what applying the change to before made */
