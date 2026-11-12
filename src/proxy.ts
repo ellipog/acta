@@ -1,3 +1,4 @@
+import { requestOrigin } from "@/lib/origin";
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { authReady, supabaseKey, supabaseUrl } from "@/lib/supabase/env";
@@ -44,7 +45,7 @@ export async function proxy(request: NextRequest) {
     return response;
   }
   if (request.nextUrl.pathname === "/home" && data?.claims && last && /^[a-z0-9-]+\/[a-z0-9-]+$/.test(last)) {
-    const redirect = NextResponse.redirect(new URL(`/${last}`, request.url));
+    const redirect = NextResponse.redirect(new URL(`/${last}`, requestOrigin(request)));
     response.cookies.getAll().forEach((c) => redirect.cookies.set(c));
     return redirect;
   }

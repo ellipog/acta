@@ -1,4 +1,5 @@
 import "server-only";
+import { requestOrigin } from "@/lib/origin";
 import { createHash, randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { PublicPage } from "./board-store";
@@ -177,7 +178,7 @@ const routes: Record<string, Partial<Record<"GET" | "POST", Route>>> = {
           {
             workspace: { name: data.workspace.name, slug: data.workspace.slug, image: data.workspace.image ?? null },
             board: { name: data.board.name, slug: data.board.slug, prefix: data.board.prefix },
-            url: new URL(publicHref(data.workspace.slug, data.board.slug), request.url).href,
+            url: new URL(publicHref(data.workspace.slug, data.board.slug), requestOrigin(request)).href,
             page: {
               title: page.title,
               tagline: page.tagline,

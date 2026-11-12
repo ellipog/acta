@@ -1,3 +1,4 @@
+import { requestOrigin } from "@/lib/origin";
 import { isPrivate, type PublicResult } from "@/lib/public-roadmap";
 import { ideaJson, roadmapPage, shownTasks, taskJson } from "@/lib/roadmap-json";
 import { liveRoadmap } from "@/lib/seo";
@@ -27,7 +28,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ work
     {
       workspace: { name: roadmap.workspace.name, slug: roadmap.workspace.slug, image: roadmap.workspace.image ?? null },
       board: { name: roadmap.board.name, slug: roadmap.board.slug, prefix: roadmap.board.prefix },
-      url: new URL(publicHref(workspace, board), request.url).href,
+      url: new URL(publicHref(workspace, board), requestOrigin(request)).href,
       page: {
         title: page.title,
         tagline: page.tagline,

@@ -1,13 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { EmailOtpType } from "@supabase/supabase-js";
 import { safeNext } from "@/lib/supabase/env";
+import { requestOrigin } from "@/lib/origin";
 import { createClient } from "@/lib/supabase/server";
 
 export async function GET(request: NextRequest) {
   const url = request.nextUrl;
+  const origin = requestOrigin(request);
   const next = safeNext(url.searchParams.get("next"));
   const fail = (reason: "link" | "provider" | "incomplete") =>
-    NextResponse.redirect(new URL(`/login?error=${reason}&next=${encodeURIComponent(next)}`, url.origin));
+    NextResponse.redirect(new URL(`/login?error=${reason}&next=${encodeURIComponent(next)}`, origin));
 
   if (url.searchParams.get("error")) return fail("provider");
 
@@ -26,5 +28,5 @@ export async function GET(request: NextRequest) {
     return fail("incomplete");
   }
 
-  return NextResponse.redirect(new URL(next, url.origin));
+  return NextResponse.redirect(new URL(next, origin));
 }

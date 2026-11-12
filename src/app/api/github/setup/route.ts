@@ -2,13 +2,14 @@ import { NextResponse, type NextRequest } from "next/server";
 import { asApp, githubReady, installationsFor, webhookSecret } from "@/lib/github/app";
 import { readState } from "@/lib/github/signature";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { requestOrigin } from "@/lib/origin";
 import { getAuth } from "@/lib/workspace";
 
 // Where GitHub sends people back after installing the app. The installation is only tied to the workspace when the
 // state is the one Acta signed for this person, and GitHub confirms they can manage that installation
 export async function GET(request: NextRequest) {
   const q = request.nextUrl.searchParams;
-  const home = new URL("/home", request.nextUrl.origin);
+  const home = new URL("/home", requestOrigin(request));
   if (!githubReady) return NextResponse.redirect(home);
   const state = readState(webhookSecret, q.get("state"));
   const auth = await getAuth();
@@ -18,7 +19,7 @@ export async function GET(request: NextRequest) {
   const { data: ws } = await db.from("workspaces").select("slug").eq("id", state.workspace).maybeSingle();
   if (!ws) return NextResponse.redirect(home);
   const settings = (result: string) =>
-    NextResponse.redirect(new URL(`/${ws.slug}/settings?github=${result}#github`, request.nextUrl.origin));
+    NextResponse.redirect(new URL(`/${ws.slug}/settings?github=${result}#github`, requestOrigin(request)));
 
   const installation = Number(q.get("installation_id"));
   const code = q.get("code");
