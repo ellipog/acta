@@ -176,11 +176,13 @@ what's shipped on Acta's own board, with an RSS feed.
 
 ## Deploying
 
-Acta runs on Vercel at `acta.aaenz.no` (`siteHost` in `src/lib/slugs.ts`). `vercel.json` keeps its functions in
-Frankfurt, next to the Supabase project.
+Acta is self-hosted at `acta.aaenz.no` (`siteHost` in `src/lib/slugs.ts`): `next start` on Elliot's VPS, behind a
+Cloudflare Tunnel. The VPS checks main every minute, builds a new commit beside the running one and switches to it only
+once it answers, so a deploy has no downtime and a failed build leaves the live site as it was. Redirects and links are
+built from the request's `Host` header (`src/lib/origin.ts`), so the app doesn't need to know the address it listens on.
 
-1. Import the repo in Vercel and add the environment variables above.
-2. Add the domain to the Vercel project and create the DNS record it asks for. On Cloudflare, leave it unproxied.
+1. Put the environment variables above in `.env.production.local`, then `bun install` and `bun run build`.
+2. Run `next start` behind a proxy that passes the visitor's `Host` and `X-Forwarded-Proto`.
 3. Set up the Supabase URLs and SMTP as described above.
 
 ## Scripts
