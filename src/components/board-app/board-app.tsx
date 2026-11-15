@@ -47,7 +47,7 @@ import {
 } from "@/lib/board-shelves";
 import type { ShelfInfo } from "./shelf-info";
 import { settleEdits, useBoardEdits, withEdits } from "@/lib/board-edits";
-import { can, metaFor, type LiveBoard, type Permission } from "@/lib/live";
+import { can, isManager, metaFor, type LiveBoard, type Permission } from "@/lib/live";
 import { authReady } from "@/lib/supabase/env";
 import { AccountButton } from "@/components/account-button";
 import { Avatar, AvatarStack, Spinner } from "@/components/ui/display";
@@ -186,7 +186,7 @@ export function BoardApp({
     initDemo(live ? live.state : seedBoard(), full ? {} : { view }),
   );
   const { board: state, prefs, restored, synced } = demo;
-  const { status, here, knownAt, loadThread, want, preload, loadTasks, loadPublic, loading } = useBoardSync(
+  const { status, here, knownAt, loadThread, want, preload, loadTasks, loadPublic, loading, editComment, deleteComment } = useBoardSync(
     live,
     state,
     rawDispatch,
@@ -458,6 +458,13 @@ export function BoardApp({
   }, [lastPath]);
 
   const canEdit = allowed("edit");
+  const canComment = allowed("comment");
+  // What the task dialog lets you do with comments already written. Owners and admins can take back anyone's, and
+  // the demo is anyone's
+  const commentRights = useMemo(
+    () => ({ canWrite: canComment, canRemoveAny: !role || isManager(role), edit: editComment, remove: deleteComment }),
+    [canComment, role, editComment, deleteComment],
+  );
   const createTask = useCallback(() => {
     if (!canEdit)
       return void toast({ icon: "lock", title: refusal.edit, description: "A workspace admin can change that." });
@@ -1024,6 +1031,7 @@ export function BoardApp({
             order={dialogOrder}
             onOpen={setOpenId}
             canEdit={canEdit}
+            comments={commentRights}
           />
         ) : null}
         {full ? <Shortcuts open={help} onOpenChange={setHelp} /> : null}

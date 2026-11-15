@@ -728,7 +728,18 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       const after = new Date(since - MARGIN).toISOString();
       const [tasks, comments, activity, suggestions, row, removed, declined] = await Promise.all([
         supabase.from("tasks").select("*").eq("board_id", boardId).gt("updated_at", after),
-        supabase.from("comments").select("*").eq("board_id", boardId).gt("created_at", after).order("created_at"),
+        // Edited ones too. Until the comment edits migration runs there's no edit time, and only new ones are read
+        supabase
+          .from("comments")
+          .select("*")
+          .eq("board_id", boardId)
+          .or(`created_at.gt."${after}",edited_at.gt."${after}"`)
+          .order("created_at")
+          .then((r) =>
+            r.error
+              ? supabase.from("comments").select("*").eq("board_id", boardId).gt("created_at", after).order("created_at")
+              : r,
+          ),
         supabase.from("activity").select("*").eq("board_id", boardId).gt("created_at", after).order("created_at"),
         supabase.from("suggestions").select("*").eq("board_id", boardId).gt("created_at", after),
         supabase.from("boards").select("id, roadmap_public, page, next_number").eq("id", boardId).maybeSingle(),
@@ -1031,5 +1042,70 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     };
   }, [boardId]);
 
-  return { status, here, knownAt, loadThread, want, preload, loadTasks, loadPublic, loading };
+  // A comment that's already been written is changed or taken back straight in the database, not through a save,
+  // which only ever sends or takes back comments this tab wrote (see diffBoards). Once the database has it, it's
+  // applied as a change from someone else would be: to what's saved, what's on screen and every step of undo at once.
+  // A demo board has no database, so it's applied there and then. Each says whether it worked
+  const changeComment = useCallback(
+    async (task: string, id: string, body: string | null) => {
+      if (!boardId) {
+        const comment = latest.current.tasks[task]?.thread?.find((c) => c.id === id);
+        if (!comment) return false;
+        const change: BoardChange =
+          body === null
+            ? { kind: "uncomment", task, id }
+            : { kind: "comment", task, comment: { ...comment, body, edited: Date.now() } };
+        dispatch({ type: "rebase", current: (b) => apply(b, change), history: replay(change) });
+        return true;
+      }
+      // One written here a moment ago may not be saved yet, so that goes first
+      for (let tries = 0; ; tries++) {
+        if (!inflight.current && base.current?.tasks[task]?.thread?.some((c) => c.id === id)) break;
+        if (tries === 10) return false;
+        if (inflight.current) await pause(300);
+        else {
+          if (timer.current) clearTimeout(timer.current);
+          timer.current = null;
+          await handlers.current.flush();
+        }
+      }
+      const supabase = await loadClient();
+      if (body === null) {
+        const { error, count } = await supabase.from("comments").delete({ count: "exact" }).eq("id", id);
+        if (error || !count) return false;
+        handlers.current.receive({ table: "comments", old: { id, number: taskNumber(task) } });
+        handlers.current.settle();
+        // Its deletion coming back over the live feed is no news
+        dropped.current.add(id);
+      } else {
+        const { data, error } = await supabase.from("comments").update({ body }).eq("id", id).select("*").maybeSingle();
+        if (error || !data) return false;
+        handlers.current.receive({ table: "comments", row: data as CommentRow });
+        handlers.current.settle();
+      }
+      // On a task that syncs with a GitHub issue, the change goes to the issue's comment too
+      pingGitHub(boardId);
+      return true;
+    },
+    [boardId, dispatch],
+  );
+  const editComment = useCallback(
+    (task: string, id: string, body: string) => changeComment(task, id, body),
+    [changeComment],
+  );
+  const deleteComment = useCallback((task: string, id: string) => changeComment(task, id, null), [changeComment]);
+
+  return {
+    status,
+    here,
+    knownAt,
+    loadThread,
+    want,
+    preload,
+    loadTasks,
+    loadPublic,
+    loading,
+    editComment,
+    deleteComment,
+  };
 }

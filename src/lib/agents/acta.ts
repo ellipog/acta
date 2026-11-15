@@ -986,6 +986,7 @@ export function actaFor(agent: Agent) {
               added_by: c.author_name ? who(c.author) : undefined,
               via: c.via,
               at: c.created_at,
+              edited: c.edited_at ?? undefined,
               body: c.body,
               yours: c.agent_key === agent.keyId || undefined,
             }),

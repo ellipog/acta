@@ -54,6 +54,8 @@ export type CommentRow = {
   created_at: string;
   via?: string | null;
   author_name?: string | null;
+  // Missing until the comment edits migration runs
+  edited_at?: string | null;
 };
 export type ActivityRow = {
   id: string;
@@ -189,6 +191,8 @@ export const commentFrom = (row: Omit<CommentRow, "board_id" | "number">, nameOf
   body: row.body,
   via: row.via ?? undefined,
   from: row.author_name ?? undefined,
+  by: row.author ?? undefined,
+  edited: row.edited_at ? Date.parse(row.edited_at) : undefined,
 });
 
 export const activityFrom = (row: Omit<ActivityRow, "board_id" | "number">, nameOf: NameOf): Activity => ({
@@ -683,8 +687,8 @@ export function apply(state: BoardState, c: Change, pending?: BoardState): Board
       const known = (t.thread ?? []).find((x) => x.id === c.comment.id);
       if (known) {
         // An edited comment
-        if (known.body === c.comment.body) return state;
-        const thread = t.thread!.map((x) => (x === known ? { ...x, body: c.comment.body } : x));
+        if (known.body === c.comment.body && known.edited === c.comment.edited) return state;
+        const thread = t.thread!.map((x) => (x === known ? { ...x, body: c.comment.body, edited: c.comment.edited } : x));
         return { ...state, tasks: { ...state.tasks, [c.task]: { ...t, thread } } };
       }
       const thread = [...(t.thread ?? []), c.comment].sort((a, b) => a.at - b.at);

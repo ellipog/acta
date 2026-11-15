@@ -12,8 +12,18 @@ export type Person = { id: string; name: string; tone: Tone; avatar?: string | n
 export type Activity = { id?: string; at: number; who: string; text: string; via?: string; local?: true };
 export type Subtask = { id: string; title: string; done: boolean };
 // from names the original author of a comment an agent brought in from elsewhere, like a GitHub issue. local is
-// as for activity
-export type Comment = { id: string; who: string; at: number; body: string; via?: string; from?: string; local?: true };
+// as for activity. by is the id of the person it's credited to, and edited is when what it says last changed
+export type Comment = {
+  id: string;
+  who: string;
+  at: number;
+  body: string;
+  via?: string;
+  from?: string;
+  by?: string;
+  edited?: number;
+  local?: true;
+};
 
 export type Task = {
   id: string;
@@ -1312,7 +1322,7 @@ function reduce(state: BoardState, action: BoardAction): BoardState {
       const task = state.tasks[action.id];
       const body = action.body.trim().slice(0, limits.comment);
       if (!task || !body) return state;
-      const comment: Comment = { id: newId(), who: me.name, at: Date.now(), body, local: true };
+      const comment: Comment = { id: newId(), who: me.name, by: me.id, at: Date.now(), body, local: true };
       const next = log(
         { ...task, comments: task.comments + 1, thread: [...(task.thread ?? []), comment] },
         "commented",
