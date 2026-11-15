@@ -55,14 +55,25 @@ export const asApp = <T>(path: string, init?: RequestInit) => call<T>(path, `Bea
 
 const tokens = new Map<number, { token: string; until: number }>();
 
+// A token being made, shared by every call that needs one meanwhile rather than each making its own
+const making = new Map<number, Promise<string>>();
+
 async function installationToken(installation: number) {
   const cached = tokens.get(installation);
   if (cached && cached.until > Date.now() + 60_000) return cached.token;
-  const made = await asApp<{ token: string; expires_at: string }>(`/app/installations/${installation}/access_tokens`, {
-    method: "POST",
-  });
-  tokens.set(installation, { token: made.token, until: Date.parse(made.expires_at) });
-  return made.token;
+  let pending = making.get(installation);
+  if (!pending) {
+    pending = asApp<{ token: string; expires_at: string }>(`/app/installations/${installation}/access_tokens`, {
+      method: "POST",
+    })
+      .then((made) => {
+        tokens.set(installation, { token: made.token, until: Date.parse(made.expires_at) });
+        return made.token;
+      })
+      .finally(() => making.delete(installation));
+    making.set(installation, pending);
+  }
+  return pending;
 }
 
 /** A call as one installation, for its repositories */

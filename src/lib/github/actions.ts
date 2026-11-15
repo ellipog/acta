@@ -4,7 +4,7 @@ import { refresh } from "next/cache";
 import { after } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAuth } from "@/lib/workspace";
-import { asApp, githubAll, githubReady } from "./app";
+import { asApp, github, githubAll, githubReady } from "./app";
 import { repoSettings, type RepoSettings } from "./match";
 import { flushOutbox, importIssues, linkByHand, LinkProblem, openIssueByHand, unlinkByHand, type ByHand } from "./sync";
 
@@ -33,23 +33,38 @@ async function installations(db: ReturnType<typeof createAdminClient>, workspace
 export async function availableRepos(workspace: string): Promise<AvailableRepo[]> {
   const db = await managing(workspace);
   if (!db) return [];
-  const out: AvailableRepo[] = [];
-  for (const installation of await installations(db, workspace)) {
-    const repos = await githubAll<{ id: number; full_name: string; private: boolean }>(
-      installation,
-      "/installation/repositories",
-      500,
-      (page) => (page as { repositories: { id: number; full_name: string; private: boolean }[] }).repositories,
-    ).catch(() => []);
-    out.push(...repos.map((r) => ({ id: r.id, installation, fullName: r.full_name, private: r.private })));
-  }
-  return out.sort((a, b) => a.fullName.localeCompare(b.fullName));
+  // Each installation's list is read at the same time as the others'
+  const lists = await Promise.all(
+    (await installations(db, workspace)).map(async (installation) => {
+      const repos = await githubAll<{ id: number; full_name: string; private: boolean }>(
+        installation,
+        "/installation/repositories",
+        500,
+        (page) => (page as { repositories: { id: number; full_name: string; private: boolean }[] }).repositories,
+      ).catch(() => []);
+      return repos.map((r) => ({ id: r.id, installation, fullName: r.full_name, private: r.private }));
+    }),
+  );
+  return lists.flat().sort((a, b) => a.fullName.localeCompare(b.fullName));
+}
+
+/** The repository, if one of the workspace's installations can reach it. Each is asked for it by its id, all at
+ * once, rather than every repository of every installation being listed to find it */
+async function reachableRepo(db: ReturnType<typeof createAdminClient>, workspace: string, repo: number) {
+  const found = await Promise.all(
+    (await installations(db, workspace)).map((installation) =>
+      github<{ id: number; full_name: string; private: boolean }>(installation, `/repositories/${repo}`)
+        .then((r): AvailableRepo => ({ id: r.id, installation, fullName: r.full_name, private: r.private }))
+        .catch(() => null),
+    ),
+  );
+  return found.find((r) => r?.id === repo) ?? null;
 }
 
 export async function linkRepo(workspace: string, repo: number, board: string): Promise<Result> {
   const db = await managing(workspace);
   if (!db) return { ok: false, message: "Only owners and admins can link repositories." };
-  const found = (await availableRepos(workspace)).find((r) => r.id === repo);
+  const found = await reachableRepo(db, workspace, repo);
   if (!found) return { ok: false, message: "The GitHub app can’t reach that repository." };
   const { data: b } = await db.from("boards").select("id").eq("id", board).eq("workspace_id", workspace).maybeSingle();
   if (!b) return { ok: false, message: "That board isn’t in this workspace." };

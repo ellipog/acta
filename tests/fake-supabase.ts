@@ -17,6 +17,9 @@ const relations: Record<string, Record<string, Relation>> = {
   boards: {
     workspaces: { table: "workspaces", local: ["workspace_id"], foreign: ["id"] },
   },
+  github_repos: {
+    boards: { table: "boards", local: ["board_id"], foreign: ["id"] },
+  },
   activity: {
     tasks: { table: "tasks", local: ["board_id", "number"], foreign: ["board_id", "number"] },
   },
@@ -138,6 +141,16 @@ export class FakeSupabase {
       if (c.agent_key !== key.id) return { data: null, error: { code: "42501", message: "A key can only edit comments it wrote" } };
       c.body = args.p_body;
       return { data: null, error: null };
+    }
+    // The GitHub app's: who a linked GitHub account is, and its saves, which go to the repository's board
+    if (name === "github_member") {
+      const m = this.rows("github_accounts").find((a) => a.workspace_id === args.p_workspace && a.github_id === args.p_github_id);
+      return { data: (m?.user_id as string | undefined) ?? null, error: null };
+    }
+    if (name === "github_apply") {
+      const repo = this.rows("github_repos").find((r) => r.id === args.p_repo);
+      if (!repo) return { data: null, error: { code: "P0002", message: "No such repository" } };
+      return this.call("agent_apply", { p_board: repo.board_id, p_changes: args.p_changes });
     }
     if (name !== "agent_apply" || (this.behind && "p_live" in args)) return missing;
     const changes = args.p_changes as Record<string, unknown>;
@@ -276,7 +289,8 @@ class Query {
   private orders: Order[] = [];
   private nestedOrders: Record<string, Order[]> = {};
   private max: number | undefined;
-  private mode: "select" | "update" | "delete" = "select";
+  private mode: "select" | "update" | "delete" | "upsert" = "select";
+  private upserted: { rows: Row[]; keys: string[]; keep: boolean } = { rows: [], keys: [], keep: false };
   private columns = "*";
   private counted = false;
   private head = false;
@@ -304,6 +318,14 @@ class Query {
   delete() {
     this.mode = "delete";
     return this;
+  }
+  upsert(rows: Row | Row[], options?: { onConflict?: string; ignoreDuplicates?: boolean }) {
+    this.mode = "upsert";
+    this.upserted = { rows: [rows].flat(), keys: (options?.onConflict ?? "id").split(","), keep: Boolean(options?.ignoreDuplicates) };
+    return this;
+  }
+  lt(column: string, value: string | number) {
+    return this.where(column, (v) => v !== null && v !== undefined && (v as string | number) < value);
   }
   private where(column: string, test: (value: unknown) => boolean) {
     const [embed, inner] = column.split(".");
@@ -336,8 +358,36 @@ class Query {
   overlaps(column: string, values: unknown[]) {
     return this.where(column, (v) => values.some((x) => ((v ?? []) as unknown[]).includes(x)));
   }
-  or(): this {
-    throw new Error("The fake can’t do or filters");
+  // Only the forms the GitHub filter writes: and(…), col.eq.x, col.in.(…) and col.not.in.(…)
+  or(filter: string): this {
+    const parts = (text: string) => {
+      const out: string[] = [];
+      let depth = 0;
+      let start = 0;
+      for (const [i, c] of [...text].entries()) {
+        if (c === "(") depth++;
+        else if (c === ")") depth--;
+        else if (c === "," && !depth) {
+          out.push(text.slice(start, i));
+          start = i + 1;
+        }
+      }
+      return [...out, text.slice(start)];
+    };
+    const term = (text: string): ((r: Row) => boolean) => {
+      if (text.startsWith("and(")) {
+        const all = parts(text.slice(4, -1)).map(term);
+        return (r) => all.every((t) => t(r));
+      }
+      const match = text.match(/^(\w+)\.(eq|in|not\.in)\.(.*)$/);
+      if (!match) throw new Error(`The fake can’t do the or filter ${text}`);
+      const [, column, op, value] = match;
+      const list = op === "eq" ? [value] : value.slice(1, -1).split(",");
+      return (r) => list.includes(String(r[column])) !== (op === "not.in");
+    };
+    const any = parts(filter).map(term);
+    this.filters.push((r) => any.some((t) => t(r)));
+    return this;
   }
   order(column: string, options?: { ascending?: boolean; referencedTable?: string }) {
     const o = { column, ascending: options?.ascending !== false };
@@ -350,6 +400,10 @@ class Query {
     return this;
   }
   maybeSingle() {
+    this.one = true;
+    return this;
+  }
+  single() {
     this.one = true;
     return this;
   }
@@ -371,6 +425,19 @@ class Query {
     if (this.mode === "delete") {
       this.db.tables[this.table] = all.filter((r) => !hits.includes(r));
       return { data: null, error: null };
+    }
+    if (this.mode === "upsert") {
+      // What was written comes back, so ignoring a duplicate answers with nothing for it
+      const { rows, keys, keep } = this.upserted;
+      const written: Row[] = [];
+      for (const row of rows) {
+        const there = all.find((r) => keys.every((k) => r[k] === row[k]));
+        if (there && keep) continue;
+        if (there) Object.assign(there, stored(row));
+        else all.push(stored({ id: crypto.randomUUID(), ...row }));
+        written.push(structuredClone(there ?? all[all.length - 1]));
+      }
+      return { data: written, error: null };
     }
     // An inner embed keeps only the rows it finds something for
     for (const part of parts(this.columns)) {
