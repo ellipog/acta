@@ -20,7 +20,11 @@ const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0
 export default async function Image({ params }: { params: Promise<{ workspace: string; board: string }> }) {
   const { workspace, board } = await params;
   const png = await drawn(workspace, board).catch(async () => bytes(await siteImage()));
-  return new Response(png as BodyInit, { headers: { "content-type": contentType } });
+  // Cloudflare keeps it ten minutes, as it can't be told when the roadmap changes, and a stale one while it fetches
+  // the next, as previews are fetched by sites that cache them for days anyway
+  return new Response(png as BodyInit, {
+    headers: { "content-type": contentType, "cache-control": "public, max-age=600, s-maxage=600, stale-while-revalidate=86400" },
+  });
 }
 
 const bytes = async (image: Response) => new Uint8Array(await image.arrayBuffer());
