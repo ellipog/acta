@@ -1,6 +1,6 @@
 import "server-only";
 import * as z from "zod";
-import { Problem } from "./acta";
+import { Content, Problem } from "./acta";
 import { agentFor, type Agent } from "./keys";
 import { actaTool, actaTools, type Tool } from "./server";
 
@@ -96,7 +96,8 @@ export async function call(request: Request, name: string) {
       return problem(400, "Some of the arguments aren’t right.", {
         issues: parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
       });
-    return answer(await tool.work(parsed.data));
+    const out = await tool.work(parsed.data);
+    return answer(out instanceof Content ? out.json : out);
   } catch (error) {
     if (error instanceof Problem) return problem(400, error.message);
     console.error("API call failed", name, error);

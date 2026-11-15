@@ -1,15 +1,89 @@
 "use client";
 
-import { memo, useRef, useState } from "react";
+import { createContext, memo, useContext, useEffect, useRef, useState } from "react";
+import { Dialog as D } from "radix-ui";
+import { formatBytes, maxFileBytes, parseFileUrl, type FileInfo } from "@/lib/file-links";
 import { githubRef, plainLinkText } from "@/lib/github-links";
 import { cn } from "@/lib/utils";
 import { Icon, type IconName } from "./icons";
+import { toast } from "./toast";
 import { Tooltip } from "./tooltip";
 
 const inlinePattern =
-  /(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\)|https?:\/\/[^\s<>()[\]]*[^\s<>()[\].,;:!?'"*]|@[A-Za-z]+)/g;
+  /(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|`[^`]+`|!\[[^\]]*\]\([^)\s]+\)|\[[^\]]+\]\([^)\s]+\)|https?:\/\/[^\s<>()[\]]*[^\s<>()[\].,;:!?'"*]|@[A-Za-z]+)/g;
 
 const linkClass = "text-lapis underline decoration-lapis/40 underline-offset-2 hover:decoration-lapis";
+
+// Where an image may come from: the web over https, or Acta's own files, by their whole address or their path
+const imageSource = (url: string) => (/^https:\/\//.test(url) || /^\/api\/files\//.test(url) || parseFileUrl(url) ? url : null);
+
+/** An image in Markdown. A click shows it full size */
+function MarkdownImage({ src, alt }: { src: string; alt: string }) {
+  const [open, setOpen] = useState(false);
+  const [broken, setBroken] = useState(false);
+  if (broken)
+    return (
+      <a href={src} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-ink-3 hover:text-ink">
+        <Icon name="file" size="sm" />
+        <span className="underline decoration-line-strong underline-offset-2">{alt || "Image"}</span>
+      </a>
+    );
+  return (
+    <D.Root open={open} onOpenChange={setOpen}>
+      <D.Trigger asChild>
+        <button
+          type="button"
+          aria-label={alt ? `View ${alt}` : "View image"}
+          className="my-1 inline-block max-w-full cursor-zoom-in border border-line bg-sunken align-top outline-none hover:border-line-strong focus-visible:border-lapis"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element -- pictures people paste come from anywhere, at any size */}
+          <img
+            src={src}
+            alt={alt}
+            loading="lazy"
+            decoding="async"
+            onError={() => setBroken(true)}
+            className="block max-h-80 w-auto max-w-full object-contain"
+          />
+        </button>
+      </D.Trigger>
+      <D.Portal>
+        <D.Overlay className="fixed inset-0 z-[60] bg-ink/70" />
+        <D.Content
+          aria-describedby={undefined}
+          className="fixed inset-0 z-[60] grid place-items-center p-4 focus:outline-none"
+          onClick={() => setOpen(false)}
+        >
+          <D.Title className="sr-only">{alt || "Image"}</D.Title>
+          {/* eslint-disable-next-line @next/next/no-img-element -- shown at its own size */}
+          <img src={src} alt={alt} className="max-h-[calc(100dvh-5rem)] max-w-full cursor-zoom-out border border-line bg-raised object-contain" />
+          <div className="mt-2 flex items-center gap-3 text-xs text-page">
+            {alt ? <span className="max-w-[60vw] truncate">{alt}</span> : null}
+            <a href={src} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="underline underline-offset-2">
+              Open original
+            </a>
+          </div>
+        </D.Content>
+      </D.Portal>
+    </D.Root>
+  );
+}
+
+// A link to a file on a task shows as a chip with its name
+function FileChip({ href, label }: { href: string; label: React.ReactNode }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={href}
+      className="inline-flex max-w-full items-center gap-1 border border-line bg-sunken px-1 align-[-0.15em] text-[0.9em] leading-[1.35] text-ink no-underline hover:border-lapis hover:text-lapis"
+    >
+      <Icon name="file" size="sm" className="text-ink-3" />
+      <span className="truncate">{label}</span>
+    </a>
+  );
+}
 
 // A GitHub link shows as a chip saying what it points at, like calcite#45
 function GitHubChip({ href, label, title }: { href: string; label: React.ReactNode; title?: string }) {
@@ -38,9 +112,22 @@ function inline(text: string, key: string): React.ReactNode[] {
           {part.slice(1, -1)}
         </code>
       );
+    const image = part.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/);
+    if (image) {
+      const src = imageSource(image[2]);
+      if (src) return <MarkdownImage key={k} src={src} alt={image[1]} />;
+      // Still uploading, or from somewhere it can't be shown
+      return (
+        <span key={k} className="inline-flex items-center gap-1 text-ink-3">
+          <Icon name="file" size="sm" />
+          {image[1] || "Image"}
+        </span>
+      );
+    }
     const link = part.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/);
     if (link) {
       const safe = /^(https?:|mailto:|\/)/.test(link[2]) ? link[2] : "#";
+      if (parseFileUrl(safe)) return <FileChip key={k} href={safe} label={link[1]} />;
       const ref = githubRef(safe);
       if (ref) return <GitHubChip key={k} href={safe} label={plainLinkText(link[1], safe) ? ref.label : link[1]} />;
       // Links within the site open in place
@@ -250,6 +337,12 @@ const tools: { icon: IconName | "b" | "i" | "code"; label: string; wrap: [string
   { icon: "list", label: "List", wrap: ["- ", ""], line: true },
 ];
 
+/** Uploads a file for whatever the editor is writing, such as a task's description or comment */
+export type Uploader = (file: File) => Promise<FileInfo>;
+
+// Given by whatever holds the editors, like a task, so every editor in it can take pasted and dropped files
+export const UploadContext = createContext<Uploader | null>(null);
+
 export function MarkdownEditor({
   value,
   onChange,
@@ -258,6 +351,7 @@ export function MarkdownEditor({
   onSubmit,
   autoFocus,
   className,
+  onUpload,
   "aria-label": ariaLabel,
 }: {
   value: string;
@@ -267,10 +361,60 @@ export function MarkdownEditor({
   onSubmit?: () => void;
   autoFocus?: boolean;
   className?: string;
+  onUpload?: Uploader;
   "aria-label"?: string;
 }) {
   const [tab, setTab] = useState<"write" | "preview">("write");
+  const [dragging, setDragging] = useState(false);
+  const [uploading, setUploading] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const given = useContext(UploadContext);
+  const upload = onUpload ?? given;
+  // The text as it is now, for uploads that finish after more has been typed
+  const latest = useRef(value);
+  useEffect(() => {
+    latest.current = value;
+  }, [value]);
+  const change = (next: string) => {
+    latest.current = next;
+    onChange(next);
+  };
+
+  // Each file goes in at the caret as a placeholder at once, and becomes its Markdown when it's uploaded
+  const addFiles = (files: File[]) => {
+    if (!upload || !files.length) return;
+    const el = ref.current;
+    const at = el ? el.selectionEnd : latest.current.length;
+    const marks: [File, string][] = files.map((f) => [f, `![Uploading ${f.name.replace(/[[\]]/g, "")}…](#upload-${Math.random().toString(36).slice(2, 8)})`]);
+    const before = latest.current.slice(0, at);
+    const gap = before && !before.endsWith("\n") ? "\n" : "";
+    const inserted = gap + marks.map(([, m]) => m).join("\n") + "\n";
+    change(before + inserted + latest.current.slice(at));
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(at + inserted.length, at + inserted.length);
+    });
+    for (const [file, mark] of marks) {
+      const swap = (text: string) => {
+        // Gone when it was deleted, or the text was saved and the editor closed meanwhile
+        if (latest.current.includes(mark)) change(latest.current.replace(mark, text));
+      };
+      if (file.size > maxFileBytes) {
+        swap("");
+        toast({ icon: "file", title: `${file.name} is too large`, description: `Files can be up to ${formatBytes(maxFileBytes)}.` });
+        continue;
+      }
+      setUploading((n) => n + 1);
+      upload(file)
+        .then((f) => swap(f.markdown))
+        .catch((error: unknown) => {
+          swap("");
+          toast({ icon: "file", title: `${file.name} didn’t upload`, description: error instanceof Error ? error.message : undefined });
+        })
+        .finally(() => setUploading((n) => n - 1));
+    }
+  };
 
   const apply = (wrap: [string, string], line?: boolean) => {
     const el = ref.current;
@@ -326,15 +470,59 @@ export function MarkdownEditor({
                 </button>
               </Tooltip>
             ))}
+            {upload ? (
+              <Tooltip content="Attach an image or file">
+                <button
+                  type="button"
+                  aria-label="Attach an image or file"
+                  onClick={() => picker.current?.click()}
+                  className="grid size-7 place-items-center text-ink-3 hover:bg-sunken hover:text-ink"
+                >
+                  <Icon name="upload" size="sm" />
+                </button>
+              </Tooltip>
+            ) : null}
+            {upload ? (
+              <input
+                ref={picker}
+                type="file"
+                multiple
+                hidden
+                onChange={(e) => {
+                  addFiles([...(e.target.files ?? [])]);
+                  e.target.value = "";
+                }}
+              />
+            ) : null}
           </div>
         ) : null}
       </div>
       {tab === "write" ? (
+        <div className="relative">
         <textarea
           ref={ref}
           autoFocus={autoFocus}
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onPaste={(e) => {
+            const files = [...e.clipboardData.files];
+            if (!upload || !files.length) return;
+            e.preventDefault();
+            addFiles(files);
+          }}
+          onDragOver={(e) => {
+            if (!upload || !e.dataTransfer.types.includes("Files")) return;
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => {
+            setDragging(false);
+            const files = [...e.dataTransfer.files];
+            if (!upload || !files.length) return;
+            e.preventDefault();
+            addFiles(files);
+          }}
           onKeyDown={(e) => {
             if (onSubmit && e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
@@ -352,8 +540,17 @@ export function MarkdownEditor({
           rows={rows}
           placeholder={placeholder}
           aria-label={ariaLabel}
-          className="block w-full resize-y bg-transparent px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-ink-3"
+          className={cn(
+            "block w-full resize-y bg-transparent px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-ink-3",
+            dragging && "bg-lapis-soft",
+          )}
         />
+          {upload ? (
+            <p aria-live="polite" className="pointer-events-none border-t border-line px-3 py-1 text-[11px] text-ink-3">
+              {uploading ? `Uploading ${uploading === 1 ? "a file" : `${uploading} files`}…` : "Paste, drop or attach images and files."}
+            </p>
+          ) : null}
+        </div>
       ) : (
         <div className="min-h-[4.5rem] px-3 py-2">
           {value.trim() ? <Markdown source={value} /> : <p className="text-sm text-ink-3">Nothing to preview.</p>}

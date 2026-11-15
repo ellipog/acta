@@ -39,6 +39,12 @@ The [demo board](${siteUrl}/demo) is the real app, saved in your browser. Drag c
 - Open a card for its description, subtasks, comments, dates, labels, project, size and priority.
 - Every change is kept in the task's activity, with who made it and when.
 
+## Screenshots and files
+
+Paste or drop an image into a description or comment, or use the upload button in its toolbar, and it shows in place. Click one to see it full size. Other files, like logs and PDFs, show as a link with their name. Everything uploaded to a task is also listed under **Files** on it, where **Attach** adds more. Files can be up to 25 MB.
+
+Files are private to the workspace's members. A task on a published roadmap shows its description to everyone, so images in it show to visitors too.
+
 ## Three views of the same tasks
 
 - **Board**: columns by status, or grouped by assignee, priority, size or project.
@@ -143,12 +149,27 @@ The server tells agents how to work: check for an existing task before starting,
 
 ## Tools
 
-- **Reading**: \`list_boards\`, \`get_board\`, \`list_tasks\`, \`search_tasks\`, \`get_task\`, \`list_activity\`, \`list_suggestions\`
-- **Writing**: \`create_tasks\`, \`update_task\`, \`update_tasks\`, \`sort_column\`, \`add_comment\`, \`edit_comment\`, \`delete_task\`, \`restore_task\`
+- **Reading**: \`list_boards\`, \`get_board\`, \`list_tasks\`, \`search_tasks\`, \`get_task\`, \`list_activity\`, \`list_suggestions\`, \`read_file\`
+- **Writing**: \`create_tasks\`, \`update_task\`, \`update_tasks\`, \`sort_column\`, \`add_comment\`, \`edit_comment\`, \`upload_file\`, \`delete_task\`, \`restore_task\`
 - **GitHub**: \`link_github\`, \`unlink_github\`, \`open_github_issue\`
 - **Managing**: \`create_board\`, \`update_board\`, \`update_roadmap\`, \`review_suggestion\`
 
 Each tool describes its own arguments, and the [HTTP API](${siteUrl}/docs/api) lists them as JSON Schema.
+
+## Screenshots and files
+
+Agents see images and can add them. \`get_task\` lists a task's files, and \`read_file\` takes the address of any Acta file, from there or from an image in a description or comment, and hands the picture to the agent to look at. Text files come back as text.
+
+\`upload_file\` takes a file's bytes as base64 and returns the Markdown that shows it, like \`![shot.png](${siteUrl}/api/files/…)\`, for the agent to put in a description or comment. Agents are told to attach a screenshot when they report a bug or show a change to a page. Scripts can upload a file from disk without base64:
+
+\`\`\`bash
+curl ${siteUrl}/api/files -H "Authorization: Bearer <key>" \\
+  -F board=aaen-studios/acta -F task=ACT-12 -F file=@screenshot.png
+\`\`\`
+
+The answer has the file's \`url\` and \`markdown\`. Fetching \`url\` with the key downloads it.
+
+Every key sees the new tools and instructions the next time its agent connects, keys made before them too. Agents that are already running pick them up once they reconnect.
 
 ## Bringing work over
 

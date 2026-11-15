@@ -63,6 +63,12 @@ never gets further than its owner. Everything an agent does is marked with the k
 “Elliot via Claude Code”, and a key can only edit the comments it wrote. A key's name, access and workspaces can be
 changed under **Account → Agents** after it's made, and writes follow the change at once.
 
+Agents see and add screenshots. `get_task` lists a task's files, `read_file` hands an agent any Acta image to look
+at (from a task's files or a description or comment), and `upload_file` takes a file as base64 and returns the
+Markdown that shows it. The server's instructions tell agents to look at a task's screenshots before starting on it
+and to attach one when they report a bug. Instructions and tools come from the server on every connection, so keys
+made before this pick it up too.
+
 Agents bringing work over from another tracker can keep its history: when each task was created and shipped,
 and who wrote each comment and when. Work closed as not planned goes to **Canceled**.
 
@@ -83,6 +89,13 @@ curl "https://acta.aaenz.no/api/v1/list_tasks?board=aaen-studios/acta&status=tod
 # Write: POST the arguments as JSON
 curl https://acta.aaenz.no/api/v1/create_tasks -H "Authorization: Bearer <key>" -H "Content-Type: application/json" \
   -d '{"board": "aaen-studios/acta", "tasks": [{"title": "Add CSV export", "labels": ["Feature"]}]}'
+```
+
+Files go to `/api/files` as multipart form data, without base64:
+
+```bash
+curl https://acta.aaenz.no/api/files -H "Authorization: Bearer <key>" \
+  -F board=aaen-studios/acta -F task=ACT-12 -F file=@screenshot.png
 ```
 
 Answers are the tool's result as JSON. A mistake the caller can fix comes back as `400` with an `error` to read, a
@@ -106,7 +119,7 @@ work, and the demo board saves to the browser.
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | The project’s publishable (anon) key |
-| `SUPABASE_SECRET_KEY` | Secret key, server only. Used for avatar uploads, account deletion and agent keys |
+| `SUPABASE_SECRET_KEY` | Secret key, server only. Used for avatar and file uploads, account deletion and agent keys |
 | `NEXT_PUBLIC_AUTH_PROVIDERS` | Comma-separated sign-in methods: `email`, `google`, `github` |
 | `NEXT_PUBLIC_PUBLIC_ORIGIN` | Optional. The origin public roadmaps are served from, e.g. `https://acta.page` |
 | `GITHUB_APP_ID` | Optional, with the five below. The GitHub App's id |
@@ -123,7 +136,8 @@ work, and the demo board saves to the browser.
 
 1. Apply everything in `supabase/migrations` in order (`supabase db push`, or paste each file into the SQL
    editor). They create the tables, row-level security, RPCs, the `avatars` storage bucket and the realtime
-   publication.
+   publication. The private `attachments` bucket for task files is made by the server on the first upload if it
+   isn't there.
 2. Under **Authentication → URL configuration**, set the site URL to your origin and add `<your origin>/**` and
    `http://localhost:*/**` as redirect URLs.
 3. Enable the OAuth providers you list in `NEXT_PUBLIC_AUTH_PROVIDERS`.
