@@ -66,8 +66,9 @@ export function SheetContent({
         aria-describedby={undefined}
         data-side={side}
         className={cn(
-          "sheet fixed inset-y-0 z-50 flex w-[min(20rem,calc(100%-3rem))] flex-col bg-surface focus:outline-none",
-          side === "left" ? "left-0 border-r border-ink" : "right-0 border-l border-ink",
+          // Clear of the notch and the home indicator on a phone
+          "sheet fixed inset-y-0 z-50 flex w-[min(20rem,calc(100%-3rem))] flex-col bg-surface pt-safe pb-safe focus:outline-none",
+          side === "left" ? "left-0 border-r border-ink pl-safe" : "right-0 border-l border-ink pr-safe",
           className,
         )}
         {...props}

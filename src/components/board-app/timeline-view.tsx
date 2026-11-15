@@ -825,7 +825,7 @@ const TimelineRow = memo(function TimelineRow({
   return (
     <div data-task={t.id} data-line="row" className="group/row flex h-10">
       <div className="sticky left-0 z-10 flex w-[var(--left)] shrink-0 items-center gap-2.5 border-r border-b border-line bg-raised pr-2 pl-3 group-hover/row:bg-surface">
-        {lead ? lead(t) : <span className="w-5 shrink-0 font-mono text-[11px] text-ink-3 tabular-nums">{n}</span>}
+        {lead ? lead(t) : <span className="hidden w-5 shrink-0 font-mono text-[11px] text-ink-3 tabular-nums sm:block">{n}</span>}
         <StatusMarker status={t.status} />
         <button
           tabIndex={r ? -1 : 0}
@@ -837,7 +837,7 @@ const TimelineRow = memo(function TimelineRow({
         >
           {t.title}
         </button>
-        {readOnly ? null : <span className="ml-auto shrink-0 font-mono text-[11px] text-ink-3">{t.id}</span>}
+        {readOnly ? null : <span className="ml-auto hidden shrink-0 font-mono text-[11px] text-ink-3 sm:block">{t.id}</span>}
       </div>
       <div
         className="relative flex shrink-0 items-start border-b border-line group-hover/row:bg-ink/[0.025]"

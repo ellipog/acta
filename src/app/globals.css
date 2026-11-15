@@ -526,6 +526,44 @@ section[id] {
   animation: fade-in 200ms steps(4, end);
 }
 
+@keyframes sheet-in-bottom {
+  from { transform: translateY(100%); }
+}
+/* Only a phone's sheets rise from the bottom. Wider, the same dialog sits in the middle of the page */
+@media (max-width: 639.98px) {
+  .sheet[data-state="open"][data-side="bottom"] {
+    animation: sheet-in-bottom 220ms steps(6, end);
+  }
+}
+
+/*
+  Phones. The page runs under the notch and the home indicator (viewport-fit=cover in the root layout), so the
+  parts that touch those edges pad themselves with the safe area. Taps don't flash grey, and text doesn't grow when
+  the phone turns sideways
+*/
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@utility pl-safe {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+@utility pr-safe {
+  padding-right: env(safe-area-inset-right, 0px);
+}
+/* Something pressed and held, like a card for its menu, shouldn't select its text or open the phone's own menu */
+@utility touch-hold {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
 .col-resize {
   cursor: col-resize;
   touch-action: none;

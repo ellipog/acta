@@ -350,7 +350,7 @@ function Row({
       <Link
         href={href}
         className={cn(
-          "min-w-0 flex-1 truncate py-2 text-sm outline-none decoration-lapis/40 underline-offset-2 hover:text-lapis hover:underline focus-visible:underline",
+          "line-clamp-2 min-w-0 flex-1 py-2 text-sm sm:truncate outline-none decoration-lapis/40 underline-offset-2 hover:text-lapis hover:underline focus-visible:underline",
           done && "text-ink-2 line-through decoration-line-strong",
         )}
       >

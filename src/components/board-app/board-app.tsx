@@ -75,7 +75,7 @@ import { ThemeControls } from "@/components/theme-toggle";
 import { Wordmark } from "@/components/wordmark";
 import { MyTasksLink, navItem, WorkspaceMenu } from "@/components/workspace-nav";
 import { toast } from "@/components/ui/toast";
-import { useNow } from "@/lib/hooks";
+import { useNow, usePhone } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import type { DitherName } from "@/lib/dither-assets";
 import { demoReducer, initDemo, type DemoAction } from "./demo-state";
@@ -113,12 +113,15 @@ const viewLoading = (
 );
 const BoardView = lazyPart(() => import("./board-view").then((m) => m.BoardView), viewLoading);
 const TableView = lazyPart(() => import("./table-view").then((m) => m.TableView), viewLoading);
+// A phone shows the table as a list of tasks (see usePhone)
+const ListView = lazyPart(() => import("./list-view").then((m) => m.ListView), viewLoading);
 const TimelineView = lazyPart(() => import("./timeline-view").then((m) => m.TimelineView), viewLoading);
 const PublicRoadmap = lazyPart(() => import("./roadmap-view").then((m) => m.PublicRoadmap), viewLoading);
 const TaskDialog = lazyPart(() => import("./task-dialog").then((m) => m.TaskDialog));
 
 function preloadViews() {
-  for (const part of [BoardView, TableView, TimelineView, PublicRoadmap, TaskDialog]) part.preload().catch(() => {});
+  const table = matchMedia("(max-width: 639.98px)").matches ? ListView : TableView;
+  for (const part of [BoardView, table, TimelineView, PublicRoadmap, TaskDialog]) part.preload().catch(() => {});
 }
 
 const BOARD_KEY = "acta-demo-board-v5";
@@ -319,6 +322,7 @@ export function BoardApp({
   const [query, setQuery] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [navOpen, setNavOpen] = useState(false);
+  const phone = usePhone();
   const [help, setHelp] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -665,7 +669,7 @@ export function BoardApp({
         onFocus={live ? (e) => readAhead(e.target, 200) : undefined}
         className={cn(
           "flex overflow-hidden bg-page text-left text-ink",
-          full ? "h-dvh" : "h-[36rem] border border-line-strong",
+          full ? "h-dvh pr-safe pl-safe" : "h-[36rem] border border-line-strong",
           className,
         )}
       >
@@ -676,7 +680,13 @@ export function BoardApp({
         </aside>
 
         <div className="@container flex min-w-0 flex-1 flex-col">
-          <header className="flex h-12 shrink-0 items-center gap-1.5 border-b border-line bg-surface px-2 sm:px-4">
+          <header
+            className={cn(
+              "flex shrink-0 items-center gap-1.5 border-b border-line bg-surface px-2 sm:px-4",
+              // On a phone's home screen the page starts under the status bar
+              full ? "h-[calc(3rem+env(safe-area-inset-top,0px))] pt-safe" : "h-12",
+            )}
+          >
             {full ? (
               <D.Root open={navOpen} onOpenChange={setNavOpen}>
                 <D.Trigger aria-label="Open navigation" className={cn(iconButton, "md:hidden")}>
@@ -863,7 +873,8 @@ export function BoardApp({
                       </DropdownMenuRadioGroup>
                     </DropdownMenuContent>
                   </DropdownMenu>
-                  {prefs.view === "table" ? (
+                  {/* A phone's list has no columns to show or hide */}
+                  {prefs.view === "table" && !phone ? (
                     <FieldsMenu
                       prefs={prefs}
                       setPrefs={setPrefs}
@@ -971,7 +982,20 @@ export function BoardApp({
           ) : null}
 
           <main className="min-h-0 flex-1">
-            {prefs.view === "table" ? (
+            {prefs.view === "table" && phone ? (
+              <ListView
+                state={state}
+                dispatch={dispatch}
+                visible={visible}
+                onOpen={setOpenId}
+                prefs={prefs}
+                setPrefs={setPrefs}
+                filtered={filtered}
+                onClearFilters={clearFilters}
+                metaVersion={metaVersion}
+                shelves={shelfInfo}
+              />
+            ) : prefs.view === "table" ? (
               <TableView
                 state={state}
                 dispatch={dispatch}

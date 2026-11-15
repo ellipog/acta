@@ -47,6 +47,7 @@ import {
   type StatusCategory,
   type Task,
 } from "@/lib/board-store";
+import { usePhone } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import type { DemoAction } from "./demo-state";
 import { Spinner } from "@/components/ui/display";
@@ -74,6 +75,18 @@ type Columns = BoardState["columns"];
 // The same objects every time: new ones would make dnd-kit hand every card on the board a new context, and draw
 // them all again
 const pointer = { activationConstraint: { distance: 5 } };
+
+// A mouse or a pen carries cards. A finger scrolls: on a phone a card picked up a few pixels into a swipe would
+// take the swipe over, and the columns stop scrolling. Touch holds a card for its menu instead, which moves it
+// (see TaskMenuList)
+class NoTouchSensor extends PointerSensor {
+  static activators = [
+    {
+      eventName: "onPointerDown" as const,
+      handler: ({ nativeEvent: e }: React.PointerEvent) => e.pointerType !== "touch" && e.isPrimary && e.button === 0,
+    },
+  ];
+}
 
 // Left and right carry a card to the next column over. dnd-kit's own arrows look for places further left or right
 // by their left edges, and the card being carried is tilted, so its edge sits a little left of the cards in its own
@@ -134,12 +147,15 @@ function BoardViewBody({ state, dispatch, visible, onOpen, prefs, setPrefs, meta
   // The column the card was picked up from
   const [start, setStart] = useState<StatusCategory | null>(null);
   const lastDrop = useRef(0);
-  const sensors = useSensors(useSensor(PointerSensor, pointer), useSensor(KeyboardSensor, keyboard));
+  const sensors = useSensors(useSensor(NoTouchSensor, pointer), useSensor(KeyboardSensor, keyboard));
+  const phone = usePhone();
   // One menu for every card, opened for the card pressed (see TaskMenuList)
   const [menu, setMenu] = useState<string | null>(null);
   // The card holding focus stays drawn when its column scrolls away from it, so the keyboard doesn't lose its place
   const [focused, setFocused] = useState<string | null>(null);
   const sizes = useCardSizes();
+  // The row of columns, which a phone pages through one column at a time
+  const [lanes, setLanes] = useState<HTMLDivElement | null>(null);
 
   const collapsed = (s: StatusCategory) => prefs?.collapsed.includes(`board:${s}`) ?? false;
   const toggleCollapsed = (s: StatusCategory) =>
@@ -265,9 +281,23 @@ function BoardViewBody({ state, dispatch, visible, onOpen, prefs, setPrefs, meta
         dispatch={dispatch}
         onOpen={open}
       >
+        <div className="flex h-full flex-col">
+        {phone ? (
+          <ColumnPager
+            scroller={lanes}
+            columns={statuses
+              .filter((s) => !rail(s.id))
+              .map((s) => ({
+                id: s.id,
+                title: s.title,
+                count: columns[s.id].filter((id) => state.tasks[id] && visible(state.tasks[id])).length + unseen(shelves, s.id),
+              }))}
+          />
+        ) : null}
         <div
+          ref={setLanes}
           onFocusCapture={(e) => setFocused(cardOf(e.target))}
-          className="flex h-full snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain p-3 sm:snap-none"
+          className="relative flex min-h-0 flex-1 snap-x snap-mandatory scroll-px-3 gap-3 overflow-x-auto overscroll-x-contain p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:snap-none sm:pb-3"
         >
           {statuses.map((s) => {
             const ids = columns[s.id].filter((id) => state.tasks[id] && visible(state.tasks[id]));
@@ -327,6 +357,7 @@ function BoardViewBody({ state, dispatch, visible, onOpen, prefs, setPrefs, meta
               </Column>
             );
           })}
+        </div>
         </div>
       </TaskMenuList>
       <DragOverlay dropAnimation={{ duration: 160, easing: "cubic-bezier(.2,.8,.2,1)" }}>
@@ -403,8 +434,9 @@ function Column({
     const rail = (
       <section
         ref={setNodeRef}
+        data-col={status}
         className={cn(
-          "flex w-11 shrink-0 flex-col items-center border bg-sunken/50 transition-colors",
+          "flex w-11 shrink-0 snap-start flex-col items-center border bg-sunken/50 transition-colors",
           targeted ? "border-lapis bg-lapis-soft" : "border-line",
         )}
       >
@@ -460,8 +492,10 @@ function Column({
   return (
     <section
       ref={setNodeRef}
+      data-col={status}
       className={cn(
-        "flex w-[min(85vw,18rem)] shrink-0 snap-start flex-col border bg-sunken/50 transition-colors lg:w-auto lg:max-w-[26rem] lg:min-w-[16.5rem] lg:flex-1",
+        // A phone shows one column at a time with the edge of the next, and pages between them
+        "flex w-[calc(100cqw-2.25rem)] shrink-0 snap-start flex-col sm:w-[min(85vw,18rem)] border bg-sunken/50 transition-colors lg:w-auto lg:max-w-[26rem] lg:min-w-[16.5rem] lg:flex-1",
         targeted ? "border-lapis/60" : "border-line",
       )}
     >
@@ -480,7 +514,7 @@ function Column({
             <button
               aria-label={`Add task to ${title}`}
               onClick={() => setComposing("top")}
-              className="grid size-7 place-items-center text-ink-3 hover:bg-sunken hover:text-ink"
+              className="grid size-7 place-items-center text-ink-3 hover:bg-sunken hover:text-ink pointer-coarse:size-9"
             >
               <Icon name="plus" size="sm" />
             </button>
@@ -489,7 +523,7 @@ function Column({
             <DropdownMenu>
               <DropdownMenuTrigger
                 aria-label={`${title} options`}
-                className="grid size-7 place-items-center text-ink-3 outline-none hover:bg-sunken hover:text-ink focus-visible:ring-2 focus-visible:ring-lapis data-[state=open]:bg-sunken"
+                className="grid size-7 place-items-center text-ink-3 outline-none pointer-coarse:size-9 hover:bg-sunken hover:text-ink focus-visible:ring-2 focus-visible:ring-lapis data-[state=open]:bg-sunken"
               >
                 <Icon name="dots" size="sm" />
               </DropdownMenuTrigger>
@@ -534,13 +568,100 @@ function Column({
         ) : !composing ? (
           <button
             onClick={() => setComposing("bottom")}
-            className="flex h-8 shrink-0 items-center gap-2 px-2 text-xs text-ink-3 hover:bg-sunken hover:text-ink"
+            className="flex h-8 shrink-0 items-center gap-2 px-2 text-xs text-ink-3 hover:bg-sunken hover:text-ink pointer-coarse:h-11 pointer-coarse:text-sm"
           >
             <Icon name="plus" size="sm" /> Add a task
           </button>
         ) : null}
       </div>
     </section>
+  );
+}
+
+// On a phone, the columns as a row of tabs above them. The one in view is marked as the row is swiped, and a tap
+// pages straight to a column
+function ColumnPager({
+  scroller,
+  columns,
+}: {
+  scroller: HTMLDivElement | null;
+  columns: { id: StatusCategory; title: string; count: number }[];
+}) {
+  const [current, setCurrent] = useState<string | null>(null);
+  const strip = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!scroller) return;
+    let frame = 0;
+    const read = () => {
+      frame = 0;
+      // The column whose left edge is nearest the row's own, past its padding
+      const at = scroller.scrollLeft + 12;
+      let best: string | null = null;
+      let gap = Infinity;
+      for (const el of scroller.querySelectorAll<HTMLElement>("[data-col]")) {
+        const d = Math.abs(el.offsetLeft - at);
+        if (d < gap) {
+          gap = d;
+          best = el.dataset.col ?? null;
+        }
+      }
+      setCurrent(best);
+    };
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(read);
+    };
+    read();
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(frame);
+    };
+  }, [scroller]);
+
+  // The tab of the column in view stays in view along the strip
+  useLayoutEffect(() => {
+    const tab = strip.current?.querySelector<HTMLElement>(`[data-tab="${current}"]`);
+    if (!tab || !strip.current) return;
+    const s = strip.current;
+    if (tab.offsetLeft < s.scrollLeft || tab.offsetLeft + tab.offsetWidth > s.scrollLeft + s.clientWidth)
+      s.scrollTo({ left: tab.offsetLeft - 12, behavior: "smooth" });
+  }, [current]);
+
+  const go = (id: string) => {
+    const col = scroller?.querySelector<HTMLElement>(`[data-col="${id}"]`);
+    if (!scroller || !col) return;
+    scroller.scrollTo({ left: col.offsetLeft - 12, behavior: "smooth" });
+  };
+
+  return (
+    <div
+      ref={strip}
+      role="tablist"
+      aria-label="Columns"
+      className="relative flex shrink-0 gap-1.5 overflow-x-auto border-b border-line bg-surface px-3 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+    >
+      {columns.map((c) => {
+        const on = c.id === current;
+        return (
+          <button
+            key={c.id}
+            role="tab"
+            data-tab={c.id}
+            aria-selected={on}
+            onClick={() => go(c.id)}
+            className={cn(
+              "flex h-8 shrink-0 items-center gap-2 border px-2.5 text-sm transition-colors",
+              on ? "border-ink bg-raised text-ink" : "border-line text-ink-2 active:bg-sunken",
+            )}
+          >
+            <StatusMarker status={c.id} />
+            {c.title}
+            <span className={cn("font-mono text-[11px]", on ? "text-ink-2" : "text-ink-3")}>{c.count}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -647,7 +768,7 @@ const SortableTask = memo(function SortableTask({
       }}
       onClick={() => onOpen(task.id)}
       aria-label={`${task.id}: ${task.title}`}
-      className="relative shrink-0 cursor-grab outline-none focus-visible:ring-2 focus-visible:ring-lapis"
+      className="relative shrink-0 cursor-grab outline-none touch-hold focus-visible:ring-2 focus-visible:ring-lapis"
     >
       <CardFace task={task} dragging={isDragging} version={version} />
     </div>
