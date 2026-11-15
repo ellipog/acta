@@ -44,6 +44,7 @@ export function TaskDialog({
   order = [],
   onOpen,
   canEdit = true,
+  comments,
 }: {
   task: Task | null;
   dispatch: (a: BoardAction) => void;
@@ -51,6 +52,7 @@ export function TaskDialog({
   order?: string[];
   onOpen?: (id: string) => void;
   canEdit?: boolean;
+  comments?: CommentRights;
 }) {
   return (
     <D.Root open={Boolean(task)} onOpenChange={(o) => !o && onClose()}>
@@ -60,10 +62,23 @@ export function TaskDialog({
         </D.Overlay>
         <D.Content
           aria-describedby={undefined}
+          // Escape in a comment being edited only leaves the edit
+          onEscapeKeyDown={(e) => {
+            if (e.target instanceof Element && e.target.closest("[data-comment-edit]")) e.preventDefault();
+          }}
           className="fixed inset-x-0 bottom-0 z-50 max-h-[calc(100dvh-1rem)] focus:outline-none sm:inset-auto sm:top-1/2 sm:left-1/2 sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100%-2rem)] sm:max-w-4xl sm:-translate-x-1/2 sm:-translate-y-1/2"
         >
           {task ? (
-            <TaskBody key={task.id} task={task} dispatch={dispatch} onClose={onClose} order={order} onOpen={onOpen} canEdit={canEdit} />
+            <TaskBody
+              key={task.id}
+              task={task}
+              dispatch={dispatch}
+              onClose={onClose}
+              order={order}
+              onOpen={onOpen}
+              canEdit={canEdit}
+              comments={comments}
+            />
           ) : null}
         </D.Content>
       </D.Portal>
@@ -78,6 +93,7 @@ function TaskBody({
   order,
   onOpen,
   canEdit,
+  comments,
 }: {
   task: Task;
   dispatch: (a: BoardAction) => void;
@@ -85,6 +101,7 @@ function TaskBody({
   order: string[];
   onOpen?: (id: string) => void;
   canEdit: boolean;
+  comments?: CommentRights;
 }) {
   const [title, setTitle] = useState(task.title);
   const [editing, setEditing] = useState(false);
@@ -369,10 +386,12 @@ function TaskBody({
                 </p>
               ) : null}
               <Thread
+                task={task.id}
                 thread={thread}
                 upTo={Math.max(drawn, Math.min(thread.length, FIRST_COMMENTS))}
                 now={now}
                 version={boardMetaVersion()}
+                rights={comments}
               />
 
               <div className="mt-4">
@@ -555,44 +574,179 @@ type Comment = NonNullable<Task["thread"]>[number];
 // The thread and the activity draw again only when they change, not with each key typed elsewhere in the task. A long
 // thread was laid out again, avatar and Markdown check and all, for every letter of a title or a comment
 const Thread = memo(function Thread({
+  task,
   thread,
   upTo,
   now,
+  rights,
 }: {
+  task: string;
   thread: Comment[];
   upTo: number;
   now: number;
   // Moves when the board's people change, so their names and pictures follow
   version: number;
+  rights?: CommentRights;
 }) {
   return (
     <ol className="mt-3 space-y-4">
-      {thread.slice(0, upTo).map((c) => {
-        // A comment brought over from elsewhere shows who wrote it there, then who added it here
-        const person = c.from ? undefined : people.find((p) => p.name.startsWith(c.who));
-        return (
-          // Comments out of view are laid out and painted only as they scroll near
-          <li key={c.id} className="flex gap-3 [contain-intrinsic-size:auto_4rem] [content-visibility:auto]">
-            {person ? (
-              <Avatar name={person.name} src={person.avatar} tone={person.tone} size="sm" />
-            ) : (
-              <Avatar name={c.from ?? c.who} tone={c.from ? "pyrite" : "lapis"} size="sm" />
-            )}
-            <div className="min-w-0 flex-1">
-              <p className="text-xs">
-                <span className="font-medium">{c.from ?? c.who}</span>
-                {c.from ? <span className="text-ink-3"> · added by {c.who}</span> : null}
-                {c.via ? <span className="text-ink-3"> via {c.via}</span> : null}
-                <span className="ml-1.5 font-mono text-[11px] text-ink-3">{timeAgo(c.at, now)}</span>
-              </p>
-              <Markdown source={c.body} className="mt-1" />
-            </div>
-          </li>
-        );
-      })}
+      {thread.slice(0, upTo).map((c) => (
+        <ThreadComment key={c.id} task={task} comment={c} now={now} rights={rights} />
+      ))}
     </ol>
   );
 });
+
+/** What the task dialog can do with comments already written, and whether you may */
+export type CommentRights = {
+  // You may still comment here, which editing your own needs too
+  canWrite: boolean;
+  // You may take back anyone's, as owners and admins can
+  canRemoveAny: boolean;
+  edit: (task: string, id: string, body: string) => Promise<boolean>;
+  remove: (task: string, id: string) => Promise<boolean>;
+};
+
+function ThreadComment({
+  task,
+  comment: c,
+  now,
+  rights,
+}: {
+  task: string;
+  comment: Comment;
+  now: number;
+  rights?: CommentRights;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  // A comment brought over from elsewhere shows who wrote it there, then who added it here
+  const person = c.from ? undefined : people.find((p) => p.name.startsWith(c.who));
+  const yours = Boolean(c.by) && c.by === me.id;
+  // One brought over from elsewhere says what someone else wrote, so it isn't yours to reword
+  const canChange = Boolean(rights?.canWrite) && yours && !c.from;
+  const canRemove = Boolean(rights) && (yours || Boolean(rights?.canRemoveAny));
+
+  const save = async () => {
+    const body = draft?.trim().slice(0, 10_000);
+    if (!rights || !body || busy) return;
+    if (body === c.body) return setDraft(null);
+    setBusy(true);
+    const ok = await rights.edit(task, c.id, body);
+    setBusy(false);
+    if (ok) setDraft(null);
+    else toast({ icon: "x", title: "Your edit didn’t save", description: "Check your connection and try again." });
+  };
+
+  const remove = async () => {
+    if (!rights || busy) return;
+    if (!confirm) return setConfirm(true);
+    setBusy(true);
+    const ok = await rights.remove(task, c.id);
+    setBusy(false);
+    setConfirm(false);
+    if (!ok) toast({ icon: "x", title: "The comment wasn’t deleted", description: "Check your connection and try again." });
+  };
+
+  return (
+    // Comments out of view are laid out and painted only as they scroll near
+    <li className="group/comment flex gap-3 [contain-intrinsic-size:auto_4rem] [content-visibility:auto]">
+      {person ? (
+        <Avatar name={person.name} src={person.avatar} tone={person.tone} size="sm" />
+      ) : (
+        <Avatar name={c.from ?? c.who} tone={c.from ? "pyrite" : "lapis"} size="sm" />
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <p className="min-w-0 flex-1 text-xs">
+            <span className="font-medium">{c.from ?? c.who}</span>
+            {c.from ? <span className="text-ink-3"> · added by {c.who}</span> : null}
+            {c.via ? <span className="text-ink-3"> via {c.via}</span> : null}
+            <span className="ml-1.5 font-mono text-[11px] text-ink-3" title={fullTime(c.at)}>
+              {timeAgo(c.at, now)}
+            </span>
+            {c.edited ? (
+              <span className="ml-1.5 font-mono text-[11px] text-ink-3" title={`Edited ${fullTime(c.edited)}`}>
+                · edited
+              </span>
+            ) : null}
+          </p>
+          {draft === null && (canChange || canRemove) ? (
+            // Out of the way until you point at the comment or move to it, and always there on a touch screen
+            <span
+              className={cn(
+                "flex shrink-0 items-center gap-0.5 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-focus-within/comment:opacity-100 [@media(hover:hover)]:group-hover/comment:opacity-100",
+                confirm && "opacity-100 [@media(hover:hover)]:opacity-100",
+              )}
+            >
+              {canChange && !confirm ? (
+                <Tooltip content="Edit comment">
+                  <button
+                    type="button"
+                    aria-label="Edit comment"
+                    onClick={() => setDraft(c.body)}
+                    className="grid size-6 place-items-center text-ink-3 hover:text-ink"
+                  >
+                    <Icon name="pencil" size="sm" />
+                  </button>
+                </Tooltip>
+              ) : null}
+              {canRemove ? (
+                confirm ? (
+                  <button
+                    type="button"
+                    onClick={remove}
+                    onBlur={() => setConfirm(false)}
+                    disabled={busy}
+                    autoFocus
+                    className="flex h-6 items-center gap-1.5 border border-hematite bg-hematite px-2 text-[11px] text-on-accent disabled:opacity-50"
+                  >
+                    <Icon name="trash" size="sm" />
+                    {busy ? "Deleting…" : "Click again to delete"}
+                  </button>
+                ) : (
+                  <Tooltip content={yours ? "Delete comment" : `Delete ${c.from ?? c.who}’s comment`}>
+                    <button
+                      type="button"
+                      aria-label="Delete comment"
+                      onClick={remove}
+                      className="grid size-6 place-items-center text-ink-3 hover:text-hematite"
+                    >
+                      <Icon name="trash" size="sm" />
+                    </button>
+                  </Tooltip>
+                )
+              ) : null}
+            </span>
+          ) : null}
+        </div>
+        {draft === null ? (
+          <Markdown source={c.body} className="mt-1" />
+        ) : (
+          <div
+            className="mt-2"
+            // Escape leaves the edit, not the task (the dialog lets it by, see TaskDialog)
+            data-comment-edit=""
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && !busy) setDraft(null);
+            }}
+          >
+            <MarkdownEditor value={draft} onChange={setDraft} onSubmit={save} rows={2} autoFocus aria-label="Edit comment" />
+            <div className="mt-2 flex items-center justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setDraft(null)} disabled={busy}>
+                Cancel
+              </Button>
+              <Button size="sm" variant="primary" onClick={save} disabled={busy || !draft.trim()}>
+                {busy ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </li>
+  );
+}
 
 const ActivityList = memo(function ActivityList({
   activity,
