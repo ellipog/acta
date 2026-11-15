@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { NextResponse, userAgent, type NextRequest } from "next/server";
+import { after, NextResponse, userAgent, type NextRequest } from "next/server";
 import { createAdminClient, serviceReady } from "@/lib/supabase/admin";
 
 let db: ReturnType<typeof createAdminClient> | null = null;
@@ -53,8 +53,18 @@ export async function POST(request: NextRequest) {
   const name = kind === "event" ? clip(body.name, 64) : null;
   if (kind === "event" && (!name || !/^[a-z0-9_.:-]+$/i.test(name))) return bad();
 
+  // The visit is answered at once and written after, so the browser isn't kept waiting on the database
+  after(() => record(request, agent, { kind, name, host, path, body }));
+  return done();
+}
+
+async function record(
+  request: NextRequest,
+  agent: ReturnType<typeof userAgent>,
+  { kind, name, host, path, body }: { kind: string; name: string | null; host: string; path: string; body: Record<string, unknown> },
+) {
   const current = await todaysSalt();
-  if (!current) return done();
+  if (!current) return;
 
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || request.headers.get("x-real-ip") || "";
   const visitor = createHash("sha256")
@@ -76,13 +86,17 @@ export async function POST(request: NextRequest) {
       utm_source: clip(body.utm_source, 100),
       utm_medium: clip(body.utm_medium, 100),
       utm_campaign: clip(body.utm_campaign, 100),
-      country: clip(request.headers.get("x-vercel-ip-country"), 2),
+      // Cloudflare's, now Acta runs behind it. XX and T1 are its unknown and Tor
+      country: clip(country(request), 2),
       device,
       browser: clip(agent.browser.name, 40),
       os: clip(agent.os.name, 40),
       visitor,
       props: kind === "event" ? cleanProps(body.props) : null,
     });
+}
 
-  return done();
+function country(request: NextRequest) {
+  const code = request.headers.get("cf-ipcountry") ?? request.headers.get("x-vercel-ip-country");
+  return code && code !== "XX" && code !== "T1" ? code : null;
 }

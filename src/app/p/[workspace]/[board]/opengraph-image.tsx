@@ -1,8 +1,9 @@
 import { ImageResponse } from "next/og";
 import { pageFrom, stageOf, type Task } from "@/lib/board-store";
 import { Canyon, frame, Lockup, previewSize, siteImage } from "@/lib/og";
-import { isPrivate } from "@/lib/public-roadmap";
-import { inks, publicRoadmap } from "@/lib/seo";
+import { cacheLife, cacheTag } from "next/cache";
+import { isPrivate, type PublicRoadmapData } from "@/lib/public-roadmap";
+import { hourlyRoadmap, inks, roadmapTag } from "@/lib/seo";
 
 // A roadmap's link preview: its title and introduction in its own accent, how much is planned, under way and
 // shipped, over the canyon. Private and missing roadmaps get Acta's own
@@ -13,10 +14,26 @@ export const contentType = "image/png";
 
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1).replace(/\s+\S*$/, "")}…` : text);
 
+// Drawing a preview takes about 100 ms of the server's one thread, and each site a link is shared on fetches it
+// separately, so the picture is drawn once and kept with the roadmap, cleared with it when it changes. A read that
+// fails isn't kept: that preview is drawn as Acta's own, this once
 export default async function Image({ params }: { params: Promise<{ workspace: string; board: string }> }) {
   const { workspace, board } = await params;
-  const roadmap = await publicRoadmap(workspace, board);
-  if (!roadmap || isPrivate(roadmap)) return siteImage();
+  const png = await drawn(workspace, board).catch(async () => bytes(await siteImage()));
+  return new Response(png as BodyInit, { headers: { "content-type": contentType } });
+}
+
+const bytes = async (image: Response) => new Uint8Array(await image.arrayBuffer());
+
+async function drawn(workspace: string, board: string): Promise<Uint8Array> {
+  "use cache";
+  cacheLife("hours");
+  cacheTag(roadmapTag(workspace, board));
+  const roadmap = await hourlyRoadmap(workspace, board);
+  return bytes(!roadmap || isPrivate(roadmap) ? await siteImage() : await draw(roadmap));
+}
+
+async function draw(roadmap: PublicRoadmapData) {
   const page = pageFrom(roadmap.board.name, roadmap.board.slug, roadmap.board.page);
   const accent = page.color || inks.tone[page.accent];
   const live = roadmap.tasks.filter((t) => t.status !== "canceled");
