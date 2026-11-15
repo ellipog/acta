@@ -59,7 +59,6 @@ import {
 } from "@/lib/board-store";
 import { cn } from "@/lib/utils";
 import {
-  compareBy,
   fieldLabel,
   fieldOf,
   fieldOptions,
@@ -76,7 +75,7 @@ import {
 } from "./fields";
 import { CustomFieldInput } from "./custom-fields";
 import { FieldsMenu } from "./fields-menu";
-import { reading, unseen, waiting, type ShelfInfo } from "./shelf-info";
+import type { ShelfInfo } from "./shelf-info";
 import { planDrop, planStep } from "./table-drop";
 import {
   addKey,
@@ -93,18 +92,7 @@ import {
 } from "./table-window";
 import { TaskMenuList } from "./task-menu";
 import { useScrollRange } from "./scroll-window";
-
-type Group = {
-  key: string;
-  title: string;
-  icon?: React.ReactNode;
-  rows: Task[];
-  patch: Partial<Task>;
-  note?: string;
-  // Grouped by status, the shelf of tasks the group is, when some of it is still on the server
-  shelf?: StatusCategory;
-  more?: { count: number; loading: boolean };
-};
+import { useTableGroups, type Group } from "./table-groups";
 
 // Every line of the body is a 36px cell and its border at the default text size. The real heights are measured once
 // drawn, as the text size setting scales them
@@ -245,53 +233,7 @@ function TableViewBody({
   const version = boardMetaVersion();
   const opts = useMemo(() => cellOptions(version), [version]);
 
-  // Follows the tasks and columns rather than the whole board, so a change elsewhere on it, like a vote on an idea,
-  // doesn't sort the table again
-  const { columns: boardColumns, tasks: boardTasks } = state;
-  const rows = useMemo(() => {
-    const all = statuses.flatMap((s) => boardColumns[s.id].map((id) => boardTasks[id])).filter((t) => t && visible(t));
-    if (!sort) return all;
-    const by = compareBy(sort.key);
-    return all.sort((a, b) => by(a, b) * sort.dir);
-  }, [boardColumns, boardTasks, visible, sort]);
-
-  const groups = useMemo<Group[]>(() => {
-    if (!rows.length && filtered) return [];
-    if (grouping === "none") return [{ key: "all", title: "", rows, patch: {} }];
-    const filteringThis = grouping !== "size" && (prefs.filters[grouping]?.length ?? 0) > 0;
-    return (
-      fieldOptions[grouping]
-        .map((o): Group => {
-          // Grouped by status, a group is a shelf of tasks, and those still on the server count and are on their way
-          const shelf = grouping === "status" ? (o.value as StatusCategory) : undefined;
-          const only = prefs.filters.status;
-          const hidden = shelf && ((closed(shelf) && prefs.filters.hideDone) || (only?.length && !only.includes(shelf)));
-          return {
-            key: `${grouping}:${o.value}`,
-            title: o.label,
-            icon: o.icon,
-            rows: rows.filter((r) => valueOf(r, grouping)[0] === o.value),
-            patch: patchFor(grouping, o.value),
-            note: noteFor(grouping, o.value),
-            shelf,
-            more:
-              shelf && !hidden && waiting(shelves, shelf)
-                ? { count: unseen(shelves, shelf), loading: reading(shelves, shelf) }
-                : undefined,
-          };
-        })
-        // Canceled only shows once something is in it
-        .filter(
-          (g) =>
-            g.rows.length ||
-            g.more ||
-            (grouping === "status" &&
-              !filteringThis &&
-              g.key !== "status:canceled" &&
-              !(prefs.filters.hideDone && g.key === "status:done")),
-        )
-    );
-  }, [rows, grouping, prefs.filters, filtered, shelves]);
+  const { rows, groups } = useTableGroups({ state, visible, prefs, filtered, shelves });
 
   const { navRows, rowIndex } = useMemo(() => {
     const ids = groups.flatMap((g) => (prefs.collapsed.includes(g.key) ? [] : g.rows.map((r) => r.id)));

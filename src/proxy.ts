@@ -61,6 +61,6 @@ export async function proxy(request: NextRequest) {
 // workspace. /compare/<page> and /use-cases/<page> stay, since a workspace could be called compare or use-cases
 export const config = {
   matcher: [
-    "/((?!$|docs(?:/|$)|changelog(?:/|$)|(?:compare|privacy|terms|library|demo|opengraph-image)$|p/|_next/static|_next/image|api/(?!github/(?:flush|install|setup)(?:/|$))|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|webp|gif|ico|txt|xml)$).*)",
+    "/((?!$|docs(?:/|$)|changelog(?:/|$)|(?:compare|privacy|terms|library|demo|opengraph-image)$|p/|_next/static|_next/image|api/(?!github/(?:flush|install|setup)(?:/|$))|favicon.ico|manifest.webmanifest|.*\\.(?:png|jpg|jpeg|svg|webp|gif|ico|txt|xml)$).*)",
   ],
 };

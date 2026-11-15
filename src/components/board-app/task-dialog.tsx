@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Dialog as D } from "radix-ui";
 import { Icon } from "@/components/ui/icons";
 import { PixelTick } from "@/components/ui/pixel";
@@ -67,7 +67,8 @@ export function TaskDialog({
           onEscapeKeyDown={(e) => {
             if (e.target instanceof Element && e.target.closest("[data-comment-edit]")) e.preventDefault();
           }}
-          className="fixed inset-x-0 bottom-0 z-50 max-h-[calc(100dvh-1rem)] focus:outline-none sm:inset-auto sm:top-1/2 sm:left-1/2 sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100%-2rem)] sm:max-w-4xl sm:-translate-x-1/2 sm:-translate-y-1/2"
+          data-side="bottom"
+          className="sheet fixed inset-x-0 bottom-0 z-50 max-h-[calc(100dvh-0.75rem)] focus:outline-none sm:inset-auto sm:top-1/2 sm:left-1/2 sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100%-2rem)] sm:max-w-4xl sm:-translate-x-1/2 sm:-translate-y-1/2"
         >
           {task ? (
             <TaskBody
@@ -179,14 +180,86 @@ function TaskBody({
     setEditing(true);
   };
 
-  const nav = "grid size-7 place-items-center text-ink-3 hover:bg-sunken hover:text-ink disabled:pointer-events-none disabled:opacity-30";
+  const { sheet, handlers: pull } = usePullToClose(onClose);
+
+  // Where a field can't size itself to its text, the title grows with what's typed
+  const titleField = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = titleField.current;
+    if (!el || CSS.supports("field-sizing", "content")) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [title]);
+
+  const nav =
+    "grid size-7 place-items-center text-ink-3 hover:bg-sunken hover:text-ink disabled:pointer-events-none disabled:opacity-30 pointer-coarse:size-10";
+
+  // When the task was made and closed, and archiving or deleting it. Under the fields when wide, and at the very
+  // end on a phone, below the thread, where they can't be pressed on the way to something else
+  const closing = (
+    <>
+      <p className="font-mono text-[11px] leading-relaxed text-ink-3">
+        <span title={opened ? fullTime(opened) : undefined}>Created {timeAgo(opened ?? now, now)}</span>
+        {task.closed ? (
+          <>
+            <br />
+            <span title={fullTime(Date.parse(task.closed))}>
+              {task.status === "canceled" ? "Canceled" : "Closed"} {timeAgo(Date.parse(task.closed), now)}
+            </span>
+            {took !== null ? (
+              <>
+                <br />
+                <span>Took {duration(took)}</span>
+              </>
+            ) : null}
+          </>
+        ) : null}
+        <br />
+        Updated {timeAgo(task.activity.at(-1)?.at ?? now, now)}
+      </p>
+      <div className="mt-2 flex flex-col md:mt-auto">
+        <button
+          onClick={() => {
+            dispatch(archiveTasks([task.id], !task.archived));
+            if (!task.archived) onClose();
+          }}
+          className="flex h-8 items-center gap-2 border border-transparent px-2 text-xs text-ink-3 hover:text-ink pointer-coarse:h-11 pointer-coarse:text-sm"
+        >
+          <Icon name="archive" size="sm" />
+          {task.archived ? "Bring back from the archive" : "Archive task"}
+        </button>
+        <button
+          onClick={() => {
+            if (!confirmDelete) return setConfirmDelete(true);
+            dispatch({ type: "delete", ids: [task.id] });
+            onClose();
+          }}
+          onBlur={() => setConfirmDelete(false)}
+          className={cn(
+            "flex h-8 items-center gap-2 border px-2 text-xs pointer-coarse:h-11 pointer-coarse:text-sm",
+            confirmDelete ? "border-hematite bg-hematite text-on-accent" : "border-transparent text-ink-3 hover:text-hematite",
+          )}
+        >
+          <Icon name="trash" size="sm" />
+          {confirmDelete ? "Press again to delete" : "Delete task"}
+        </button>
+      </div>
+    </>
+  );
 
   return (
     <UploadContext value={taskFiles.upload}>
-    <div className="relative isolate">
+    <div ref={sheet} className="relative isolate">
       <DitherFill level={50} className="absolute inset-0 -z-10 hidden translate-x-2 translate-y-2 sm:block" />
-      <div className="flex max-h-[calc(100dvh-1rem)] flex-col border-t border-ink bg-raised sm:max-h-[calc(100dvh-2rem)] sm:border">
-        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line pr-2 pl-4 font-mono text-[11px] text-ink-3">
+      <div className="flex max-h-[calc(100dvh-0.75rem)] flex-col border-t border-ink bg-raised sm:max-h-[calc(100dvh-2rem)] sm:border">
+        <div
+          {...pull}
+          className="shrink-0 touch-none sm:touch-auto"
+        >
+        <div aria-hidden className="flex h-2.5 items-end justify-center sm:hidden">
+          <span className="h-1 w-9 bg-line-strong" />
+        </div>
+        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line pr-2 pl-4 font-mono text-[11px] text-ink-3 pointer-coarse:h-12">
           <StatusMarker status={task.status} />
           <span>{task.id}</span>
           {task.project ? <span className="truncate">· {task.project}</span> : null}
@@ -254,17 +327,29 @@ function TaskBody({
             </D.Close>
           </div>
         </div>
+        </div>
 
-        <div className="grid min-h-0 flex-1 overflow-y-auto md:grid-cols-[minmax(0,1fr)_16rem]">
-          <div className="min-w-0 border-line px-4 py-4 sm:px-6 md:border-r">
+        {/* Wide, the task's text runs down the left and its fields down the right. On a phone the fields come
+            straight after the title and description, where a thumb finds them, and the thread follows */}
+        <div className="grid min-h-0 flex-1 overflow-y-auto overscroll-contain md:grid-cols-[minmax(0,1fr)_16rem] md:grid-rows-[auto_1fr]">
+          <div className="order-1 min-w-0 border-line px-4 pt-4 pb-5 sm:px-6 md:col-start-1 md:row-start-1 md:border-r md:pb-0">
             <D.Title asChild>
-              <input
+              {/* Wraps onto as many lines as the title takes, so a long one reads whole on a phone. It's still one
+                  line of text: Enter saves, and a pasted line break becomes a space */}
+              <textarea
+                ref={titleField}
+                rows={1}
                 value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                onChange={(e) => setTitle(e.target.value.replace(/\s*\n\s*/g, " "))}
                 onBlur={() => title.trim() && title !== task.title && update({ title: title.trim() }, "renamed the task")}
-                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }}
+                enterKeyHint="done"
                 aria-label="Title"
-                className="w-full bg-transparent font-display text-2xl leading-tight outline-none"
+                className="block w-full resize-none overflow-hidden bg-transparent font-display text-2xl leading-tight outline-none [field-sizing:content]"
               />
             </D.Title>
 
@@ -319,7 +404,9 @@ function TaskBody({
                 </button>
               )}
             </section>
+          </div>
 
+          <div className="order-3 min-w-0 border-line px-4 pb-4 sm:px-6 md:col-start-1 md:row-start-2 md:border-r">
             <section className="mt-6">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-medium text-ink-2">Subtasks</h3>
@@ -433,11 +520,16 @@ function TaskBody({
                 </button>
               ) : null}
             </section>
+            <div className="mt-6 flex flex-col gap-1 border-t border-line pt-4 pb-safe md:hidden">{closing}</div>
           </div>
 
-          <aside className="flex flex-col gap-4 bg-surface px-4 py-4 text-sm">
+          <aside className="order-2 grid grid-cols-2 gap-x-3 gap-y-4 border-y border-line bg-surface px-4 py-4 text-sm md:col-start-2 md:row-span-2 md:row-start-1 md:flex md:flex-col md:gap-4 md:border-y-0">
             {(["status", "assignee", "priority", "size", "project"] as GroupField[]).map((f) => (
-              <Prop key={f} label={{ status: "Status", assignee: "Assignee", priority: "Priority", size: "Size", project: "Project" }[f]}>
+              <Prop
+                key={f}
+                label={{ status: "Status", assignee: "Assignee", priority: "Priority", size: "Size", project: "Project" }[f]}
+                wide={f === "project"}
+              >
                 <Select
                   aria-label={f}
                   value={valueOf(task, f)[0]}
@@ -446,7 +538,7 @@ function TaskBody({
                 />
               </Prop>
             ))}
-            <div className="grid grid-cols-2 gap-2">
+            <div className="col-span-2 grid grid-cols-2 gap-x-3 gap-y-2 md:gap-2">
               <Prop label="Start">
                 <DatePicker
                   aria-label="Start date"
@@ -467,7 +559,7 @@ function TaskBody({
                 />
               </Prop>
             </div>
-            <Prop label="Labels">
+            <Prop label="Labels" wide>
               <MultiSelect
                 aria-label="Labels"
                 placeholder="No labels"
@@ -489,11 +581,11 @@ function TaskBody({
               />
             </Prop>
             {customFields.map((f) => (
-              <Prop key={f.id} label={f.name}>
+              <Prop key={f.id} label={f.name} wide>
                 <CustomFieldInput task={task} field={f} onChange={(custom, note) => update({ custom }, note)} />
               </Prop>
             ))}
-            <Prop label="Public roadmap">
+            <Prop label="Public roadmap" wide>
               <label className="flex items-center justify-between gap-3 border border-line bg-raised px-3 py-2">
                 <span className="min-w-0">
                   <span className="block text-sm">{task.public ? "Visible to visitors" : "Not on the roadmap"}</span>
@@ -512,50 +604,7 @@ function TaskBody({
                 />
               </label>
             </Prop>
-            <p className="font-mono text-[11px] leading-relaxed text-ink-3">
-              <span title={opened ? fullTime(opened) : undefined}>Created {timeAgo(opened ?? now, now)}</span>
-              {task.closed ? (
-                <>
-                  <br />
-                  <span title={fullTime(Date.parse(task.closed))}>
-                    {task.status === "canceled" ? "Canceled" : "Closed"} {timeAgo(Date.parse(task.closed), now)}
-                  </span>
-                  {took !== null ? (
-                    <>
-                      <br />
-                      <span>Took {duration(took)}</span>
-                    </>
-                  ) : null}
-                </>
-              ) : null}
-              <br />
-              Updated {timeAgo(task.activity.at(-1)?.at ?? now, now)}
-            </p>
-            <button
-              onClick={() => {
-                dispatch(archiveTasks([task.id], !task.archived));
-                if (!task.archived) onClose();
-              }}
-              className="mt-auto flex h-8 items-center gap-2 border border-transparent px-2 text-xs text-ink-3 hover:text-ink"
-            >
-              <Icon name="archive" size="sm" />
-              {task.archived ? "Bring back from the archive" : "Archive task"}
-            </button>
-            <button
-              onClick={() => {
-                if (!confirmDelete) return setConfirmDelete(true);
-                dispatch({ type: "delete", ids: [task.id] });
-                onClose();
-              }}
-              onBlur={() => setConfirmDelete(false)}
-              className={cn(
-                "flex h-8 items-center gap-2 border px-2 text-xs",
-                confirmDelete ? "border-hematite bg-hematite text-on-accent" : "border-transparent text-ink-3 hover:text-hematite",
-              )}
-            >
-              <Icon name="trash" size="sm" />
-              {confirmDelete ? "Click again to delete" : "Delete task"}
-            </button>
+            <div className="hidden md:flex md:flex-1 md:flex-col md:gap-4">{closing}</div>
           </aside>
         </div>
       </div>
@@ -564,14 +613,60 @@ function TaskBody({
   );
 }
 
+/**
+ * On a phone the task is a sheet from the bottom, and its top pulls down to put it away, as sheets do there. The
+ * sheet follows the finger, and goes back up unless it was pulled far enough or flicked down. The buttons along the
+ * top still take taps
+ */
+function usePullToClose(onClose: () => void) {
+  const sheet = useRef<HTMLDivElement>(null);
+  const pull = useRef<{ id: number; from: number; at: number; time: number } | null>(null);
+  const place = (y: number, settle: boolean) => {
+    const el = sheet.current;
+    if (!el) return;
+    el.style.transition = settle ? "transform 160ms cubic-bezier(.2,.8,.2,1)" : "";
+    el.style.transform = y ? `translateY(${y}px)` : "";
+  };
+  const end = (e: React.PointerEvent) => {
+    const p = pull.current;
+    if (!p || p.id !== e.pointerId) return;
+    pull.current = null;
+    const moved = e.clientY - p.from;
+    const speed = (e.clientY - p.at) / Math.max(1, e.timeStamp - p.time);
+    if (e.type === "pointerup" && (moved > 110 || (moved > 24 && speed > 0.5))) {
+      place(sheet.current?.offsetHeight ?? 600, true);
+      setTimeout(onClose, 140);
+    } else place(0, true);
+  };
+  const handlers = {
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.pointerType !== "touch" || innerWidth >= 640) return;
+      if (e.target instanceof Element && e.target.closest("button, a, input")) return;
+      pull.current = { id: e.pointerId, from: e.clientY, at: e.clientY, time: e.timeStamp };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const p = pull.current;
+      if (!p || p.id !== e.pointerId) return;
+      p.at = e.clientY;
+      p.time = e.timeStamp;
+      place(Math.max(0, e.clientY - p.from), false);
+    },
+    onPointerUp: end,
+    onPointerCancel: end,
+  };
+  return { sheet, handlers };
+}
+
 // How many comments a task shows as it opens, before the rest of a long thread
 const FIRST_COMMENTS = 12;
 
 const fullTime = (at: number) => new Date(at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-function Prop({ label, children }: { label: string; children: React.ReactNode }) {
+// On a phone the fields sit two to a row, and a wide one takes the whole row
+function Prop({ label, wide, children }: { label: string; wide?: boolean; children: React.ReactNode }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1.5">
+    <div className={cn("flex min-w-0 flex-col gap-1.5", wide && "col-span-2")}>
       <span className="text-[11px] text-ink-3">{label}</span>
       {children}
     </div>

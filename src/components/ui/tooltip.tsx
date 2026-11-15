@@ -46,7 +46,9 @@ export function Tooltip({
     <T.Root>
       <T.Trigger asChild>{children}</T.Trigger>
       <T.Portal>
-        <T.Content side={side} sideOffset={5} className="z-50 bg-ink px-2 py-1 text-xs text-page">
+        {/* A touch screen has no hover. A tap or a dialog's first focus would leave the tip standing over the
+            thing pressed, so tips only show where there's a pointer to rest */}
+        <T.Content side={side} sideOffset={5} className="z-50 bg-ink px-2 py-1 text-xs text-page [@media(hover:none)]:hidden">
           {content}
           <T.Arrow asChild width={7} height={4}>
             <svg viewBox="0 0 7 4" shapeRendering="crispEdges" style={pixelBox(7, 4, 1)} className="pixel fill-ink">

@@ -526,7 +526,7 @@ export function Visitor({
     page.showSearch || page.layout === "list" ? (
       <div className="flex flex-wrap items-center gap-2">
         {page.showSearch ? (
-          <label className="flex h-9 min-w-0 flex-1 items-center gap-2 border border-line-strong bg-raised px-2.5 focus-within:border-ink @2xl:max-w-xs">
+          <label className="flex h-9 min-w-[min(100%,14rem)] flex-1 items-center gap-2 border border-line-strong bg-raised px-2.5 focus-within:border-ink @2xl:max-w-xs">
             <Icon name="search" size="sm" className="text-ink-3" />
             <input
               value={query}
