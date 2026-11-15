@@ -12,7 +12,7 @@ import { MultiSelect } from "@/components/ui/combobox";
 import { Switch } from "@/components/ui/controls";
 import { DitherFill } from "@/components/ui/dither";
 import { DatePicker } from "@/components/ui/date-picker";
-import { Markdown, MarkdownEditor } from "@/components/ui/markdown";
+import { Markdown, MarkdownEditor, UploadContext } from "@/components/ui/markdown";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Select } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
@@ -35,6 +35,7 @@ import { cn } from "@/lib/utils";
 import { CustomFieldInput } from "./custom-fields";
 import { fieldOptions, noteFor, patchFor, valueOf, type GroupField } from "./fields";
 import { githubOn, TaskLinks } from "./task-links";
+import { TaskFiles, useTaskFiles } from "./task-files";
 import { branchName } from "@/lib/github/match";
 
 export function TaskDialog({
@@ -111,8 +112,11 @@ function TaskBody({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [allActivity, setAllActivity] = useState(false);
   const [now] = useState(() => Date.now());
+  const taskFiles = useTaskFiles(task.id);
+  // Text with an image still uploading waits for it, so its placeholder is never what's saved
+  const uploading = taskFiles.pending > 0;
 
-  const update = (patch: Partial<Task>, note?: string) => dispatch({ type: "update", id: task.id, patch, note });
+  const update =(patch: Partial<Task>, note?: string) => dispatch({ type: "update", id: task.id, patch, note });
   const setField = (field: GroupField, value: string) => {
     if (valueOf(task, field)[0] !== value) update(patchFor(field, value), noteFor(field, value));
   };
@@ -143,7 +147,7 @@ function TaskBody({
   }, [next, prev, onOpen]);
 
   const send = () => {
-    if (!comment.trim()) return;
+    if (!comment.trim() || uploading) return;
     dispatch({ type: "comment", id: task.id, body: comment.trim() });
     setComment("");
   };
@@ -165,6 +169,7 @@ function TaskBody({
   );
 
   const saveDescription = () => {
+    if (uploading) return;
     if (description !== task.description) update({ description }, "edited the description");
     setEditing(false);
   };
@@ -177,6 +182,7 @@ function TaskBody({
   const nav = "grid size-7 place-items-center text-ink-3 hover:bg-sunken hover:text-ink disabled:pointer-events-none disabled:opacity-30";
 
   return (
+    <UploadContext value={taskFiles.upload}>
     <div className="relative isolate">
       <DitherFill level={50} className="absolute inset-0 -z-10 hidden translate-x-2 translate-y-2 sm:block" />
       <div className="flex max-h-[calc(100dvh-1rem)] flex-col border-t border-ink bg-raised sm:max-h-[calc(100dvh-2rem)] sm:border">
@@ -288,7 +294,7 @@ function TaskBody({
                     >
                       Cancel
                     </Button>
-                    <Button size="sm" variant="primary" onClick={saveDescription}>
+                    <Button size="sm" variant="primary" onClick={saveDescription} disabled={uploading}>
                       Save
                     </Button>
                   </div>
@@ -369,6 +375,8 @@ function TaskBody({
               </form>
             </section>
 
+            <TaskFiles files={taskFiles.files} upload={taskFiles.upload} remove={taskFiles.remove} canEdit={canEdit} />
+
             <TaskLinks task={task} canEdit={canEdit} />
 
             <section className="mt-6">
@@ -407,7 +415,7 @@ function TaskBody({
                   <span className="hidden text-[11px] text-ink-3 sm:inline">
                     <Kbd>⌘</Kbd> <Kbd>Enter</Kbd>
                   </span>
-                  <Button size="sm" variant="primary" disabled={!comment.trim()} onClick={send}>
+                  <Button size="sm" variant="primary" disabled={!comment.trim() || uploading} onClick={send}>
                     Comment
                   </Button>
                 </div>
@@ -552,6 +560,7 @@ function TaskBody({
         </div>
       </div>
     </div>
+    </UploadContext>
   );
 }
 

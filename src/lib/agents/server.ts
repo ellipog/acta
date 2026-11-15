@@ -3,7 +3,8 @@ import { McpServer, type ToolAnnotations } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { boardIcons } from "@/lib/board-icons";
 import { githubReady } from "@/lib/github/app";
-import { actaFor, githubFilters, Problem, sortKeys, taskStatuses, type Acta } from "./acta";
+import { maxFileBytes } from "@/lib/file-links";
+import { actaFor, Content, githubFilters, Problem, sortKeys, taskStatuses, type Acta } from "./acta";
 import { accessRank, type Access, type Agent } from "./keys";
 
 const instructions = `Acta is a project manager. Work lives on boards, named "workspace/board". Each task has an id made of the board's prefix and a number, like ACT-12. A task moves todo → in_progress → review → done. Work that was dropped, such as a GitHub issue closed as not planned, goes to canceled.
@@ -16,6 +17,7 @@ How to work with it:
 5. If get_board lists github_repositories, work in the branch get_task gives (like act-12-add-csv-export) and say "Fixes ACT-12" in the pull request's description. Acta then links it, moves the task along and marks it done on merge by itself, so leave those moves to it and don't comment the link. For work that didn't name the task, link_github links it by its address. Where a repository's issues sync, they arrive as tasks on their own: don't create tasks for them, and open_github_issue turns a task into an issue.
 6. If you delete a task by mistake, restore_task brings it back. To tidy finished work away without deleting it, archive it; list_tasks with archived: true finds it again.
 7. When bringing work over from another tracker, keep its history: give create_tasks each task's created time, the time finished or dropped work closed, a shipped date for finished work, and its comments with their original author and time.
+8. Images and files: descriptions and comments can show screenshots and link files. To add one, upload it with upload_file (its bytes as base64, on a task), then put the markdown it returns, like ![shot.png](https://…), in the description (update_task) or a comment (add_comment). Attach a screenshot when you report a bug or show a UI change. People paste images too: get_task lists a task's files, and read_file shows you any Acta file url from there or from a description or comment, so look at the screenshots before you start on a task.
 
 Write titles as short imperatives ("Add CSV export") and descriptions in Markdown. Everything you do shows up live on the board, credited to the person who made this key and marked with the key's name. When you mention a task to the person, include its url.`;
 
@@ -29,7 +31,11 @@ const moment = z.string().describe("When it happened: a date, YYYY-MM-DD, or a t
 const tone = z.enum(["lapis", "pyrite", "malachite", "hematite"]);
 const githubUrl = z.string().url().describe("Its address on github.com, like https://github.com/acme/app/pull/45");
 const comment = {
-  body: z.string().min(1).max(10000).describe("Markdown"),
+  body: z
+    .string()
+    .min(1)
+    .max(10000)
+    .describe("Markdown. Show an image from upload_file with the markdown it returns, like ![shot.png](url)"),
   author: z
     .string()
     .min(1)
@@ -41,7 +47,10 @@ const comment = {
 
 const fields = {
   title: z.string().min(1).max(500),
-  description: z.string().max(20000).describe("Markdown"),
+  description: z
+    .string()
+    .max(20000)
+    .describe("Markdown. Images and files from upload_file go in with the markdown it returns"),
   status: status.describe("Where the task is. Defaults to todo."),
   priority,
   size: size.nullable().describe("Rough effort, from xs to xl. null clears it."),
@@ -92,7 +101,8 @@ function failure(message: string) {
 function run(work: (args: unknown) => Promise<unknown>) {
   return async (args: unknown) => {
     try {
-      return reply(await work(args));
+      const out = await work(args);
+      return out instanceof Content ? { content: out.blocks } : reply(out);
     } catch (error) {
       if (error instanceof Problem) return failure(error.message);
       console.error("MCP tool failed", error);
@@ -248,7 +258,7 @@ const definitions: Definition[] = [
       name: "get_task",
       title: "Get a task",
       description:
-        "Everything about one task: description, subtasks, comments, recent activity and its link. On boards linked to GitHub, also its pull requests, issue, branches and commits, and the branch name to work in.",
+        "Everything about one task: description, subtasks, files, comments, recent activity and its link. On boards linked to GitHub, also its pull requests, issue, branches and commits, and the branch name to work in. Images in the description and comments, and the task's files, can be looked at with read_file.",
       inputSchema: z.object({ board, task }),
       annotations: reads,
     },
@@ -399,11 +409,47 @@ const definitions: Definition[] = [
       need: "write",
       title: "Comment on a task",
       description:
-        "Adds a Markdown comment to a task, for progress notes, blockers, questions or links. A comment from somewhere else, such as a GitHub issue, can keep its author and time. Returns the comment's id, for edit_comment.",
+        "Adds a Markdown comment to a task, for progress notes, blockers, questions, links and screenshots (upload them with upload_file first). A comment from somewhere else, such as a GitHub issue, can keep its author and time. Returns the comment's id, for edit_comment.",
       inputSchema: z.object({ board, task, ...comment }),
       annotations: writes,
     },
     (acta, { board, task, ...c }) => acta.comment(board, task, c),
+  ),
+
+  define(
+    {
+      name: "upload_file",
+      need: "write",
+      title: "Upload an image or file",
+      description: `Uploads a screenshot, image or other file (up to ${maxFileBytes / 1024 / 1024} MB) to a task, where it's listed under its files. Returns its url and the markdown that shows it: put that in the task's description with update_task or in a comment with add_comment. PNG, JPG, GIF and WebP show as images; anything else as a link to download. Leave task out to upload before the task exists, for create_tasks; such files only reach the board's members. Files on public tasks can be seen by anyone with the roadmap.`,
+      inputSchema: z.object({
+        board,
+        task: task.optional().describe('The task it belongs to, like "ACT-12"'),
+        name: z.string().min(1).max(200).describe('Its file name, like "login-error.png"'),
+        data: z
+          .string()
+          .min(1)
+          .max(Math.ceil((maxFileBytes * 4) / 3) + 100)
+          .describe("The file's bytes, base64 encoded"),
+        content_type: z.string().max(100).optional().describe("Like image/png. Images are recognized by their bytes anyway"),
+      }),
+      annotations: writes,
+    },
+    (acta, { board, ...p }) => acta.uploadFile(board, p),
+  ),
+
+  define(
+    {
+      name: "read_file",
+      title: "Look at an image or file",
+      description:
+        "Shows an image or file uploaded to Acta: a screenshot pasted into a description or comment, or one of get_task's files. Images come back as images you can see, text files as text, and anything else as where to download it.",
+      inputSchema: z.object({
+        url: z.string().min(1).describe("The file's url, from get_task's files or a ![…](url) in a description or comment"),
+      }),
+      annotations: reads,
+    },
+    (acta, { url }) => acta.readFile(url),
   ),
 
   define(
@@ -625,7 +671,7 @@ const offered = (d: Definition) => !d.github || githubReady;
 const allowed = (agent: Agent) => definitions.filter((d) => offered(d) && accessRank[agent.access] >= accessRank[d.need]);
 
 export function actaServer(agent: Agent) {
-  const server = new McpServer({ name: "acta", title: "Acta", version: "1.0.0" }, { instructions });
+  const server = new McpServer({ name: "acta", title: "Acta", version: "1.1.0" }, { instructions });
   const acta = actaFor(agent);
   // define typed each tool's work against its own schema. A list of every tool can't carry those types, so the SDK
   // gets them without

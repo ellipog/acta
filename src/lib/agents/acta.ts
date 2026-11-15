@@ -26,6 +26,8 @@ import { roadmapTag } from "@/lib/seo";
 import { boardSlugProblem, publicHref, siteUrl, slugify } from "@/lib/slugs";
 import { can as allows, type Permissions, type Role } from "@/lib/live";
 import { accessRank, agentDb, type Access, type Agent } from "./keys";
+import { parseFileUrl, type FileInfo } from "@/lib/file-links";
+import { FileProblem, filesOf, readFile as readStoredFile, uploadFile as storeFile, type Asker } from "@/lib/files";
 
 // An agent's changes to tasks that sync with GitHub issues go to GitHub once the answer is on its way. Each request
 // asks once per board (see flushes in actaFor), since Next runs every after() at once and each flush would read
@@ -44,6 +46,21 @@ function sendToGitHub(board: string) {
 
 // A mistake the agent can fix. Its message goes back to the agent as is
 export class Problem extends Error {}
+
+/**
+ * A tool's answer that isn't JSON, like an image. MCP gets the blocks as they are, so an agent sees the picture,
+ * and the HTTP API gets json
+ */
+export class Content {
+  constructor(
+    readonly blocks: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[],
+    readonly json: unknown,
+  ) {}
+}
+
+// Images up to this size come back for the agent to look at. Past it, only where to fetch them
+const maxShownImage = 4 * 1024 * 1024;
+const maxShownText = 200_000;
 
 export const openStatuses: StatusCategory[] = ["todo", "in_progress", "review"];
 export const taskStatuses = ["todo", "in_progress", "review", "done", "canceled"] as const;
@@ -340,6 +357,7 @@ function dbProblem(error: { code?: string; message: string }) {
 export function actaFor(agent: Agent) {
   const db = agentDb();
   const can = (need: Access) => accessRank[agent.access] >= accessRank[need];
+  const asker: Asker = { userId: agent.userId, workspaces: agent.workspaces, agentWrites: can("write") };
   const fields = async () => {
     const [archived, own] = await Promise.all([archiveReady(db), customReady(db)]);
     return `${listFields}${archived ? ", archived_at" : ""}${own ? ", custom" : ""}`;
@@ -954,11 +972,12 @@ export function actaFor(agent: Agent) {
         .order("updated_at", { ascending: false })
         .limit(20),
       db.from("github_repos").select("id", { count: "exact", head: true }).eq("board_id", b.id),
+      filesOf(b.id, n, siteUrl).catch(() => [] as FileInfo[]),
     ]);
   }
 
   async function detail(b: Board, t: TaskRow, read: ReturnType<typeof around>) {
-    const [who, { data: comments }, { data: activity }, { data: links }, { count: repos }] = await read;
+    const [who, { data: comments }, { data: activity }, { data: links }, { count: repos }, files] = await read;
     const issue = (links ?? []).find((l) => l.kind === "issue");
     const github = (links ?? []).map((l) =>
       compact({
@@ -978,6 +997,10 @@ export function actaFor(agent: Agent) {
       url: taskUrl(b, t.number),
       description: t.description || undefined,
       subtasks: t.subtasks.length ? t.subtasks.map((s) => ({ id: s.id, title: s.title, done: s.done })) : undefined,
+      // Images and files on the task. read_file shows one, and so it does any Acta file a description or comment links
+      files: files.length
+        ? files.map((f) => ({ name: f.name, type: f.type, size: f.size, url: f.url, uploaded: f.uploaded }))
+        : undefined,
       comments: (comments ?? []).length
         ? (comments ?? []).map((c) =>
             compact({
@@ -1266,6 +1289,58 @@ export function actaFor(agent: Agent) {
         [n],
       );
       return { comment: made.id, task: taskId(b, n), url: taskUrl(b, n) };
+    },
+
+    async uploadFile(ref: string, p: { task?: string; name: string; data: string; content_type?: string }) {
+      const b = await board(ref);
+      const n = p.task ? numberOf(b, p.task) : 0;
+      const data = p.data.replace(/^data:[^,]*;base64,/, "").replace(/\s+/g, "");
+      if (!/^[A-Za-z0-9+/_-]*={0,2}$/.test(data)) throw new Problem("data isn’t base64. Send the file’s bytes as base64.");
+      const bytes = new Uint8Array(Buffer.from(data, "base64"));
+      try {
+        const f = await storeFile(asker, { board: b.id, task: n || null, name: p.name, type: p.content_type, bytes }, siteUrl);
+        return {
+          ...f,
+          task: n ? taskId(b, n) : undefined,
+          next: n
+            ? `Put markdown in the task's description or a comment to show it there. It's also listed under files in get_task.`
+            : `Put markdown in a description or comment on ${b.ref}. With no task it only reaches members, not the public roadmap.`,
+        };
+      } catch (error) {
+        if (error instanceof FileProblem) throw new Problem(error.message);
+        throw error;
+      }
+    },
+
+    async readFile(url: string) {
+      const where = parseFileUrl(url.trim());
+      if (!where)
+        throw new Problem(
+          "That isn’t an Acta file. Use a url from get_task’s files, or one in a description or comment, like https://acta.aaenz.no/api/files/….",
+        );
+      const found = await readStoredFile(asker, where.board, where.task, where.id, where.name);
+      if (!found) throw new Problem("There’s no such file, or this key can’t reach its board.");
+      const { blob } = found;
+      const type = blob.type || "application/octet-stream";
+      const about = { name: where.name, type, size: blob.size, url };
+      if (type.startsWith("image/") && type !== "image/avif" && blob.size <= maxShownImage) {
+        const data = Buffer.from(await blob.arrayBuffer()).toString("base64");
+        return new Content(
+          [
+            { type: "text", text: JSON.stringify(about) },
+            { type: "image", data, mimeType: type },
+          ],
+          { ...about, data },
+        );
+      }
+      if (/^(text\/|application\/json)/.test(type) && blob.size <= maxShownText) {
+        const text = await blob.text();
+        return new Content([{ type: "text", text: JSON.stringify({ ...about, text }) }], { ...about, text });
+      }
+      return {
+        ...about,
+        note: "Too large or not a kind that can be shown here. Download it from url with this key as a bearer token.",
+      };
     },
 
     // Changes several tasks as if one after another, in a handful of round trips: the tasks are read at once, each
