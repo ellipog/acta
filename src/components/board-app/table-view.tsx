@@ -245,10 +245,15 @@ function TableViewBody({
   const version = boardMetaVersion();
   const opts = useMemo(() => cellOptions(version), [version]);
 
+  // Follows the tasks and columns rather than the whole board, so a change elsewhere on it, like a vote on an idea,
+  // doesn't sort the table again
+  const { columns: boardColumns, tasks: boardTasks } = state;
   const rows = useMemo(() => {
-    const all = statuses.flatMap((s) => state.columns[s.id].map((id) => state.tasks[id])).filter((t) => t && visible(t));
-    return sort ? [...all].sort((a, b) => compareBy(sort.key)(a, b) * sort.dir) : all;
-  }, [state, visible, sort]);
+    const all = statuses.flatMap((s) => boardColumns[s.id].map((id) => boardTasks[id])).filter((t) => t && visible(t));
+    if (!sort) return all;
+    const by = compareBy(sort.key);
+    return all.sort((a, b) => by(a, b) * sort.dir);
+  }, [boardColumns, boardTasks, visible, sort]);
 
   const groups = useMemo<Group[]>(() => {
     if (!rows.length && filtered) return [];
@@ -335,16 +340,13 @@ function TableViewBody({
     else dispatch({ type: "bulk", ids: changed, patch, note });
   };
 
-  const setLabels = (t: Task, next: string[]) => {
+  const labelNote = (t: Task, next: string[]) => {
     const added = next.find((l) => !t.labels.includes(l));
     const removed = t.labels.find((l) => !next.includes(l));
-    dispatch({
-      type: "update",
-      id: t.id,
-      patch: { labels: next },
-      note: added ? `added label ${added}` : removed ? `removed label ${removed}` : undefined,
-    });
+    return added ? `added label ${added}` : removed ? `removed label ${removed}` : undefined;
   };
+  const setLabels = (t: Task, next: string[]) =>
+    dispatch({ type: "update", id: t.id, patch: { labels: next }, note: labelNote(t, next) });
 
   const setDate = (field: "start" | "due", ids: string[], value: string | undefined) => {
     const name = field === "due" ? "due date" : "start date";
@@ -355,13 +357,16 @@ function TableViewBody({
   };
   const setDue = (ids: string[], due: string | undefined) => setDate("due", ids, due);
 
+  // Each task keeps its other fields, so each gets a change of its own, sent together as one step of undo
   const setCustom = (ids: string[], f: CustomField, value: CustomValue | undefined) => {
     const shown = Array.isArray(value) ? value.join(", ") : f.type === "date" && value ? formatDue(String(value)) : value;
     const note = value === undefined ? `cleared ${f.name}` : `set ${f.name} to ${shown}`;
-    for (const id of ids) {
-      const t = state.tasks[id];
-      if (t) dispatch({ type: "update", id, patch: { custom: withCustom(t, f.id, value) }, note });
-    }
+    const held = ids.filter((id) => state.tasks[id]);
+    if (held.length === 1)
+      return dispatch({ type: "update", id: held[0], patch: { custom: withCustom(state.tasks[held[0]], f.id, value) }, note });
+    if (!held.length) return;
+    const each = Object.fromEntries(held.map((id) => [id, { patch: { custom: withCustom(state.tasks[id], f.id, value) } }]));
+    dispatch({ type: "bulk", ids: held, patch: {}, note, each });
   };
 
   const rename = (t: Task, title: string) => {
@@ -413,8 +418,10 @@ function TableViewBody({
       const wanted = clean.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
       const next = labels.filter((l) => wanted.includes(l.id.toLowerCase())).map((l) => l.id);
       if (wanted.length && !next.length) return fail();
-      for (const id of ids) setLabels(state.tasks[id], next);
-      return;
+      const held = ids.filter((id) => state.tasks[id]);
+      if (held.length <= 1) return held.length ? setLabels(state.tasks[held[0]], next) : undefined;
+      const each = Object.fromEntries(held.map((id) => [id, { note: labelNote(state.tasks[id], next) }]));
+      return dispatch({ type: "bulk", ids: held, patch: { labels: next }, note: "set labels", each });
     }
     const f = fieldOf(col);
     if (f) {

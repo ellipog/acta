@@ -148,10 +148,17 @@ const why = (error: SendError) =>
       ? "The database didn’t accept it."
       : error.message;
 
-/** Sends what changed between `base` and `target`. Never throws: problems come back in the result */
-export async function saveChanges(base: BoardState, target: BoardState, send: Send, prefix: string): Promise<SaveResult> {
+/** Sends what changed between `base` and `target`, which `diff` is when the caller has worked it out already. Never
+ * throws: problems come back in the result */
+export async function saveChanges(
+  base: BoardState,
+  target: BoardState,
+  send: Send,
+  prefix: string,
+  diff?: Diff,
+): Promise<SaveResult> {
   const result: SaveResult = { base, renamed: [], refused: [], saved: [], goal: target, waiting: false };
-  const all = diffBoards(base, target);
+  const all = diff ?? diffBoards(base, target);
   if (emptyDiff(all)) return result;
 
   let goal = target;

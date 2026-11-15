@@ -707,7 +707,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
   const flush = useCallback(async () => {
     if (!boardId || !base.current || inflight.current) return;
     const target = latest.current;
-    const diff = diffBoards(base.current, target);
+    const from = base.current;
+    const diff = diffBoards(from, target);
     if (emptyDiff(diff)) {
       setStatus("saved");
       return;
@@ -733,6 +734,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       target,
       async (changes) => supabase.rpc("apply_board_changes", { p_board: boardId, p_changes: changes }),
       prefix,
+      // Worked out once, unless what's saved moved on while the client loaded
+      base.current === from ? diff : undefined,
     );
     inflight.current = false;
 

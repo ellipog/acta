@@ -1098,7 +1098,15 @@ export type BoardAction =
       note?: string;
     }
   | { type: "update"; id: string; patch: Partial<Task>; note?: string }
-  | { type: "bulk"; ids: string[]; patch: Partial<Task>; note: string }
+  // The same change to several tasks, as one step of undo. each adds to the change or replaces the note for a task,
+  // for a paste that keeps what else each task has, like the rest of its fields
+  | {
+      type: "bulk";
+      ids: string[];
+      patch: Partial<Task>;
+      note: string;
+      each?: Record<string, { patch?: Partial<Task>; note?: string }>;
+    }
   | { type: "add"; status: StatusCategory; title: string; patch?: Partial<Task>; note?: string }
   | { type: "delete"; ids: string[] }
   | { type: "undelete"; items: { task: Task; index: number }[] }
@@ -1119,9 +1127,8 @@ const log = (task: Task, text: string): Task => ({
   activity: [...task.activity, { id: newId(), at: Date.now(), who: me.name, text, local: true }],
 });
 
-function patchTask(state: BoardState, id: string, change: Partial<Task>, note?: string): BoardState {
-  const prev = state.tasks[id];
-  if (!prev) return state;
+/** A task with a change made to it, and the status it moves to when the change moves it */
+function patchedTask(prev: Task, change: Partial<Task>, note?: string) {
   const patch = fitTask(change);
   let task = { ...prev, ...patch };
   const to = patch.status;
@@ -1133,6 +1140,13 @@ function patchTask(state: BoardState, id: string, change: Partial<Task>, note?: 
     else if (!closed(prev.status)) task.closed = new Date().toISOString();
   }
   if (note) task = log(task, note);
+  return { task, to };
+}
+
+function patchTask(state: BoardState, id: string, change: Partial<Task>, note?: string): BoardState {
+  const prev = state.tasks[id];
+  if (!prev) return state;
+  const { task, to } = patchedTask(prev, change, note);
   let columns = state.columns;
   // A drag has already placed the card in its new column
   if (to && to !== prev.status && !columns[to].includes(prev.id)) {
@@ -1143,6 +1157,42 @@ function patchTask(state: BoardState, id: string, change: Partial<Task>, note?: 
     };
   }
   return { ...state, columns, tasks: { ...state.tasks, [id]: task } };
+}
+
+/**
+ * The same as patching each task in turn, but the board's tasks and columns are copied once rather than once a
+ * task, which on a big board made archiving a long column take a fifth of a second. Cards that change status join
+ * the end of their new column in the order given
+ */
+function patchMany(state: BoardState, action: Extract<BoardAction, { type: "bulk" }>): BoardState {
+  let tasks: Record<string, Task> | null = null;
+  const leaving = new Map<StatusCategory, Set<string>>();
+  const arriving = new Map<StatusCategory, { held: Set<string>; added: string[] }>();
+  for (const id of action.ids) {
+    const prev = (tasks ?? state.tasks)[id];
+    if (!prev) continue;
+    const own = action.each?.[id];
+    const note = own && "note" in own ? own.note : action.note;
+    const { task, to } = patchedTask(prev, own?.patch ? { ...action.patch, ...own.patch } : action.patch, note);
+    tasks ??= { ...state.tasks };
+    tasks[id] = task;
+    if (!to || to === prev.status) continue;
+    let into = arriving.get(to);
+    if (!into) arriving.set(to, (into = { held: new Set(state.columns[to]), added: [] }));
+    // A drag has already placed the card in its new column
+    if (into.held.has(id)) continue;
+    into.held.add(id);
+    into.added.push(id);
+    let from = leaving.get(prev.status);
+    if (!from) leaving.set(prev.status, (from = new Set()));
+    from.add(id);
+  }
+  if (!tasks) return state;
+  if (!arriving.size) return { ...state, tasks };
+  const columns = { ...state.columns };
+  for (const [s, ids] of leaving) columns[s] = columns[s].filter((x) => !ids.has(x));
+  for (const [s, { added }] of arriving) if (added.length) columns[s] = [...columns[s], ...added];
+  return { ...state, columns, tasks };
 }
 
 export function boardReducer(state: BoardState, action: BoardAction): BoardState {
@@ -1181,7 +1231,7 @@ function reduce(state: BoardState, action: BoardAction): BoardState {
     }
 
     case "bulk":
-      return action.ids.reduce((s, id) => patchTask(s, id, action.patch, action.note), state);
+      return patchMany(state, action);
 
     case "add": {
       const id = nextTaskId(state);
