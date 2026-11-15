@@ -268,21 +268,23 @@ const statusOrder = Object.fromEntries(statuses.map((s, i) => [s.id, i]));
 const sizeRank = (t: Task) => (t.size ? sizes.findIndex((z) => z.id === t.size) : sizes.length);
 const num = (id: string) => Number(id.split("-")[1]);
 const progress = (t: Task) => (t.subtasks.length ? t.subtasks.filter((s) => s.done).length / t.subtasks.length : -1);
+// The same order as localeCompare, without setting up the comparison again for each of the thousands a sort makes
+const collate = new Intl.Collator().compare;
 
 export const compare: Record<BuiltinColumn | "id", (a: Task, b: Task) => number> = {
   id: (a, b) => num(a.id) - num(b.id),
-  title: (a, b) => a.title.localeCompare(b.title),
+  title: (a, b) => collate(a.title, b.title),
   status: (a, b) => statusOrder[a.status] - statusOrder[b.status],
   priority: (a, b) => priorityRank[a.priority] - priorityRank[b.priority],
   size: (a, b) => sizeRank(a) - sizeRank(b),
-  project: (a, b) => (a.project ?? "~").localeCompare(b.project ?? "~"),
-  start: (a, b) => (a.start ?? "9999").localeCompare(b.start ?? "9999"),
-  due: (a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999"),
-  assignee: (a, b) => (personById(a.assignee)?.name ?? "~").localeCompare(personById(b.assignee)?.name ?? "~"),
-  labels: (a, b) => (a.labels[0] ?? "~").localeCompare(b.labels[0] ?? "~"),
+  project: (a, b) => collate(a.project ?? "~", b.project ?? "~"),
+  start: (a, b) => collate(a.start ?? "9999", b.start ?? "9999"),
+  due: (a, b) => collate(a.due ?? "9999", b.due ?? "9999"),
+  assignee: (a, b) => collate(personById(a.assignee)?.name ?? "~", personById(b.assignee)?.name ?? "~"),
+  labels: (a, b) => collate(a.labels[0] ?? "~", b.labels[0] ?? "~"),
   subtasks: (a, b) => progress(a) - progress(b),
   updated: (a, b) => updatedAt(b) - updatedAt(a),
-  updatedBy: (a, b) => (updatedBy(a)?.who ?? "~").localeCompare(updatedBy(b)?.who ?? "~"),
+  updatedBy: (a, b) => collate(updatedBy(a)?.who ?? "~", updatedBy(b)?.who ?? "~"),
 };
 
 // Empty values go last, the same as the board's own fields
@@ -293,7 +295,7 @@ function compareField(f: CustomField) {
     if (x === undefined || y === undefined) return (x === undefined ? 1 : 0) - (y === undefined ? 1 : 0);
     if (typeof x === "number" && typeof y === "number") return x - y;
     if (f.type === "select" && f.options) return f.options.indexOf(String(x)) - f.options.indexOf(String(y));
-    return customText(a, f).localeCompare(customText(b, f));
+    return collate(customText(a, f), customText(b, f));
   };
 }
 

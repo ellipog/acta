@@ -133,7 +133,12 @@ const wireName: Record<SyncedField, string> = {
 export const taskKey = (prefix: string, n: number) => `${prefix}-${n}`;
 export const taskNumber = (id: string) => Number(id.slice(id.lastIndexOf("-") + 1));
 
-const same = (a: unknown, b: unknown) => a === b || JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+// Plain values compare as they are, with a missing one the same as null. Lists and objects compare by their JSON
+const same = (a: unknown, b: unknown) =>
+  a === b ||
+  (typeof a !== "object" || typeof b !== "object" || a === null || b === null
+    ? (a ?? null) === (b ?? null)
+    : JSON.stringify(a) === JSON.stringify(b));
 const isUuid = (id?: string) => !!id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
 function wireValue(task: Task, f: SyncedField) {
@@ -281,14 +286,19 @@ export function diffBoards(base: BoardState, next: BoardState): Diff {
       if (Boolean(a.voted) !== Boolean(b.voted)) (b.voted ? d.voted : d.unvoted).push(id);
       if (a.position !== b.position && Number.isFinite(b.position)) d.placed.push(id);
     }
-    const before = own(a?.thread);
-    const after = own(b.thread);
-    for (const [cid, c] of after) if (!before.has(cid)) d.comments.push({ task: id, comment: c });
-    for (const cid of before.keys()) if (!after.has(cid)) d.uncomments.push({ task: id, id: cid });
-    const was = own(a?.activity);
-    const now = own(b.activity);
-    for (const [aid, e] of now) if (!was.has(aid)) d.activity.push({ task: id, entry: e });
-    for (const aid of was.keys()) if (!now.has(aid)) d.unactivity.push({ task: id, id: aid });
+    // A thread or a list of activity left as it was has nothing to send
+    if (a?.thread !== b.thread) {
+      const before = own(a?.thread);
+      const after = own(b.thread);
+      for (const [cid, c] of after) if (!before.has(cid)) d.comments.push({ task: id, comment: c });
+      for (const cid of before.keys()) if (!after.has(cid)) d.uncomments.push({ task: id, id: cid });
+    }
+    if (a?.activity !== b.activity) {
+      const was = own(a?.activity);
+      const now = own(b.activity);
+      for (const [aid, e] of now) if (!was.has(aid)) d.activity.push({ task: id, entry: e });
+      for (const aid of was.keys()) if (!now.has(aid)) d.unactivity.push({ task: id, id: aid });
+    }
   }
   for (const id of Object.keys(base.tasks)) if (!next.tasks[id]) d.deleted.push(id);
 

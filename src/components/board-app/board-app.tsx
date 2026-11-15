@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import {
+  memo,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -612,6 +613,23 @@ export function BoardApp({
     };
   }, [full]);
 
+  // The sidebar's handlers stay the same between keys typed in the search, so it doesn't draw again for each
+  const openFromSidebar = useCallback((id: string) => {
+    setNavOpen(false);
+    setOpenId(id);
+  }, []);
+  const closeNav = useCallback(() => setNavOpen(false), []);
+  const keepBoard = useCallback(() => {
+    if (live) rememberBoard(live, state, knownAt());
+  }, [live, state, knownAt]);
+  const resetDemo = useCallback(() => {
+    dispatch({ type: "reset", state: seedBoard() });
+    setPrefs({ ...defaultPrefs, view: prefs.view });
+    setQuery("");
+    setOpenId(null);
+  }, [dispatch, setPrefs, prefs.view]);
+  const findTasks = useCallback(() => setAddingDone(true), []);
+
   const sidebar = (
     <Sidebar
       full={full}
@@ -620,20 +638,10 @@ export function BoardApp({
       counts={counts}
       prefs={prefs}
       setPrefs={setPrefs}
-      onOpenTask={(id) => {
-        setNavOpen(false);
-        setOpenId(id);
-      }}
-      onNavigate={() => setNavOpen(false)}
-      keep={() => {
-        if (live) rememberBoard(live, state, knownAt());
-      }}
-      onReset={() => {
-        dispatch({ type: "reset", state: seedBoard() });
-        setPrefs({ ...defaultPrefs, view: prefs.view });
-        setQuery("");
-        setOpenId(null);
-      }}
+      onOpenTask={openFromSidebar}
+      onNavigate={closeNav}
+      keep={keepBoard}
+      onReset={resetDemo}
     />
   );
 
@@ -999,7 +1007,7 @@ export function BoardApp({
                 dispatch={dispatch}
                 visible={onRoadmap}
                 onOpen={setOpenId}
-                onFindTasks={live ? () => setAddingDone(true) : undefined}
+                onFindTasks={live ? findTasks : undefined}
                 boardId={liveId}
                 canManage={allowed("roadmap")}
                 metaVersion={metaVersion}
@@ -1189,7 +1197,7 @@ function FilterMenuItems({
   );
 }
 
-function Sidebar({
+const Sidebar = memo(function Sidebar({
   full,
   live,
   state,
@@ -1320,7 +1328,7 @@ function Sidebar({
       </div>
     </>
   );
-}
+});
 
 function SaveState({ status }: { status: SaveStatus }) {
   const label = { saved: "Saved", saving: "Saving", offline: "Offline, retrying", error: "Couldn’t save" }[status];
