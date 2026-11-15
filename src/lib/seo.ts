@@ -30,7 +30,8 @@ export async function publicRoadmap(workspace: string, board: string): Promise<P
   }
 }
 
-async function hourlyRoadmap(workspace: string, board: string): Promise<PublicResult> {
+/** The same, but a failed read throws, so a cache built on it never keeps the failure */
+export async function hourlyRoadmap(workspace: string, board: string): Promise<PublicResult> {
   "use cache";
   cacheLife("hours");
   cacheTag(roadmapTag(workspace, board));
