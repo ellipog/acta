@@ -208,8 +208,16 @@ async function note(r: Repo, numbers: number[], text: string, actor: string | nu
 
 // Pull requests
 
+// What a pull request's link and its tasks follow: its title, body, state and draft. Other actions, like a push to its
+// branch, a label or a review request, change none of them
+const prActions = new Set(["opened", "edited", "closed", "reopened", "ready_for_review", "converted_to_draft"]);
+
 async function onPullRequest(r: Repo, p: Payload) {
   const pr = p.pull_request;
+  // Every push to its branch comes as one of those. A pull request already linked has nothing to learn from it, and
+  // writing its link again would send a change to every open board. One opened before the repository was linked
+  // still gets its link this way
+  if (!prActions.has(p.action) && (await linksFor(r, "pr", String(pr.number))).length) return;
   const prefix = r.board.prefix;
   const closes = new Set([...closingNumbers(pr.body, prefix), ...closingNumbers(pr.title, prefix)]);
   // The branch, the title or a closing keyword make it this task's pull request. A mention elsewhere only links it
@@ -274,25 +282,34 @@ async function commentOn(r: Repo, number: number, tasks: TaskRow[]) {
   await db().from("github_comments").upsert({ repo_id: r.id, number, comment_id: made.id });
 }
 
+// Notes one thing about pull requests' links, like their checks or review, on those it isn't noted on already. Each
+// write is a change sent to every open board, so a check suite that ends the way the last one did writes nothing
+async function noteOnLinks(r: Repo, refs: string[], key: string, value: string) {
+  const links = await linksAmong(r, "pr", [...new Set(refs)]);
+  const at = new Date().toISOString();
+  await Promise.all(
+    links
+      .filter((l) => l.extra?.[key] !== value)
+      .map((l) =>
+        db()
+          .from("task_links")
+          .update({ extra: { ...l.extra, [key]: value }, updated_at: at })
+          .eq("id", l.id),
+      ),
+  );
+}
+
 async function onReview(r: Repo, p: Payload) {
   const review = String(p.review?.state ?? "").toLowerCase();
   if (review !== "approved" && review !== "changes_requested") return;
-  for (const l of await linksFor(r, "pr", String(p.pull_request.number)))
-    await db()
-      .from("task_links")
-      .update({ extra: { ...l.extra, review }, updated_at: new Date().toISOString() })
-      .eq("id", l.id);
+  await noteOnLinks(r, [String(p.pull_request.number)], "review", review);
 }
 
 async function onChecks(r: Repo, p: Payload) {
   const suite = p.check_suite;
   if (p.action !== "completed" || !suite) return;
-  for (const pr of suite.pull_requests ?? [])
-    for (const l of await linksFor(r, "pr", String(pr.number)))
-      await db()
-        .from("task_links")
-        .update({ extra: { ...l.extra, checks: suite.conclusion ?? "neutral" }, updated_at: new Date().toISOString() })
-        .eq("id", l.id);
+  const refs = (suite.pull_requests ?? []).map((pr: Payload) => String(pr.number));
+  await noteOnLinks(r, refs, "checks", suite.conclusion ?? "neutral");
 }
 
 // Branches and commits
@@ -381,12 +398,33 @@ async function createFromIssues(r: Repo, issues: Payload[], withComments: boolea
   const isPublic = r.private ? false : pageFrom(r.board.name, r.board.slug, r.board.page).newTasksPublic;
   const names = (r.board.labels ?? []).map((l) => l.id);
   const ends = new Map<StatusCategory, number>();
+  // Who each GitHub account is here, asked once an account rather than once an issue
+  const members = new Map<string, Promise<string | null>>();
+  const memberOf = (user: Payload | undefined) => {
+    if (!user?.id) return Promise.resolve(null);
+    const key = String(user.id);
+    if (!members.has(key)) members.set(key, memberFor(r, user));
+    return members.get(key)!;
+  };
   for (let i = 0; i < issues.length; i += 25) {
     const batch = issues.slice(i, i + 25);
     const created: Record<string, unknown>[] = [];
     const comments: Record<string, unknown>[] = [];
     const activity: Record<string, unknown>[] = [];
-    for (const issue of batch) {
+    // The batch's people and comments are read before it's put together, side by side rather than one issue after
+    // another. Comments are read a few issues at a time, to stay inside GitHub's limits
+    const assignees = await Promise.all(batch.map((issue) => memberOf(issue.assignee ?? undefined)));
+    const threads: Payload[][] = batch.map(() => []);
+    if (withComments) {
+      const wanted = batch.map((issue, j) => ({ issue, j })).filter(({ issue }) => issue.comments > 0);
+      for (let k = 0; k < wanted.length; k += 5)
+        await Promise.all(
+          wanted.slice(k, k + 5).map(async ({ issue, j }) => {
+            threads[j] = await githubAll<Payload>(r.installation_id, `/repos/${r.full_name}/issues/${issue.number}/comments`, 100);
+          }),
+        );
+    }
+    for (const [j, issue] of batch.entries()) {
       const status = issueStatus(issue as { state: string });
       if (!ends.has(status)) ends.set(status, await columnEnd(r, status));
       const position = ends.get(status)!;
@@ -401,7 +439,7 @@ async function createFromIssues(r: Repo, issues: Payload[], withComments: boolea
         description: String(issue.body ?? "").slice(0, 20000),
         subtasks: [],
         public: isPublic,
-        assignee: await memberFor(r, issue.assignee ?? undefined),
+        assignee: assignees[j],
         shipped_on: status === "done" ? String(issue.closed_at ?? new Date().toISOString()).slice(0, 10) : null,
         position,
         created_at: issue.created_at,
@@ -414,30 +452,32 @@ async function createFromIssues(r: Repo, issues: Payload[], withComments: boolea
         text: `brought over issue #${issue.number} from ${r.full_name}`,
         created_at: issue.created_at,
       });
-      if (withComments && issue.comments > 0)
-        for (const c of await githubAll<Payload>(r.installation_id, `/repos/${r.full_name}/issues/${issue.number}/comments`, 100))
-          if (c.user?.login !== botLogin())
-            comments.push({
-              id: randomUUID(),
-              number,
-              body: String(c.body ?? "").slice(0, 10000) || "(empty)",
-              author_name: String(c.user?.login ?? "GitHub").slice(0, 60),
-              created_at: c.created_at,
-            });
+      for (const c of threads[j])
+        if (c.user?.login !== botLogin())
+          comments.push({
+            id: randomUUID(),
+            number,
+            body: String(c.body ?? "").slice(0, 10000) || "(empty)",
+            author_name: String(c.user?.login ?? "GitHub").slice(0, 60),
+            created_at: c.created_at,
+          });
     }
     const { moved } = await apply(r, null, { created, comments, activity });
     const at = new Date().toISOString();
-    for (const [j, issue] of batch.entries()) {
-      const was = created[j].number as number;
-      const number = moved[String(was)] ?? was;
-      await link(r, [number], "issue", String(issue.number), {
-        url: issue.html_url,
-        title: issue.title,
-        state: issue.state,
-        author: issue.user?.login,
-        extra: { github: { title: at, status: at, labels: at } } satisfies FieldTimes,
-      });
-    }
+    // Each issue's link is its own, so they're written side by side
+    await Promise.all(
+      batch.map((issue, j) => {
+        const was = created[j].number as number;
+        const number = moved[String(was)] ?? was;
+        return link(r, [number], "issue", String(issue.number), {
+          url: issue.html_url,
+          title: issue.title,
+          state: issue.state,
+          author: issue.user?.login,
+          extra: { github: { title: at, status: at, labels: at } } satisfies FieldTimes,
+        });
+      }),
+    );
   }
 }
 

@@ -342,6 +342,30 @@ test("list_tasks and search_tasks bring each task's pull requests along", async 
   expect(db.calls).not.toContain("select task_links");
 });
 
+test("a GitHub filter keeps the tasks whose pull requests match, in as few round trips", async () => {
+  db.tables.task_links = [
+    { board_id: boardId, number: 1, kind: "pr", ref: "45", state: "open", extra: { checks: "failure" }, updated_at: "2026-10-25T09:00:00+00:00" },
+    { board_id: boardId, number: 5, kind: "pr", ref: "50", state: "merged", extra: {}, updated_at: "2026-10-23T09:00:00+00:00" },
+  ];
+  db.rounds = 0;
+  const failing = await actaFor(agent).tasks(ref, { ...everything, github: "checks_failing" });
+  expect(failing.tasks.map((t) => t.id)).toEqual(["ACT-1"]);
+  const listedRounds = db.rounds;
+  db.rounds = 0;
+  const found = await actaFor(agent).searchAll({ ...everything, github: "checks_failing" });
+  expect(found.tasks.map((t) => t.id)).toEqual(["ACT-1"]);
+  const searchRounds = db.rounds;
+  const without = await actaFor(agent).tasks(ref, { ...everything, github: "no_pull_request" });
+  expect(without.tasks.map((t) => t.id)).not.toContain("ACT-1");
+  expect(without.tasks.map((t) => t.id)).not.toContain("ACT-5");
+  // The board, then the pull requests with the people, then the list; and for search the workspaces, the boards,
+  // then the pull requests, then the list
+  expect([listedRounds, searchRounds]).toEqual([3, 4]);
+  // Nothing matching answers without reading the tasks
+  db.tables.task_links = [];
+  expect((await actaFor(agent).tasks(ref, { github: "open_pull_request" })).tasks).toEqual([]);
+});
+
 test("list_activity brings each line's task title with it", async () => {
   db.rows("activity").push(
     { board_id: boardId, number: 2, actor: sam, text: "moved it to Done", via: null, created_at: "2026-10-21T09:00:00+00:00" },
