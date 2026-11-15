@@ -192,15 +192,17 @@ function TimelineViewBody({
     [state, visible, customGroups],
   );
 
-  const order = (a: Task, b: Task) => {
-    const ra = span(a);
-    const rb = span(b);
-    if (!ra || !rb) return ra ? -1 : rb ? 1 : 0;
-    return ra.s.localeCompare(rb.s) || ra.d.localeCompare(rb.d);
-  };
-
   const groups = useMemo(() => {
     if (!rows.length) return [];
+    // Each task's span is worked out once rather than twice for every comparison. Dates are ISO, so they compare as
+    // they are
+    const spans = new Map(rows.map((t) => [t.id, span(t)]));
+    const order = (a: Task, b: Task) => {
+      const ra = spans.get(a.id);
+      const rb = spans.get(b.id);
+      if (!ra || !rb) return ra ? -1 : rb ? 1 : 0;
+      return ra.s < rb.s ? -1 : ra.s > rb.s ? 1 : ra.d < rb.d ? -1 : ra.d > rb.d ? 1 : 0;
+    };
     if (customGroups)
       return customGroups
         .filter((g) => g.rows.length)
@@ -242,11 +244,15 @@ function TimelineViewBody({
   }, [rows, prefs.grouping, customGroups, readOnly, shelves]);
 
   const { first, days } = useMemo(() => {
-    const dates = (readOnly ? rows : Object.values(state.tasks)).flatMap(
-      (t) => [t.start, t.due].filter(Boolean) as string[],
-    );
-    const lo = [...dates, addMonths(today, -3)].sort()[0];
-    const hi = [...dates, addMonths(today, 9)].sort().at(-1)!;
+    // The earliest and latest date, found in one pass rather than by sorting them all
+    let lo = addMonths(today, -3);
+    let hi = addMonths(today, 9);
+    for (const t of readOnly ? rows : Object.values(state.tasks))
+      for (const d of [t.start, t.due]) {
+        if (!d) continue;
+        if (d < lo) lo = d;
+        if (d > hi) hi = d;
+      }
     const start = addDays(monthStart(lo), -weekday(monthStart(lo)));
     const end = addDays(monthEnd(hi), 7);
     return { first: start, days: diffDays(start, end) + 1 };
@@ -340,17 +346,34 @@ function TimelineViewBody({
     () => groups.flatMap((g) => (prefs.collapsed.includes(g.key) ? [] : g.rows)),
     [groups, prefs.collapsed],
   );
-  useLayoutEffect(() => {
+  // Worked out when the bars change, not each day a drag passes: a drag moves one bar, which is put in its place
+  // in the effect below rather than every bar's dates being read again
+  const bars = useMemo(() => {
     const ids: string[] = [];
     const from: number[] = [];
     const to: number[] = [];
+    const index = new Map<string, number>();
     for (const t of shown) {
       const r = span(t);
       if (!r) continue;
-      const live = drag?.id === t.id ? shiftedSpan(t, drag) : r;
+      index.set(t.id, ids.length);
       ids.push(t.id);
-      from.push(diffDays(first, live.s) * ppd);
-      to.push(diffDays(first, live.d) * ppd + ppd);
+      from.push(diffDays(first, r.s) * ppd);
+      to.push(diffDays(first, r.d) * ppd + ppd);
+    }
+    return { ids, from, to, index };
+  }, [shown, first, ppd]);
+  useLayoutEffect(() => {
+    const { ids } = bars;
+    let { from, to } = bars;
+    const dragged = drag ? bars.index.get(drag.id) : undefined;
+    const task = drag && shown.find((t) => t.id === drag.id);
+    if (drag && task && dragged !== undefined) {
+      const live = shiftedSpan(task, drag);
+      from = [...from];
+      to = [...to];
+      from[dragged] = diffDays(first, live.s) * ppd;
+      to[dragged] = diffDays(first, live.d) * ppd + ppd;
     }
     measure.current = () => {
       const el = scrollRef.current;
@@ -366,7 +389,7 @@ function TimelineViewBody({
       setEdges((prev) => (sameEdges(prev, next) ? prev : next));
     };
     measure.current();
-  }, [shown, drag, first, ppd]);
+  }, [bars, shown, drag, first, ppd]);
 
   const handlers: RowApi = {
     open: onOpen,
@@ -398,7 +421,28 @@ function TimelineViewBody({
     [],
   );
 
-  const unscheduled = rows.filter((t) => !span(t)).length;
+  const unscheduled = useMemo(() => rows.filter((t) => !span(t)).length, [rows]);
+  // Each group's points and the dates it spans, for its header, worked out when the groups change rather than each
+  // time a header is drawn
+  const stats = useMemo(
+    () =>
+      new Map(
+        groups.map((g) => {
+          let pts = 0;
+          let lo: string | undefined;
+          let hi: string | undefined;
+          for (const t of g.rows) {
+            pts += t.size ? sizePoints[t.size] : 0;
+            const r = span(t);
+            if (!r) continue;
+            if (!lo || r.s < lo) lo = r.s;
+            if (!hi || r.d > hi) hi = r.d;
+          }
+          return [g.key, { pts, lo, hi }];
+        }),
+      ),
+    [groups],
+  );
   const toggle = (key: string) =>
     setPrefs({
       collapsed: prefs.collapsed.includes(key) ? prefs.collapsed.filter((k) => k !== key) : [...prefs.collapsed, key],
@@ -420,15 +464,7 @@ function TimelineViewBody({
 
   const header = (g: (typeof groups)[number]) => {
     const collapsed = prefs.collapsed.includes(g.key);
-    const pts = g.rows.reduce((sum, t) => sum + (t.size ? sizePoints[t.size] : 0), 0);
-    let lo: string | undefined;
-    let hi: string | undefined;
-    for (const t of g.rows) {
-      const r = span(t);
-      if (!r) continue;
-      if (!lo || r.s < lo) lo = r.s;
-      if (!hi || r.d > hi) hi = r.d;
-    }
+    const { pts, lo, hi } = stats.get(g.key) ?? { pts: 0, lo: undefined, hi: undefined };
     return (
       <div key={headKey(g.key)} data-line="head" className="flex h-9 border-b border-line bg-sunken/70">
         <div className="sticky left-0 z-10 flex w-[var(--left)] shrink-0 items-center gap-2.5 border-r border-line bg-sunken px-3">

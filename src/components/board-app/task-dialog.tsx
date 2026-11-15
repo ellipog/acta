@@ -1,6 +1,6 @@
 "use client";
 
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog as D } from "radix-ui";
 import { Icon } from "@/components/ui/icons";
 import { PixelTick } from "@/components/ui/pixel";
@@ -18,6 +18,7 @@ import { Select } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import {
   archiveTasks,
+  boardMetaVersion,
   closed,
   customFields,
   formatDue,
@@ -107,7 +108,7 @@ function TaskBody({
   // shows at once rather than once every comment is laid out
   const drawn = useDeferredValue(thread.length, Math.min(thread.length, FIRST_COMMENTS));
   const earlier = Math.max(0, task.comments - thread.length);
-  const activity = [...task.activity].reverse();
+  const activityCount = task.activity.length;
   // Only the latest activity is loaded, so its first entry is the creation only on a task without much history
   const opened = task.opened ? Date.parse(task.opened) : task.activity[0]?.at;
   const took = timeToClose(task);
@@ -367,31 +368,13 @@ function TaskBody({
                   <span className="h-px flex-1 bg-line" />
                 </p>
               ) : null}
-              <ol className="mt-3 space-y-4">
-                {thread.slice(0, Math.max(drawn, Math.min(thread.length, FIRST_COMMENTS))).map((c) => {
-                  // A comment brought over from elsewhere shows who wrote it there, then who added it here
-                  const person = c.from ? undefined : people.find((p) => p.name.startsWith(c.who));
-                  return (
-                    // Comments out of view are laid out and painted only as they scroll near
-                    <li key={c.id} className="flex gap-3 [contain-intrinsic-size:auto_4rem] [content-visibility:auto]">
-                      {person ? (
-                        <Avatar name={person.name} src={person.avatar} tone={person.tone} size="sm" />
-                      ) : (
-                        <Avatar name={c.from ?? c.who} tone={c.from ? "pyrite" : "lapis"} size="sm" />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs">
-                          <span className="font-medium">{c.from ?? c.who}</span>
-                          {c.from ? <span className="text-ink-3"> · added by {c.who}</span> : null}
-                          {c.via ? <span className="text-ink-3"> via {c.via}</span> : null}
-                          <span className="ml-1.5 font-mono text-[11px] text-ink-3">{timeAgo(c.at, now)}</span>
-                        </p>
-                        <Markdown source={c.body} className="mt-1" />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
+              <Thread
+                thread={thread}
+                upTo={Math.max(drawn, Math.min(thread.length, FIRST_COMMENTS))}
+                now={now}
+                version={boardMetaVersion()}
+              />
+
               <div className="mt-4">
                 <MarkdownEditor
                   value={comment}
@@ -414,26 +397,12 @@ function TaskBody({
 
             <section className="mt-6 mb-2">
               <h3 className="text-xs font-medium text-ink-2">Activity</h3>
-              <ol className="mt-3">
-                {(allActivity ? activity : activity.slice(0, 6)).map((a, i, all) => (
-                  <li key={`${a.at}-${i}`} className="relative flex gap-3 pb-3 pl-1">
-                    <span className="relative flex w-3 shrink-0 justify-center">
-                      <span className={cn("relative z-10 mt-1 size-2", i === 0 ? "bg-lapis" : "border border-line-strong bg-raised")} />
-                      {i < all.length - 1 ? <span className="absolute top-3 bottom-[-0.25rem] w-px bg-line" /> : null}
-                    </span>
-                    <p className="text-xs text-ink-2">
-                      <span className="font-medium text-ink">{a.who}</span>
-                      {a.via ? <span className="text-ink-3"> via {a.via}</span> : null} {a.text}
-                      <span className="ml-1.5 font-mono text-[11px] text-ink-3">{timeAgo(a.at, now)}</span>
-                    </p>
-                  </li>
-                ))}
-              </ol>
+              <ActivityList activity={task.activity} all={allActivity} now={now} />
               {/* The board has only the latest lines until the rest are read */}
               {task.partial ? <Skeleton className="mb-3 ml-5 h-8" /> : null}
-              {activity.length > 6 ? (
+              {activityCount > 6 ? (
                 <button onClick={() => setAllActivity((v) => !v)} className="ml-5 text-[11px] text-ink-3 hover:text-ink">
-                  {allActivity ? "Show less" : `Show all ${activity.length}`}
+                  {allActivity ? "Show less" : `Show all ${activityCount}`}
                 </button>
               ) : null}
             </section>
@@ -580,3 +549,76 @@ function Prop({ label, children }: { label: string; children: React.ReactNode })
     </div>
   );
 }
+
+type Comment = NonNullable<Task["thread"]>[number];
+
+// The thread and the activity draw again only when they change, not with each key typed elsewhere in the task. A long
+// thread was laid out again, avatar and Markdown check and all, for every letter of a title or a comment
+const Thread = memo(function Thread({
+  thread,
+  upTo,
+  now,
+}: {
+  thread: Comment[];
+  upTo: number;
+  now: number;
+  // Moves when the board's people change, so their names and pictures follow
+  version: number;
+}) {
+  return (
+    <ol className="mt-3 space-y-4">
+      {thread.slice(0, upTo).map((c) => {
+        // A comment brought over from elsewhere shows who wrote it there, then who added it here
+        const person = c.from ? undefined : people.find((p) => p.name.startsWith(c.who));
+        return (
+          // Comments out of view are laid out and painted only as they scroll near
+          <li key={c.id} className="flex gap-3 [contain-intrinsic-size:auto_4rem] [content-visibility:auto]">
+            {person ? (
+              <Avatar name={person.name} src={person.avatar} tone={person.tone} size="sm" />
+            ) : (
+              <Avatar name={c.from ?? c.who} tone={c.from ? "pyrite" : "lapis"} size="sm" />
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-xs">
+                <span className="font-medium">{c.from ?? c.who}</span>
+                {c.from ? <span className="text-ink-3"> · added by {c.who}</span> : null}
+                {c.via ? <span className="text-ink-3"> via {c.via}</span> : null}
+                <span className="ml-1.5 font-mono text-[11px] text-ink-3">{timeAgo(c.at, now)}</span>
+              </p>
+              <Markdown source={c.body} className="mt-1" />
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+});
+
+const ActivityList = memo(function ActivityList({
+  activity,
+  all,
+  now,
+}: {
+  activity: Task["activity"];
+  all: boolean;
+  now: number;
+}) {
+  const newest = useMemo(() => [...activity].reverse(), [activity]);
+  return (
+    <ol className="mt-3">
+      {(all ? newest : newest.slice(0, 6)).map((a, i, shown) => (
+        <li key={`${a.at}-${i}`} className="relative flex gap-3 pb-3 pl-1">
+          <span className="relative flex w-3 shrink-0 justify-center">
+            <span className={cn("relative z-10 mt-1 size-2", i === 0 ? "bg-lapis" : "border border-line-strong bg-raised")} />
+            {i < shown.length - 1 ? <span className="absolute top-3 bottom-[-0.25rem] w-px bg-line" /> : null}
+          </span>
+          <p className="text-xs text-ink-2">
+            <span className="font-medium text-ink">{a.who}</span>
+            {a.via ? <span className="text-ink-3"> via {a.via}</span> : null} {a.text}
+            <span className="ml-1.5 font-mono text-[11px] text-ink-3">{timeAgo(a.at, now)}</span>
+          </p>
+        </li>
+      ))}
+    </ol>
+  );
+});
