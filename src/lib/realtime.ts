@@ -10,8 +10,9 @@ export type Change = RealtimePostgresChangesPayload<Record<string, unknown>>;
 
 export type Listener = {
   change: (table: string, payload: Change) => void;
-  /** The channel is live. `again` means it had been live before and dropped, so changes may have been missed */
-  joined?: (again: boolean) => void;
+  /** The channel is live. `again` means it had been live before and dropped, so changes may have been missed, and
+   * `dropped` is when it was found to have dropped */
+  joined?: (again: boolean, dropped?: number) => void;
   presence?: (state: Record<string, unknown[]>) => void;
 };
 
@@ -22,6 +23,7 @@ type Feed = {
   channel: RealtimeChannel | null;
   joined: boolean;
   everJoined: boolean;
+  dropped?: number;
   presence: Record<string, unknown[]> | null;
   linger: ReturnType<typeof setTimeout> | null;
   closed: boolean;
@@ -79,8 +81,13 @@ async function open(topic: string, feed: Feed, watch: Watch[], presence?: { key:
       feed.joined = true;
       feed.everJoined = true;
       if (presence) void channel.track(presence.me);
-      feed.listeners.forEach((l) => l.joined?.(again));
-    } else feed.joined = false;
+      const dropped = feed.dropped;
+      feed.dropped = undefined;
+      feed.listeners.forEach((l) => l.joined?.(again, dropped));
+    } else {
+      if (feed.joined) feed.dropped = Date.now();
+      feed.joined = false;
+    }
   });
   feed.channel = channel;
 }

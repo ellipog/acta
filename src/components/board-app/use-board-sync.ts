@@ -27,6 +27,7 @@ import {
   absorb,
   activityFrom,
   apply,
+  applySteps,
   diffBoards,
   heldBy,
   keepOwn,
@@ -45,6 +46,7 @@ import {
   type CommentRow,
   type Context,
   type RemoteEvent,
+  type Step,
   type SuggestionRow,
   type TaskRow,
 } from "@/lib/board-sync";
@@ -97,10 +99,14 @@ const MARGIN = 60_000;
 // A deleted comment or activity line leaves a trace for a day (see removed_lines). A board away for longer than this
 // is read again instead of caught up, as a deletion could have been missed
 const TRACE = 12 * 3_600_000;
+// How late a dropped connection can be noticed: the live feed's heartbeat comes every 25 s, and a missed one is
+// given as long again
+const NOTICED = 60_000;
 const pause = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 type Handlers = {
   receive: (ev: RemoteEvent) => void;
+  settle: () => void;
   resync: () => Promise<void>;
   catchUp: (since: number) => Promise<void>;
   flush: () => Promise<void>;
@@ -128,6 +134,9 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
   const latest = useRef(board);
   const inflight = useRef(false);
   const queue = useRef<RemoteEvent[]>([]);
+  // Changes from others that came in during the last moment, applied together (see receive)
+  const incoming = useRef<RemoteEvent[]>([]);
+  const incomingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retry = useRef(0);
   const token = useRef<string | null>(null);
@@ -178,6 +187,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
   // The newest callbacks, for timers and the long-lived subscription
   const handlers = useRef<Handlers>({
     receive: () => {},
+    settle: () => {},
     resync: idle,
     catchUp: idle,
     flush: idle,
@@ -207,6 +217,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
 
   // Keeps what the server has confirmed, so a later visit starts from it and reads only what changed
   const remember = useCallback(() => {
+    // What came in a moment ago is part of what's known now
+    handlers.current.settle();
     const now = liveRef.current;
     if (now && base.current) rememberBoard(now, base.current, knownAt());
   }, [knownAt]);
@@ -255,44 +267,99 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     }, 500);
   }, []);
 
-  // Someone else's change, applied to what's saved and to what's on screen. A card someone moved comes with its new
-  // position and goes where that says, among the cards here, so a move is one change however long the column
-  const receive = useCallback(
-    (ev: RemoteEvent) => {
-      if (!base.current) return;
-      if (ev.table === "comments" || ev.table === "activity") threadEvents.current++;
-      if (ev.table === "tasks") {
-        taskEvents.current++;
-        if (ev.row.deleted_at) gone.current.add(ev.row.number);
-        else gone.current.delete(ev.row.number);
+  // Someone else's changes, applied to what's saved and to what's on screen. A card someone moved comes with its new
+  // position and goes where that says, among the cards here, so a move is one change however long the column.
+  //
+  // They come in a message at a time, and a burst, like an agent changing 50 tasks, is a hundred messages. Applied one
+  // by one, each copied the board twice and drew it again. These are applied together and drawn once: what's saved
+  // and what's on screen still change at the same moment, so a save never sees one ahead of the other
+  const applyIncoming = useCallback(
+    (events: RemoteEvent[]) => {
+      if (!base.current || !events.length) return;
+      const steps: (Step & { history: Catch })[] = [];
+      // Tasks made here that a new one from someone else pushes on, and the numbers they move to, as the screen
+      // won't show the moves until the lot is drawn
+      let free = latest.current.next;
+      const taken = new Set<string>();
+      for (let i = 0; i < events.length; i++) {
+        if (inflight.current) {
+          queue.current.push(...events.slice(i));
+          break;
+        }
+        const ev = events[i];
+        const before = base.current;
+        const number = ev.table === "tasks" ? ev.row.number : ev.table === "suggestions" || ev.table === "boards" ? null : ev.row?.number;
+        const unread = before.gaps && number != null && !before.tasks[taskKey(prefix, number)];
+        // A task this copy hadn't read came off some shelf, which has one fewer on the server now. A new one didn't
+        if (unread && ev.table === "tasks" && !ev.fresh) recountShelvesLater();
+        // A line or a comment on a task the board hasn't read is news for the Inbox, which needs the task
+        if (unread && ev.table !== "tasks") looseLater(number);
+        const change = sent.current.screen(resolve(before, ev, ctx));
+        if (change.kind === "none") continue;
+        if (
+          change.kind === "task" &&
+          change.add &&
+          !before.tasks[change.id] &&
+          (latest.current.tasks[change.id] || taken.has(change.id))
+        ) {
+          const from = change.id;
+          const to = taskKey(prefix, Math.max(free, taskNumber(from) + 1));
+          free = taskNumber(to) + 1;
+          taken.add(to);
+          steps.push({ current: (b) => renumber(b, from, to), history: rename(from, to) });
+        }
+        base.current = apply(before, change);
+        // A task the screen holds as it was saved comes out of the change the same as the saved one, so the two share
+        // it, which lets the next save pass over it without comparing every field
+        const id =
+          change.kind === "task"
+            ? change.id
+            : change.kind === "comment" || change.kind === "activity" || change.kind === "thread"
+              ? change.task
+              : undefined;
+        const was = id ? before.tasks[id] : undefined;
+        const now = id ? base.current.tasks[id] : undefined;
+        steps.push({
+          current: (b) => apply(b, change, before),
+          history: replay(change),
+          share: id && was && now && now !== was ? { id, was, now } : undefined,
+        });
+        // A comment this tab took back comes back as a deletion no thread holds any more, which isn't news
+        if (change.kind === "uncomment" && dropped.current.delete(change.id)) continue;
+        const recount = unsure(before, base.current, change);
+        if (recount) recountLater(recount === "all" ? undefined : recount);
       }
-      if (inflight.current) {
-        queue.current.push(ev);
-        return;
-      }
-      const before = base.current;
-      const number = ev.table === "tasks" ? ev.row.number : ev.table === "suggestions" || ev.table === "boards" ? null : ev.row?.number;
-      const unread = before.gaps && number != null && !before.tasks[taskKey(prefix, number)];
-      // A task this copy hadn't read came off some shelf, which has one fewer on the server now. A new one didn't
-      if (unread && ev.table === "tasks" && !ev.fresh) recountShelvesLater();
-      // A line or a comment on a task the board hasn't read is news for the Inbox, which needs the task
-      if (unread && ev.table !== "tasks") looseLater(number);
-      const change = sent.current.screen(resolve(before, ev, ctx));
-      if (change.kind === "none") return;
-      if (change.kind === "task" && change.add && latest.current.tasks[change.id] && !before.tasks[change.id]) {
-        const from = change.id;
-        const to = taskKey(prefix, Math.max(latest.current.next, Number(from.split("-").pop()) + 1));
-        dispatch({ type: "rebase", current: (b) => renumber(b, from, to), history: rename(from, to) });
-      }
-      base.current = apply(before, change);
-      dispatch({ type: "rebase", current: (b) => apply(b, change, before), history: replay(change) });
-      // A comment this tab took back comes back as a deletion no thread holds any more, which isn't news
-      if (change.kind === "uncomment" && dropped.current.delete(change.id)) return;
-      const recount = unsure(before, base.current, change);
-      if (recount) recountLater(recount === "all" ? undefined : recount);
+      if (!steps.length) return;
+      dispatch({
+        type: "rebase",
+        current: (b) => applySteps(b, steps),
+        history: steps.length === 1 ? steps[0].history : (b) => steps.reduce((s, step) => step.history(s), b),
+      });
     },
     [ctx, dispatch, prefix, recountLater, recountShelvesLater, looseLater],
   );
+
+  // Applies what has come in, now rather than at the end of the moment
+  const settle = useCallback(() => {
+    if (incomingTimer.current) clearTimeout(incomingTimer.current);
+    incomingTimer.current = null;
+    const events = incoming.current;
+    incoming.current = [];
+    applyIncoming(events);
+  }, [applyIncoming]);
+
+  // A change from someone else, applied with any others that come in the same moment, about a frame
+  const receive = useCallback((ev: RemoteEvent) => {
+    if (!base.current) return;
+    if (ev.table === "comments" || ev.table === "activity") threadEvents.current++;
+    if (ev.table === "tasks") {
+      taskEvents.current++;
+      if (ev.row.deleted_at) gone.current.add(ev.row.number);
+      else gone.current.delete(ev.row.number);
+    }
+    incoming.current.push(ev);
+    incomingTimer.current ??= setTimeout(() => handlers.current.settle(), 16);
+  }, []);
 
   // Tasks read from the server join what's saved, what's on screen and every step of undo at once, so no copy of the
   // board is left without them. A task already held stays as it is, as it's as new as anything a read can bring. at
@@ -679,6 +746,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       for (const r of declined.data ?? []) receive({ table: "suggestions", old: { id: r.id } });
       for (const r of comments.data ?? []) receive({ table: "comments", row: r as CommentRow });
       for (const r of activity.data ?? []) receive({ table: "activity", row: r as ActivityRow });
+      // What was read is applied now, as what follows looks at the tasks it brought
+      settle();
       // Work an agent brings over keeps its old dates, so whatever changed on a task reads its threads again. A
       // partial task only reads its count and latest line again, and its dialog reads the rest
       const touched = [...new Set([...(tasks.data ?? []), ...(activity.data ?? [])].map((r) => r.number as number))];
@@ -696,12 +765,13 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       if (counted.length) recountLater(counted);
       for (const r of suggestions.data ?? []) receive({ table: "suggestions", row: r as SuggestionRow });
       if (row.data) receive({ table: "boards", row: row.data as BoardRow });
+      settle();
       if (!tasks.error && !comments.error && !activity.error) {
         syncedAt.current = started;
         caughtUp.current = true;
       }
     },
-    [boardId, prefix, receive, recountLater, resync],
+    [boardId, prefix, receive, recountLater, resync, settle],
   );
 
   const flush = useCallback(async () => {
@@ -777,7 +847,7 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
     }
     const pending = queue.current;
     queue.current = [];
-    pending.forEach(receive);
+    applyIncoming(pending);
 
     if (result.waiting) {
       // Nothing is lost: the changes stay on screen and go again after a pause
@@ -791,11 +861,23 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       timer.current = setTimeout(() => void handlers.current.flush(), 50);
     else setStatus("saved");
     if (!mounted.current) remember();
-  }, [boardId, dispatch, prefix, receive, remember]);
+  }, [boardId, dispatch, prefix, applyIncoming, remember]);
 
   // The subscription lives as long as the board is on screen, so it reads these through a ref
   useEffect(() => {
-    handlers.current = { receive, resync, catchUp, flush, remember, recount, recountShelves, pump, loadLoose, loadThread };
+    handlers.current = {
+      receive,
+      settle,
+      resync,
+      catchUp,
+      flush,
+      remember,
+      recount,
+      recountShelves,
+      pump,
+      loadLoose,
+      loadThread,
+    };
   });
 
   useEffect(() => {
@@ -807,7 +889,9 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
 
   useEffect(
     () => () => {
-      for (const t of [recountTimer, shelfTimer, looseTimer]) if (t.current) clearTimeout(t.current);
+      // What came in and hasn't been applied stays in incoming, for remember to apply
+      for (const t of [recountTimer, shelfTimer, looseTimer, incomingTimer]) if (t.current) clearTimeout(t.current);
+      incomingTimer.current = null;
       looseTimer.current = null;
     },
     [],
@@ -848,10 +932,13 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
             receive({ table, row: row(p), old: p.old as never, fresh: p.eventType === "INSERT" });
           else receive({ table, row: row(p), old: p.old as never } as RemoteEvent);
         },
-        joined: (again) => {
+        joined: (again, dropped) => {
           caughtUp.current = false;
-          // After a dropped connection the gap could be long, so that reads the board again
-          void (again ? handlers.current.resync() : handlers.current.catchUp(syncedAt.current));
+          // After a dropped connection, what changed since it dropped is read, rather than the whole board again. A
+          // drop is noticed a heartbeat or two late, so the gap starts that much earlier. A gap too long for that,
+          // past what deletions leave a trace for, reads the board again (see catchUp)
+          const since = again && dropped ? Math.max(syncedAt.current, dropped - NOTICED) : syncedAt.current;
+          void handlers.current.catchUp(since);
         },
         presence: (state) => {
           const seen = new Map<string, Visitor>();
@@ -925,7 +1012,8 @@ export function useBoardSync(live: LiveBoard | undefined, board: BoardState, dis
       void handlers.current.flush();
     };
     const shown = (e: PageTransitionEvent) => {
-      if (e.persisted) void handlers.current.resync();
+      // Back from the browser's page cache: what changed while it sat there is read, as after a dropped connection
+      if (e.persisted) void handlers.current.catchUp(syncedAt.current);
     };
     const online = () => void handlers.current.flush();
     window.addEventListener("pagehide", save);

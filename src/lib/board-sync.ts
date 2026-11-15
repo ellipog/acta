@@ -611,6 +611,28 @@ export function resolve(base: BoardState, ev: RemoteEvent, ctx: Context): Change
   }
 }
 
+/** One change from someone else as the screen takes it, and when it names one task, that task as it was saved before
+ * the change and after */
+export type Step = {
+  current: (b: BoardState) => BoardState;
+  share?: { id: string; was: Task; now: Task };
+};
+
+/**
+ * Changes from someone else applied to the board on screen, in order. A task the screen held as it was saved comes
+ * out of a change the same as the saved one does, so it takes the saved one's object. The two copies then share it,
+ * and the next save passes over it by identity rather than comparing every field
+ */
+export function applySteps(board: BoardState, steps: Step[]): BoardState {
+  return steps.reduce((s, { current, share }) => {
+    const next = current(s);
+    // A changed task means a new list of tasks, made by this change and so free to fill in
+    if (share && s.tasks[share.id] === share.was && next.tasks !== s.tasks && next.tasks[share.id] !== share.now)
+      next.tasks[share.id] = share.now;
+    return next;
+  }, board);
+}
+
 export function apply(state: BoardState, c: Change, pending?: BoardState): BoardState {
   switch (c.kind) {
     case "none":
