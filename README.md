@@ -31,19 +31,22 @@
 | **Public roadmaps** | Publish any board as a roadmap page. Visitors can vote and send ideas, and you choose which tasks show and how the page looks: its theme, colour, header, links, announcement and the order of its sections. |
 | **Appearance** | Light, dark or your system's mode, an accent of your own, warmer or cooler surfaces, more contrast, larger text, line or pixel icons and less motion. |
 | **GitHub** | Link repositories to boards. Branches, commits and pull requests that name a task show on it with their checks and review, move it along and mark it done on merge, and issues can sync both ways. |
-| **Agents and API** | An MCP server lets Claude Code, Cursor and other agents read and work on your boards with keys you control, and an HTTP API lets scripts and other tools do the same. |
+| **Agents and API** | An MCP server lets Claude Code, Cursor and other agents sign in and read and work on your boards with access you control, and an HTTP API lets scripts and other tools do the same with a key. |
 
 Built with Next.js 16 (App Router, Cache Components), React 19, Tailwind CSS 4 and Supabase (auth, Postgres,
 realtime and storage).
 
 ## Agents
 
-Acta has an MCP server at `/api/mcp`. Make a key under **Account → Agents** and add the server to your agent:
+Acta has an MCP server at `/api/mcp`. Add it to your agent and sign in when it asks:
 
 ```bash
-claude mcp add --transport http --scope user acta https://acta.aaenz.no/api/mcp \
-  --header "Authorization: Bearer <key>"
+claude mcp add --transport http --scope user acta https://acta.aaenz.no/api/mcp
 ```
+
+The agent opens Acta in the browser, where you choose what it may do and which workspaces it reaches. For clients that
+only take a header, and for scripts, make a key under **Account → Agents** and send it as
+`Authorization: Bearer <key>` instead.
 
 Then put a line like this in your project's `AGENTS.md`, `CLAUDE.md` or README, so agents know which board to use:
 
@@ -62,6 +65,17 @@ A key acts as the person who made it, and only in the workspaces they chose. The
 never gets further than its owner. Everything an agent does is marked with the key's name, shown as
 “Elliot via Claude Code”, and a key can only edit the comments it wrote. A key's name, access and workspaces can be
 changed under **Account → Agents** after it's made, and writes follow the change at once.
+
+Signing in is OAuth 2.1, with Acta as its own authorization server, and what a client gets at the end is an ordinary
+key, so everything above holds for it too. A request without a key gets a `401` whose `WWW-Authenticate` names the
+protected resource metadata (RFC 9728). From there the client finds the authorization server metadata (RFC 8414),
+registers itself (RFC 7591) or names itself by the address of a client metadata document, and sends the person to
+`/oauth/authorize`. There they choose the access and workspaces and press Allow, which makes a code that works once,
+for five minutes, with its PKCE verifier (S256 only). Trading it in at `/api/oauth/token` makes the key, marked with
+the client it was made for, and hands it back as the access token. It lasts until it's revoked, under **Account →
+Agents** or by the client at `/api/oauth/revoke`. A code that comes back a second time revokes the key it made.
+Redirect addresses match exactly, except that apps on the same computer may pick their port (RFC 8252), and client
+metadata documents are only fetched from public addresses.
 
 Agents see and add screenshots. `get_task` lists a task's files, `read_file` hands an agent any Acta image to look
 at (from a task's files or a description or comment), and `upload_file` takes a file as base64 and returns the

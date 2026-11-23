@@ -1,6 +1,8 @@
 import "server-only";
 import * as z from "zod";
 import { Content, Problem } from "./acta";
+import { resourceMetadataUrl } from "@/lib/oauth/metadata";
+import { requestOrigin } from "@/lib/origin";
 import { agentFor, type Agent } from "./keys";
 import { actaTool, actaTools, type Tool } from "./server";
 
@@ -13,17 +15,22 @@ export const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Authorization, Content-Type",
+  "Access-Control-Expose-Headers": "WWW-Authenticate",
   "Access-Control-Max-Age": "86400",
 };
 
 const answer = (data: unknown, status = 200) => Response.json(data, { status, headers: cors });
 const problem = (status: number, message: string, extra?: object) => answer({ error: message, ...extra }, status);
 
+// A 401 keeps its challenge, which says where an OAuth client can sign in for a key
 async function keyed(request: Request) {
-  const found = await agentFor(request);
+  const found = await agentFor(request, resourceMetadataUrl(requestOrigin(request), "/api/v1"));
   if (!(found instanceof Response)) return found.agent;
   const body = await found.json();
-  return problem(found.status, body.error_description ?? "Not allowed");
+  const out = problem(found.status, body.error_description ?? "Not allowed");
+  const challenge = found.headers.get("www-authenticate");
+  if (challenge) out.headers.set("WWW-Authenticate", challenge);
+  return out;
 }
 
 export async function index(request: Request) {
