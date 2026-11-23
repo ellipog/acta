@@ -19,8 +19,14 @@ export async function proxy(request: NextRequest) {
   const rewrite = publicRewrite(request);
   const pass = () => (rewrite ? NextResponse.rewrite(rewrite, { request }) : NextResponse.next({ request }));
   let response = pass();
+  const session = request.cookies.getAll().some((c) => c.name.startsWith("sb-"));
+  // An agent's sign-in page goes to the sign-in form first, with a real redirect, when there's no session at all
+  if (authReady && !session && request.nextUrl.pathname === "/oauth/authorize") {
+    const back = `${request.nextUrl.pathname}${request.nextUrl.search}`;
+    return NextResponse.redirect(new URL(`/login?next=${encodeURIComponent(back)}`, requestOrigin(request)));
+  }
   // Without a session cookie there's nothing to refresh
-  if (!authReady || !request.cookies.getAll().some((c) => c.name.startsWith("sb-"))) return response;
+  if (!authReady || !session) return response;
 
   const supabase = createServerClient(supabaseUrl, supabaseKey, {
     cookies: {
@@ -52,6 +58,7 @@ export async function proxy(request: NextRequest) {
   return response;
 }
 
+// The OAuth discovery documents under /.well-known are the same for everyone, and read without cookies.
 // API routes come with keys or GitHub's signature rather than a session, so the proxy has nothing to refresh for
 // them. Only the GitHub routes a signed-in person calls from the app read the session: flush, install and setup.
 // Pages that never read the session skip the proxy too, so they come straight from the cache: the home page, the
@@ -61,6 +68,6 @@ export async function proxy(request: NextRequest) {
 // workspace. /compare/<page> and /use-cases/<page> stay, since a workspace could be called compare or use-cases
 export const config = {
   matcher: [
-    "/((?!$|docs(?:/|$)|changelog(?:/|$)|(?:compare|privacy|terms|library|demo|opengraph-image)$|p/|_next/static|_next/image|api/(?!github/(?:flush|install|setup)(?:/|$))|favicon.ico|manifest.webmanifest|.*\\.(?:png|jpg|jpeg|svg|webp|gif|ico|txt|xml)$).*)",
+    "/((?!$|\\.well-known/|docs(?:/|$)|changelog(?:/|$)|(?:compare|privacy|terms|library|demo|opengraph-image)$|p/|_next/static|_next/image|api/(?!github/(?:flush|install|setup)(?:/|$))|favicon.ico|manifest.webmanifest|.*\\.(?:png|jpg|jpeg|svg|webp|gif|ico|txt|xml)$).*)",
   ],
 };

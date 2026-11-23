@@ -42,7 +42,7 @@ async function Account() {
   const [{ data: keys }, workspaces] = await Promise.all([
     supabase
       .from("agent_keys")
-      .select("id, name, access, workspaces, hint, created_at, used_at")
+      .select("id, name, access, workspaces, hint, created_at, used_at, client, client_name")
       .order("created_at", { ascending: false }),
     getWorkspaces(),
   ]);

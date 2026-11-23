@@ -77,14 +77,39 @@ export async function verifyKey(token: string): Promise<Agent | null> {
   return { ...hit.agent };
 }
 
-const refuse = (status: number, message: string) =>
-  Response.json(
-    { error: status === 401 ? "invalid_token" : "unavailable", error_description: message },
-    { status, headers: status === 401 ? { "WWW-Authenticate": 'Bearer realm="acta", error="invalid_token"' } : {} },
-  );
+/** Drops a revoked key from the cache at once, where it was revoked on this server */
+export function forgetKey(keyId: string) {
+  for (const [hash, hit] of recent) if (hit.agent.keyId === keyId) recent.delete(hash);
+}
 
-/** The key a request was sent with, for the MCP server and the HTTP API. A response instead when there's none */
-export async function agentFor(request: Request): Promise<{ agent: Agent; token: string } | Response> {
+/** Drops a key from the cache by the token itself, for a client revoking its own */
+export const forgetToken = (token: string) => recent.delete(keyHash(token));
+
+// The challenge names the protected resource metadata (RFC 9728), which is how an MCP client with no key finds out
+// where to sign in. An error is only named when a token came and didn't work. What went wrong is in the body, since
+// a header can't carry the message's curly quotes
+function refuse(status: number, message: string, resourceMetadata?: string, sent?: boolean) {
+  const challenge = [
+    'Bearer realm="acta"',
+    resourceMetadata ? `resource_metadata="${resourceMetadata}"` : null,
+    sent ? 'error="invalid_token"' : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  return Response.json(
+    { error: status === 401 ? "invalid_token" : "unavailable", error_description: message },
+    { status, headers: status === 401 ? { "WWW-Authenticate": challenge } : {} },
+  );
+}
+
+/**
+ * The key a request was sent with, for the MCP server and the HTTP API. A response instead when there's none.
+ * resourceMetadata is where the 401 tells clients to look to sign in
+ */
+export async function agentFor(
+  request: Request,
+  resourceMetadata?: string,
+): Promise<{ agent: Agent; token: string } | Response> {
   if (!serviceReady) return refuse(503, "Acta’s agent access isn’t set up on this server.");
   const token = request.headers.get("authorization")?.match(/^Bearer\s+(\S+)$/i)?.[1];
   const agent = token ? await verifyKey(token) : null;
@@ -92,8 +117,10 @@ export async function agentFor(request: Request): Promise<{ agent: Agent; token:
     return refuse(
       401,
       token
-        ? "That Acta key doesn’t work. It may have been revoked. Make a new one under Account → Agents."
-        : "Send an Acta key as a bearer token. Make one under Account → Agents.",
+        ? "That Acta key doesn’t work. It may have been revoked. Sign in again, or make a new key under Account → Agents."
+        : "Sign in to Acta, or send an Acta key as a bearer token. Make one under Account → Agents.",
+      resourceMetadata,
+      Boolean(token),
     );
   return { agent, token };
 }

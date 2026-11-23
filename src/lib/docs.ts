@@ -72,70 +72,84 @@ Invite people as **owners**, **admins**, **members** or **viewers** from the wor
     slug: "agents",
     nav: "Agents (MCP)",
     title: "Connect AI agents to Acta over MCP",
-    description: "Give Claude Code, Codex, Cursor, VS Code and other MCP clients a key to read and work on your Acta boards, with their changes shown live.",
+    description: "Connect Claude Code, Codex, Cursor, VS Code, the Claude app and other MCP clients to your Acta boards by signing in, or with a key, and watch their changes live.",
     body: `Acta has an MCP server, so coding agents like Claude Code and Cursor can find their task, move it along, tick off subtasks and leave progress notes while they work. You watch it happen live on the board.
 
-## Make a key
+## Connect by signing in
 
-Open **Account → Agents** and make a key. Choose what it may do and which workspaces it reaches:
+Add the server's address to your agent:
+
+\`\`\`
+${mcp}
+\`\`\`
+
+The agent opens Acta in your browser. Sign in if you aren't already, choose what the agent may do and which workspaces it reaches, and press **Allow**. That's all: no key to copy.
 
 - **Read**: list boards, tasks, roadmap ideas and activity, and search across every board.
 - **Write**: also create, change, sort, comment on, delete and restore tasks, one at a time or many at once.
 - **Manage**: also create boards, edit labels, projects, fields and status names, run the public roadmap and triage ideas.
 
-A key acts as the person who made it, never further. Everything an agent does is marked with the key's name, like “Elliot via Claude Code”. You can change a key's name, what it may do and which workspaces it reaches at any time, without making a new one, or revoke it. An agent that's already running sees the tools it gained once it reconnects.
+An agent acts as you, never further. Everything it does is marked with its name, like “Elliot via Claude Code”. Agents you've connected are listed under **Account → Agents**, where you can rename one, change what it may do and where, or disconnect it. An agent stays signed in until you disconnect it. One that's already running sees the tools it gained once it reconnects.
 
-## Claude Code
+### Claude Code
+
+\`\`\`bash
+claude mcp add --transport http --scope user acta ${mcp}
+\`\`\`
+
+Then run \`/mcp\` in Claude Code, pick acta and sign in.
+
+### Claude app
+
+In **Settings → Connectors**, choose **Add custom connector**, paste the address and press **Connect**.
+
+### Codex
+
+Add Acta to \`~/.codex/config.toml\`, then run \`codex mcp login acta\`:
+
+\`\`\`toml
+[mcp_servers.acta]
+url = "${mcp}"
+\`\`\`
+
+### Cursor
+
+Add Acta to \`~/.cursor/mcp.json\`, or \`.cursor/mcp.json\` in a project, then press **Connect** next to it in Cursor's MCP settings:
+
+\`\`\`json
+{
+  "mcpServers": {
+    "acta": { "url": "${mcp}" }
+  }
+}
+\`\`\`
+
+### VS Code
+
+Add Acta to \`.vscode/mcp.json\`, then press **Start** above it:
+
+\`\`\`json
+{
+  "servers": {
+    "acta": { "type": "http", "url": "${mcp}" }
+  }
+}
+\`\`\`
+
+### Other clients
+
+Any MCP client that speaks streamable HTTP and supports MCP authorization can sign in with the address alone. Acta takes clients that register themselves (RFC 7591) and clients that name themselves by a client metadata document, and needs PKCE with S256. Its discovery documents are at \`${siteUrl}/.well-known/oauth-protected-resource/api/mcp\` and \`${siteUrl}/.well-known/oauth-authorization-server\`.
+
+## Connect with a key
+
+For clients that only take a header, and for scripts using the [HTTP API](${siteUrl}/docs/api), make a key under **Account → Agents** instead. It has the same choices, and works the same way once it's made. Send it as \`Authorization: Bearer <key>\`:
 
 \`\`\`bash
 claude mcp add --transport http --scope user acta ${mcp} \\
   --header "Authorization: Bearer <key>"
 \`\`\`
 
-## Codex
-
-Add Acta to \`~/.codex/config.toml\`:
-
-\`\`\`toml
-[mcp_servers.acta]
-url = "${mcp}"
-http_headers = { Authorization = "Bearer <key>" }
-\`\`\`
-
-## Cursor
-
-Add Acta to \`~/.cursor/mcp.json\`, or \`.cursor/mcp.json\` in a project:
-
-\`\`\`json
-{
-  "mcpServers": {
-    "acta": {
-      "url": "${mcp}",
-      "headers": { "Authorization": "Bearer <key>" }
-    }
-  }
-}
-\`\`\`
-
-## VS Code
-
-Add Acta to \`.vscode/mcp.json\`:
-
-\`\`\`json
-{
-  "servers": {
-    "acta": {
-      "type": "http",
-      "url": "${mcp}",
-      "headers": { "Authorization": "Bearer <key>" }
-    }
-  }
-}
-\`\`\`
-
-## Other clients
-
-Any MCP client that speaks streamable HTTP works. The server is at \`${mcp}\` and takes the key as \`Authorization: Bearer <key>\`.
+In Codex, add \`http_headers = { Authorization = "Bearer <key>" }\` under \`[mcp_servers.acta]\`. In Cursor's \`mcp.json\` and VS Code's, add \`"headers": { "Authorization": "Bearer <key>" }\` next to the address.
 
 ## Tell agents which board to use
 

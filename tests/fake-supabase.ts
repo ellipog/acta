@@ -289,7 +289,10 @@ class Query {
   private orders: Order[] = [];
   private nestedOrders: Record<string, Order[]> = {};
   private max: number | undefined;
-  private mode: "select" | "update" | "delete" | "upsert" = "select";
+  private mode: "select" | "update" | "delete" | "upsert" | "insert" = "select";
+  // What an insert, update or delete hands back, when .select() follows it
+  private returning: string | null = null;
+  private inserted: Row[] = [];
   private upserted: { rows: Row[]; keys: string[]; keep: boolean } = { rows: [], keys: [], keep: false };
   private columns = "*";
   private counted = false;
@@ -307,7 +310,12 @@ class Query {
       this.columns = columns;
       this.counted = Boolean(options?.count);
       this.head = Boolean(options?.head);
-    }
+    } else this.returning = columns;
+    return this;
+  }
+  insert(rows: Row | Row[]) {
+    this.mode = "insert";
+    this.inserted = [rows].flat();
     return this;
   }
   update(values: Row) {
@@ -417,14 +425,24 @@ class Query {
 
   private result(): Result {
     const all = this.db.rows(this.table);
+    const handBack = (rows: Row[]): Result => {
+      if (this.returning === null) return { data: null, error: null };
+      const data = rows.map((r) => this.pick(this.table, r, this.returning!));
+      return this.one ? { data: data[0] ?? null, error: null } : { data, error: null };
+    };
+    if (this.mode === "insert") {
+      const made = this.inserted.map((row) => stored({ id: crypto.randomUUID(), created_at: this.db.now(), ...row }));
+      all.push(...made);
+      return handBack(made);
+    }
     let hits = all.filter((r) => this.filters.every((f) => f(r)));
     if (this.mode === "update") {
       for (const r of hits) Object.assign(r, stored(this.values));
-      return { data: null, error: null };
+      return handBack(hits);
     }
     if (this.mode === "delete") {
       this.db.tables[this.table] = all.filter((r) => !hits.includes(r));
-      return { data: null, error: null };
+      return handBack(hits);
     }
     if (this.mode === "upsert") {
       // What was written comes back, so ignoring a duplicate answers with nothing for it

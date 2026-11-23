@@ -24,6 +24,9 @@ export type AgentKey = {
   hint: string;
   created_at: string;
   used_at: string | null;
+  /** The OAuth client it was made for, when an agent signed in rather than someone making a key */
+  client: string | null;
+  client_name: string | null;
 };
 export type KeyPlace = { id: string; slug: string; name: string };
 
@@ -104,12 +107,66 @@ function Setup({ token, example }: { token: string; example: string }) {
   );
 }
 
+// Agents that sign in need only the address. They open Acta in the browser, where the person chooses what they may do
+function Connect({ example }: { example: string }) {
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button variant="primary">
+          <Icon name="link" /> Connect an agent
+        </Button>
+      </DialogTrigger>
+      <DialogContent title="Connect an agent" className="max-w-xl">
+        <div className="flex flex-col gap-4">
+          <Snippet code={mcpUrl} what="Address" />
+          <Tabs defaultValue="claude">
+            <TabsList>
+              <TabsTrigger value="claude">Claude Code</TabsTrigger>
+              <TabsTrigger value="app">Claude app</TabsTrigger>
+              <TabsTrigger value="codex">Codex</TabsTrigger>
+              <TabsTrigger value="other">Cursor and others</TabsTrigger>
+            </TabsList>
+            <TabsContent value="claude">
+              <p className="mt-3 text-xs text-ink-3">Run once, then sign in from /mcp in Claude Code.</p>
+              <Snippet what="Command" code={`claude mcp add --transport http --scope user acta ${mcpUrl}`} />
+            </TabsContent>
+            <TabsContent value="app">
+              <p className="mt-3 text-sm text-ink-2">
+                Settings → Connectors → Add custom connector, paste the address, then Connect.
+              </p>
+            </TabsContent>
+            <TabsContent value="codex">
+              <p className="mt-3 text-xs text-ink-3">Add to ~/.codex/config.toml, then run codex mcp login acta.</p>
+              <Snippet what="Config" code={`[mcp_servers.acta]\nurl = "${mcpUrl}"`} />
+            </TabsContent>
+            <TabsContent value="other">
+              <p className="mt-3 text-xs text-ink-3">For ~/.cursor/mcp.json. VS Code takes the same under servers, with type http.</p>
+              <Snippet what="Config" code={JSON.stringify({ mcpServers: { acta: { url: mcpUrl } } }, null, 2)} />
+            </TabsContent>
+          </Tabs>
+          <div>
+            <p className="text-sm text-ink-2">
+              Then tell each project which board it uses, with a line in its AGENTS.md or CLAUDE.md:
+            </p>
+            <Snippet what="Line" code={`Acta board: ${example}`} />
+          </div>
+          <DialogClose asChild>
+            <Button variant="primary" className="self-end">
+              Done
+            </Button>
+          </DialogClose>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // What a key is called, what it can do and where, as the form holds it
-type Draft = { name: string; access: Access; reach: "all" | "some"; picked: string[] };
+export type Draft = { name: string; access: Access; reach: "all" | "some"; picked: string[] };
 
 const blank: Draft = { name: "", access: "write", reach: "all", picked: [] };
 
-function KeyFields({
+export function KeyFields({
   draft,
   onChange,
   workspaces,
@@ -320,14 +377,22 @@ function EditKey({ agentKey, workspaces }: { agentKey: AgentKey; workspaces: Key
 
 function Revoke({ agentKey }: { agentKey: AgentKey }) {
   const [busy, setBusy] = useState(false);
+  const verb = agentKey.client ? "Disconnect" : "Revoke";
   return (
     <Dialog>
       <DialogTrigger asChild>
         <Button size="sm" variant="ghost">
-          Revoke
+          {verb}
         </Button>
       </DialogTrigger>
-      <DialogContent title={`Revoke ${agentKey.name}?`} description="Agents using this key lose access straight away.">
+      <DialogContent
+        title={`${verb} ${agentKey.name}?`}
+        description={
+          agentKey.client
+            ? "It loses access straight away, until it signs in again."
+            : "Agents using this key lose access straight away."
+        }
+      >
         <div className="flex justify-end gap-2">
           <DialogClose asChild>
             <Button variant="ghost">Keep it</Button>
@@ -342,7 +407,7 @@ function Revoke({ agentKey }: { agentKey: AgentKey }) {
               if (result) toast({ icon: result.ok ? "check" : "x", title: result.message, duration: 3000 });
             }}
           >
-            {busy ? <Spinner className="[&>span.spin-cell]:bg-on-accent/40" /> : <Icon name="trash" />} Revoke
+            {busy ? <Spinner className="[&>span.spin-cell]:bg-on-accent/40" /> : <Icon name="trash" />} {verb}
           </Button>
         </div>
       </DialogContent>
@@ -355,8 +420,9 @@ export function AgentKeys({ keys, workspaces }: { keys: AgentKey[]; workspaces: 
   return (
     <div>
       <p className="max-w-md text-sm text-ink-2">
-        Let AI agents like Claude Code, Codex and Cursor read and update your boards over MCP, and scripts and other
-        tools over the HTTP API at /api/v1. A key acts as you, so it only reaches workspaces you’re in.{" "}
+        Let AI agents like Claude Code, Codex and Cursor read and update your boards over MCP. Most sign in with the
+        address alone. Keys are for clients that only take a header, and for scripts using the HTTP API at /api/v1.
+        Agents act as you, so they only reach workspaces you’re in.{" "}
         <Link href="/docs/agents" className="underline underline-offset-2 hover:text-ink">
           How to set up agents
         </Link>
@@ -366,7 +432,7 @@ export function AgentKeys({ keys, workspaces }: { keys: AgentKey[]; workspaces: 
           {keys.map((k) => (
             <li key={k.id} className="flex items-start gap-3 border-t border-line p-3 first:border-t-0">
               <span className="grid size-8 shrink-0 place-items-center border border-line bg-raised text-ink-2">
-                <Icon name="sparkle" />
+                <Icon name={k.client ? "link" : "sparkle"} />
               </span>
               <div className="min-w-0 flex-1">
                 <p className="flex flex-wrap items-center gap-2 text-sm">
@@ -384,7 +450,9 @@ export function AgentKeys({ keys, workspaces }: { keys: AgentKey[]; workspaces: 
                     : "All workspaces"}
                 </p>
                 <p className="mt-0.5 font-mono text-[11px] text-ink-3">
-                  acta_…{k.hint} · made {date(k.created_at)} · {k.used_at ? `last used ${date(k.used_at)}` : "never used"}
+                  {k.client ? `signed in from ${k.client_name ?? "an app"}` : `acta_…${k.hint}`} ·{" "}
+                  {k.client ? "connected" : "made"} {date(k.created_at)} ·{" "}
+                  {k.used_at ? `last used ${date(k.used_at)}` : "never used"}
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1">
@@ -396,6 +464,7 @@ export function AgentKeys({ keys, workspaces }: { keys: AgentKey[]; workspaces: 
         </ul>
       ) : null}
       <div className={cn("flex flex-wrap items-center gap-3", keys.length ? "mt-4" : "mt-5")}>
+        <Connect example={`${workspaces[0]?.slug ?? "workspace"}/board`} />
         <NewKey workspaces={workspaces} />
         <span className="font-mono text-[11px] text-ink-3">{mcpUrl}</span>
       </div>
