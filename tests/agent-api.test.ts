@@ -443,3 +443,15 @@ test("a key's last use is saved at most every 10 minutes", async () => {
   expect(db.rows("agent_keys").find((k) => k.id === `key-${t}`)!.used_at).toBe("2026-11-05T13:11:00+00:00");
   setSystemTime();
 });
+
+test("get_tasks reads many tasks of a board in one request, and lists the ones that aren't there", async () => {
+  const answer = await fresh().getTasks(ref, ["ACT-3", "ACT-1", "3", "ACT-12", "ACT-40"]);
+  expect(db.calls.filter((c) => c === "select tasks")).toHaveLength(1);
+  expect(db.rounds).toBeLessThanOrEqual(2);
+  expect(answer.tasks?.map((t) => t.id)).toEqual(["ACT-3", "ACT-1"]);
+  expect(answer.missing).toEqual(["ACT-12", "ACT-40"]);
+  const one = answer.tasks?.find((t) => t.id === "ACT-1");
+  expect(one?.subtasks).toEqual([{ id: "s0000001", title: "Write it", done: false }]);
+  expect(one?.url).toContain("ACT-1");
+  await expect(fresh().getTasks(ref, ["XYZ-1"])).rejects.toThrow("XYZ-1 isn’t on aaen/acta.");
+});

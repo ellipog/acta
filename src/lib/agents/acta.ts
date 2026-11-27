@@ -1201,6 +1201,45 @@ export function actaFor(agent: Agent) {
       return detail(b, await row(b, n), read);
     },
 
+    // Many tasks on one board in one read: each as list_tasks shows it, with its link, description and subtasks.
+    // Tasks that aren't there, or were deleted, are listed as missing rather than failing the rest
+    async getTasks(ref: string, list: string[]) {
+      const b = await board(ref, true);
+      const numbers = [...new Set(list.map((t) => numberOf(b, t)))];
+      const linked = await linksReady(db);
+      let q = db
+        .from("tasks")
+        .select(`${await rowFields()}${linked ? `, ${pullsEmbed}` : ""}`)
+        .eq("board_id", b.id)
+        .in("number", numbers)
+        .is("deleted_at", null);
+      if (linked) q = q.eq("task_links.kind", "pr").order("updated_at", { referencedTable: "task_links", ascending: false });
+      const [{ data, error }, who] = await Promise.all([q, nameOf(b.workspace_id)]);
+      if (error) throw dbProblem(error);
+      const rows = new Map(
+        ((data ?? []) as unknown as (FullRow & { task_links?: Pull[] })[]).map((t) => [t.number, t] as const),
+      );
+      const missing = numbers.filter((n) => !rows.has(n)).map((n) => taskId(b, n));
+      return compact({
+        board: b.ref,
+        tasks: numbers.flatMap((n) => {
+          const t = rows.get(n);
+          if (!t) return [];
+          return [
+            {
+              ...summary(b, t, who, t.task_links),
+              url: taskUrl(b, t.number),
+              description: t.description || undefined,
+              subtasks: t.subtasks.length
+                ? t.subtasks.map((s) => ({ id: s.id, title: s.title, done: s.done }))
+                : undefined,
+            },
+          ];
+        }),
+        missing: missing.length ? missing : undefined,
+      });
+    },
+
     async createTasks(ref: string, list: NewTask[]) {
       const b = await board(ref);
       // Read together: where each column the tasks go to ends, and the workspace's people if any task is assigned.
