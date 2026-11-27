@@ -267,6 +267,21 @@ const definitions: Definition[] = [
 
   define(
     {
+      name: "get_tasks",
+      title: "Get several tasks",
+      description:
+        "Up to 200 tasks on one board in one call, each with its title, status, assignee, labels, size, description, subtasks and link, and its pull request on boards linked to GitHub. Tasks that aren't there are listed under missing. Use get_task for one task's comments, files and activity.",
+      inputSchema: z.object({
+        board,
+        tasks: z.array(task).min(1).max(200).describe('The task ids, like ["ACT-12", "ACT-14"]'),
+      }),
+      annotations: reads,
+    },
+    (acta, { board, tasks }) => acta.getTasks(board, tasks),
+  ),
+
+  define(
+    {
       name: "list_suggestions",
       title: "List roadmap suggestions",
       description:

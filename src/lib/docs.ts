@@ -163,7 +163,7 @@ The server tells agents how to work: check for an existing task before starting,
 
 ## Tools
 
-- **Reading**: \`list_boards\`, \`get_board\`, \`list_tasks\`, \`search_tasks\`, \`get_task\`, \`list_activity\`, \`list_suggestions\`, \`read_file\`
+- **Reading**: \`list_boards\`, \`get_board\`, \`list_tasks\`, \`search_tasks\`, \`get_task\`, \`get_tasks\`, \`list_activity\`, \`list_suggestions\`, \`read_file\`
 - **Writing**: \`create_tasks\`, \`update_task\`, \`update_tasks\`, \`sort_column\`, \`add_comment\`, \`edit_comment\`, \`upload_file\`, \`delete_task\`, \`restore_task\`
 - **GitHub**: \`link_github\`, \`unlink_github\`, \`open_github_issue\`
 - **Managing**: \`create_board\`, \`update_board\`, \`update_roadmap\`, \`review_suggestion\`
